@@ -18,7 +18,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read_only")
     create.add_argument("--profile", default="mock")
     create.add_argument("--timeout", type=int, default=1800)
-    for name in ("start", "status", "complete", "collect", "cancel", "timeout"):
+    for name in ("start", "status", "complete", "collect", "cancel", "timeout", "reconcile"):
         cmd = sub.add_parser(name)
         cmd.add_argument("task_id")
         if name == "complete":
@@ -32,6 +32,7 @@ def parser() -> argparse.ArgumentParser:
         help="JSON-encoded argv array, e.g. '[\"pytest\", \"-q\"]'; may be repeated",
     )
     sub.add_parser("list")
+    sub.add_parser("reconcile-all")
     return p
 
 
@@ -55,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.verify(args.task_id, [json.loads(command) for command in args.commands])
         elif args.command == "status":
             output = broker.status(args.task_id)
+        elif args.command == "reconcile":
+            output = broker.reconcile(args.task_id).json()
+        elif args.command == "reconcile-all":
+            output = [record.json() for record in broker.reconcile_pending()]
         else:
             output = [record.json() for record in broker.store.list()]
         print(json.dumps(output, indent=2, sort_keys=True))

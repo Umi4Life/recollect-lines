@@ -62,6 +62,19 @@ class TaskStore:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS workspace_leases_active_source
                 ON workspace_leases(canonical_source) WHERE status = 'active';
+            CREATE TABLE IF NOT EXISTS runtime_launches (
+                task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+                adapter TEXT NOT NULL,
+                adapter_label TEXT NOT NULL,
+                pid INTEGER,
+                pgid INTEGER,
+                launched_at TEXT NOT NULL,
+                command_json TEXT NOT NULL,
+                workspace TEXT NOT NULL,
+                events_artifact TEXT,
+                stderr_artifact TEXT,
+                reconciliation_marker TEXT NOT NULL DEFAULT 'unreconciled'
+            );
             """
         )
         self.connection.commit()
@@ -151,6 +164,37 @@ class TaskStore:
     def get_lease(self, task_id: str) -> dict[str, Any] | None:
         row = self.connection.execute("SELECT * FROM workspace_leases WHERE task_id = ?", (task_id,)).fetchone()
         return dict(row) if row else None
+
+    def record_launch(
+        self, task_id: str, *, adapter: str, adapter_label: str, pid: int, pgid: int,
+        command: list[str], workspace: str, events_artifact: str | None, stderr_artifact: str | None,
+    ) -> None:
+        """Persist durable launch identity the moment an adapter process is actually spawned.
+
+        `command` should already be redacted by the caller; this stores whatever it is given.
+        """
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO runtime_launches "
+                "(task_id, adapter, adapter_label, pid, pgid, launched_at, command_json, workspace, events_artifact, stderr_artifact) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task_id, adapter, adapter_label, pid, pgid, now(), json.dumps(command), workspace, events_artifact, stderr_artifact),
+            )
+
+    def get_launch(self, task_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute("SELECT * FROM runtime_launches WHERE task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["command"] = json.loads(data.pop("command_json"))
+        return data
+
+    def mark_launch_reconciled(self, task_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE runtime_launches SET reconciliation_marker = 'reconciled' WHERE task_id = ?",
+                (task_id,),
+            )
 
     def refresh_manifest(self, task_id: str) -> Path:
         directory = self.artifacts / task_id

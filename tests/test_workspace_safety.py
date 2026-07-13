@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState
+from recollect_lines.models import ProfilePolicy, RecoveryRequired, TaskRequest, TaskState
 from recollect_lines.opencode_adapter import OpenCodeAdapter
 from recollect_lines.service import Broker
 from recollect_lines.workspace import WorkspaceError, WorkspaceManager, canonical_source
@@ -332,7 +332,7 @@ class OpenCodeWorkspaceIntegrationTests(unittest.TestCase):
         self.assertFalse(worktree_path.exists())
         self.assertEqual(self.broker.store.get_lease(record.id)["status"], "released")
 
-    def test_collect_skips_cleanup_when_process_group_is_still_alive_after_a_simulated_restart(self):
+    def test_collect_enters_recovery_state_when_process_group_is_still_alive_after_a_simulated_restart(self):
         record = self.broker.create(TaskRequest("SLEEP", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
         self.broker.start(record.id)
 
@@ -346,16 +346,27 @@ class OpenCodeWorkspaceIntegrationTests(unittest.TestCase):
         # real process (started with start_new_session=True) is still alive.
         orphaned_handle = self.broker._process_handles.pop(record.id)
         try:
-            failed = self.broker.collect(record.id)
-            self.assertEqual(failed.state, TaskState.FAILED)
+            with self.assertRaises(RecoveryRequired):
+                self.broker.collect(record.id)
+            recovering = self.broker.store.get(record.id)
+            self.assertEqual(recovering.state, TaskState.RECOVERY_REQUIRED)
             self.assertTrue(worktree_path.exists(), "must not delete a worktree a live process might still use")
+            self.assertEqual(self.broker.store.get_lease(record.id)["status"], "active")
+
+            # Idempotent: calling collect() again while still alive raises the
+            # same way and makes no further state/lease change.
+            with self.assertRaises(RecoveryRequired):
+                self.broker.collect(record.id)
+            self.assertEqual(self.broker.store.get(record.id).state, TaskState.RECOVERY_REQUIRED)
             self.assertEqual(self.broker.store.get_lease(record.id)["status"], "active")
         finally:
             os.killpg(pgid, signal.SIGKILL)
             orphaned_handle.popen.wait(timeout=5)
 
-        # Once the process is confirmed dead, cleanup can proceed.
-        self.broker._finalize_workspace(record.id)
+        # Once the process is confirmed dead, reconciliation can proceed to a
+        # truthful failure and release the lease.
+        failed = self.broker.reconcile(record.id)
+        self.assertEqual(failed.state, TaskState.FAILED)
         self.assertFalse(worktree_path.exists())
         self.assertEqual(self.broker.store.get_lease(record.id)["status"], "released")
         self.assertEqual((self.source / "file.txt").read_text(), "original\n")
