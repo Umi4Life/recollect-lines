@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run test suite
+        run: PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+      - name: Byte-compile source and tests
+        run: python3 -m compileall -q src tests
+
+      - name: Check for whitespace errors
+        run: git diff --check $(git hash-object -t tree /dev/null)
+
+      - name: Install package and smoke-test console entry points
+        if: matrix.python-version == '3.11'
+        run: |
+          python3 -m pip install .
+          recollect --help
+          recollect-mcp --help
