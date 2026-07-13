@@ -14,6 +14,12 @@ class TaskState(StrEnum):
     RUNNING = "running"
     COLLECTING = "collecting"
     CANCELLING = "cancelling"
+    # Non-terminal, actionable: a durable runtime launch record exists for this
+    # task but the broker has no in-memory process handle (e.g. after a
+    # restart) and cannot confirm the process group is dead. The broker never
+    # fabricates a result from here; an operator must reconcile (which may
+    # resolve it to failed, or attempt a persisted-pgid cancellation).
+    RECOVERY_REQUIRED = "recovery_required"
     SUCCEEDED = "succeeded"
     SUCCEEDED_WITH_WARNINGS = "succeeded_with_warnings"
     FAILED = "failed"
@@ -34,10 +40,19 @@ TERMINAL_STATES = frozenset({
 ALLOWED_TRANSITIONS = {
     TaskState.CREATED: {TaskState.QUEUED, TaskState.REJECTED},
     TaskState.QUEUED: {TaskState.PREPARING, TaskState.CANCELLED, TaskState.REJECTED},
-    TaskState.PREPARING: {TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED},
-    TaskState.RUNNING: {TaskState.COLLECTING, TaskState.CANCELLING, TaskState.FAILED, TaskState.TIMED_OUT},
-    TaskState.CANCELLING: {TaskState.CANCELLED, TaskState.FAILED},
+    # CANCELLING/RECOVERY_REQUIRED are reachable from PREPARING too: a broker
+    # can crash between recording an opencode launch and the later RUNNING
+    # transition, leaving a durable launch record for a task still at
+    # PREPARING (see Broker.reconcile()).
+    TaskState.PREPARING: {
+        TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED,
+    },
+    TaskState.RUNNING: {
+        TaskState.COLLECTING, TaskState.CANCELLING, TaskState.FAILED, TaskState.TIMED_OUT, TaskState.RECOVERY_REQUIRED,
+    },
+    TaskState.CANCELLING: {TaskState.CANCELLED, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
     TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED},
+    TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED},
 }
 
 
@@ -107,6 +122,23 @@ class InvalidTransition(ValueError):
 
 class WorkspaceLeaseConflict(ValueError):
     pass
+
+
+class RecoveryRequired(ValueError):
+    """Raised by `Broker.collect()` when a task needs explicit reconciliation.
+
+    Subclasses ValueError so existing CLI/MCP error handling (which already
+    treats ValueError as a reportable business error, not an internal fault)
+    surfaces it without any new plumbing.
+    """
+
+    def __init__(self, task_id: str, state: TaskState):
+        self.task_id = task_id
+        self.state = state
+        super().__init__(
+            f"Task {task_id} is {state.value} and requires reconciliation "
+            "(call Broker.reconcile()/`recollect reconcile`) before it can be collected"
+        )
 
 
 def validate_result(result: dict[str, Any], task_id: str) -> None:

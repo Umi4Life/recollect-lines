@@ -101,7 +101,7 @@ class McpServerTests(unittest.TestCase):
 
         listed = self.client.request("tools/list")
         names = {tool["name"] for tool in listed["result"]["tools"]}
-        self.assertEqual(names, {"delegate", "delegate_batch", "status", "collect", "cancel", "message"})
+        self.assertEqual(names, {"delegate", "delegate_batch", "status", "collect", "cancel", "message", "reconcile"})
 
         delegated = self.delegate()
         payload = json.loads(delegated["result"]["content"][0]["text"])
@@ -313,6 +313,7 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(schemas["collect"]["required"], ["task_id"])
         self.assertEqual(schemas["cancel"]["required"], ["task_id"])
         self.assertEqual(schemas["message"]["required"], ["task_id", "content"])
+        self.assertNotIn("required", schemas["reconcile"])  # task_id is optional: omit to reconcile every pending task
 
 
 if __name__ == "__main__":

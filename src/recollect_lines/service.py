@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
-from .models import DEFAULT_PROFILES, ProfilePolicy, TaskRecord, TaskRequest, TaskState, WorkspaceLeaseConflict, now, validate_result
-from .opencode_adapter import OpenCodeAdapter
+from .models import (
+    DEFAULT_PROFILES,
+    TERMINAL_STATES,
+    ProfilePolicy,
+    RecoveryRequired,
+    TaskRecord,
+    TaskRequest,
+    TaskState,
+    WorkspaceLeaseConflict,
+    now,
+    validate_result,
+)
+from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .store import TaskStore
 from .workspace import WorkspaceError, WorkspaceManager, canonical_source, capture_head
 
@@ -34,8 +46,10 @@ class Broker:
         self.opencode_adapter = opencode_adapter or OpenCodeAdapter()
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)
-        # ponytail: in-memory only, one broker process per running task; a restart
-        # loses the handle. Durable re-attach remains out of scope (see docs/phase-2.md).
+        # In-memory only, one broker process per running task; a restart loses
+        # this dict. That's fine: `store.runtime_launches` is the durable record
+        # a fresh Broker reconciles against (see reconcile()/reconcile_pending()
+        # and docs/phase-5b.md). Transparent re-attachment remains out of scope.
         self._process_handles: dict[str, object] = {}
 
     def close(self) -> None:
@@ -110,6 +124,21 @@ class Broker:
                     self.store.release_lease(record.id)
                 raise
             self._process_handles[record.id] = handle
+            # Durable launch identity is recorded as soon as the process actually
+            # exists, before the task even reaches RUNNING — a fresh Broker must
+            # be able to reconcile against this row even if this process crashes
+            # on the very next line.
+            self.store.record_launch(
+                record.id,
+                adapter=self.opencode_adapter.name,
+                adapter_label=self.opencode_adapter.runtime_label,
+                pid=handle.pid,
+                pgid=handle.pgid,
+                command=redact_command(metadata["command"]),
+                workspace=metadata["workspace"],
+                events_artifact=metadata["events_artifact"],
+                stderr_artifact=metadata["stderr_artifact"],
+            )
             self.store.refresh_manifest(record.id)
             return self.store.transition(record.id, TaskState.RUNNING, "OpenCode adapter started", metadata)
         return self.store.transition(record.id, TaskState.RUNNING, "Mock adapter started", self.adapter.start_metadata(record, effective_workspace))
@@ -123,73 +152,266 @@ class Broker:
         return self.store.transition(record.id, TaskState.SUCCEEDED, "Mock task completed", {"result_artifact": "result.json"})
 
     def collect(self, task_id: str) -> TaskRecord:
-        handle = self._process_handles.pop(task_id, None)
-        if handle is None:
-            # A broker restart loses the handle but not the OS process (it was
-            # started with start_new_session=True). Only clean up the worktree
-            # if the last known process group is confirmed dead — never delete
-            # files out from under a group that might still be writing to them.
-            if not self._last_known_process_group_alive(task_id):
-                self._finalize_workspace(task_id)
+        """Collect a task's runtime-reported result.
+
+        Idempotent: calling this again on an already-terminal task returns the
+        same durable record without re-running verification, re-finalizing the
+        workspace, or emitting a duplicate terminal event. A task that requires
+        reconciliation (state recovery_required, or a fresh restart discovering
+        a still-alive process group) raises RecoveryRequired rather than
+        fabricating a result — see reconcile().
+        """
+        record = self.store.get(task_id)
+        if record.state in TERMINAL_STATES:
+            return record
+        if task_id in self._process_handles:
+            handle = self._process_handles.pop(task_id)
+            record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting OpenCode result", {})
+            collected = self.opencode_adapter.collect(handle)
+            self.store.refresh_manifest(record.id)
+            runtime = {"adapter": "opencode", **collected}
+            if collected["exit_code"] != 0:
+                result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or "OpenCode exited with a non-zero status", "runtime": runtime}
+                self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+                self._finalize_workspace(record.id)
+                return self.store.transition(record.id, TaskState.FAILED, "OpenCode task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
+            state = TaskState.SUCCEEDED if collected["summary"] else TaskState.SUCCEEDED_WITH_WARNINGS
+            result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or "OpenCode run produced no text result", "runtime": runtime}
+            validate_result(result, record.id)
+            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+            self._finalize_workspace(record.id)
+            return self.store.transition(record.id, state, "OpenCode task completed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
+        if record.profile != "opencode":
+            # No subprocess was ever involved for this profile (mock tasks are
+            # collected via complete(), not collect()); this is a caller/protocol
+            # error, not a restart, and there is nothing to reconcile.
+            self._finalize_workspace(task_id)
             return self.store.transition(
                 task_id,
                 TaskState.FAILED,
                 "No running OpenCode process handle for task (broker restart or already collected)",
                 {"reason": "missing_process_handle"},
             )
-        record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting OpenCode result", {})
-        collected = self.opencode_adapter.collect(handle)
-        self.store.refresh_manifest(record.id)
-        runtime = {"adapter": "opencode", **collected}
-        if collected["exit_code"] != 0:
-            result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or "OpenCode exited with a non-zero status", "runtime": runtime}
-            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-            self._finalize_workspace(record.id)
-            return self.store.transition(record.id, TaskState.FAILED, "OpenCode task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
-        state = TaskState.SUCCEEDED if collected["summary"] else TaskState.SUCCEEDED_WITH_WARNINGS
-        result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or "OpenCode run produced no text result", "runtime": runtime}
-        validate_result(result, record.id)
-        self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-        self._finalize_workspace(record.id)
-        return self.store.transition(record.id, state, "OpenCode task completed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
+        reconciled = self.reconcile(task_id)
+        if reconciled.state is not TaskState.FAILED:
+            raise RecoveryRequired(task_id, reconciled.state)
+        return reconciled
+
+    def _process_group_status(self, task_id: str) -> str:
+        """Classify the durably-persisted process group for `task_id`.
+
+        Returns "no_launch" (no durable runtime_launches row at all),
+        "unknown" (a row exists but pid/pgid metadata is missing/invalid —
+        handled conservatively, i.e. never treated as dead), "dead", or
+        "alive". "alive" also covers PermissionError from killpg (a process
+        group that exists but this broker doesn't own — still alive from our
+        point of view).
+        """
+        launch = self.store.get_launch(task_id)
+        if launch is None:
+            return "no_launch"
+        pgid = launch["pgid"]
+        if not isinstance(pgid, int) or pgid <= 0:
+            return "unknown"
+        return "alive" if group_alive(pgid) else "dead"
+
+    # States a durable launch record might be sitting under when no in-memory
+    # handle exists for it: RUNNING/PREPARING from an ordinary restart (the
+    # crash can land either just before or just after the RUNNING transition
+    # — record_launch() happens first either way), CANCELLING from a crash
+    # mid-signal, and RECOVERY_REQUIRED from a previous reconciliation pass.
+    _RECONCILABLE_STATES = (TaskState.PREPARING, TaskState.RUNNING, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED)
+
+    def reconcile(self, task_id: str) -> TaskRecord:
+        """Reconcile a task's durable runtime-launch record against reality.
+
+        The one operation a freshly constructed Broker (no in-memory
+        ProcessHandle) can use to inspect and act on a task whose last known
+        state predates a previous broker process disappearing. Idempotent:
+        re-running it while the process group is still alive just logs an
+        audit event and makes no state change; it never asserts success and
+        never touches a workspace/lease it cannot prove is safe to release.
+        """
+        record = self.store.get(task_id)
+        if record.state in TERMINAL_STATES or task_id in self._process_handles:
+            return record
+        if record.state not in self._RECONCILABLE_STATES:
+            return record
+        if record.profile != "opencode":
+            return record  # mock tasks never hold a subprocess; nothing to reconcile
+        status = self._process_group_status(task_id)
+        launch = self.store.get_launch(task_id)
+        if launch is not None:
+            self.store.mark_launch_reconciled(task_id)
+        was_cancelling = record.state is TaskState.CANCELLING
+        if status in ("dead", "no_launch"):
+            self._finalize_workspace(task_id)
+            reason = "process_group_confirmed_dead" if status == "dead" else "missing_process_handle"
+            target = TaskState.CANCELLED if was_cancelling else TaskState.FAILED
+            if status == "dead":
+                message = (
+                    "OpenCode process group is no longer present after a broker restart; the in-progress "
+                    "cancellation is confirmed complete" if was_cancelling else
+                    "OpenCode process group is no longer present after a broker restart; the runtime outcome "
+                    "could not be observed and is recorded as failed"
+                )
+            else:
+                message = "No running process handle or durable launch record for this task"
+            return self.store.transition(task_id, target, message, {"reason": reason, "pgid": launch["pgid"] if launch else None})
+        reason = "process_group_alive_after_restart" if status == "alive" else "runtime_metadata_missing_or_invalid"
+        message = (
+            "Process group still appears active after a broker restart; task requires "
+            "explicit operator reconciliation (reconcile again once it exits, or cancel it)"
+            if status == "alive" else
+            "Runtime launch metadata is missing or invalid; treating conservatively as possibly still active"
+        )
+        if record.state is not TaskState.RECOVERY_REQUIRED:
+            return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, {"reason": reason, "pgid": launch["pgid"] if launch else None})
+        self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, {"reason": reason})
+        return record
+
+    def reconcile_pending(self) -> list[TaskRecord]:
+        """Reconcile every opencode task this Broker instance can see is in a
+        reconcilable non-terminal state without an in-memory handle — the
+        operation a freshly started broker uses to inspect durable active
+        runtime records after a restart, without waiting for a caller to
+        happen to call collect()/cancel() on each task individually.
+        """
+        return [
+            self.reconcile(record.id)
+            for record in self.store.list()
+            if record.profile == "opencode"
+            and record.state in self._RECONCILABLE_STATES
+            and record.id not in self._process_handles
+        ]
+
+    def _cancel_by_pgid(self, pgid: int, grace_period_seconds: float = 10.0) -> dict:
+        """Signal a process group known only by its durably persisted pgid — there is
+        no live Popen/child relationship after a broker restart, so this cannot
+        reap or read an exit code, only observe group liveness via killpg.
+
+        ponytail: this is only ever called once `_process_group_status` has
+        confirmed the group is alive via killpg(pgid, 0) immediately beforehand,
+        never on bare unverified metadata. PID/PGID reuse is still a real
+        residual risk (a killpg "alive" only proves *some* process group with
+        this id exists right now, not that it's still the one we launched) —
+        see docs/phase-5b.md for the accepted threat-model tradeoff; there is no
+        further escalation path (e.g. /proc start-time comparison) here.
+        """
+        signals_sent = []
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+            signals_sent.append("SIGTERM")
+        except ProcessLookupError:
+            pass
+        terminated = group_dead_within(pgid, timeout=grace_period_seconds)
+        if not terminated:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+                signals_sent.append("SIGKILL")
+            except ProcessLookupError:
+                pass
+            terminated = group_dead_within(pgid, timeout=grace_period_seconds)
+        return {"signals_sent": signals_sent, "group_terminated": terminated, "exit_code": None}
 
     def timeout(self, task_id: str, reason: str = "Task exceeded configured timeout") -> TaskRecord:
         self._finalize_workspace(task_id)
         return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
 
     def cancel(self, task_id: str, reason: str) -> TaskRecord:
+        """Cancel a task, observing (never assuming) whether the work actually stopped.
+
+        Idempotent for an already-terminal task. When an in-memory process
+        handle exists this is the original same-process cancellation path. When
+        it doesn't (mock task, or an opencode task whose handle was lost to a
+        broker restart), this consults the durable launch record: a mock task
+        (or an opencode task with no launch record at all — an anomaly with
+        nothing to protect) is cancelled immediately; an opencode task with a
+        confirmed-alive persisted process group is signalled via its pgid
+        directly (never blindly declared cancelled); anything the broker can't
+        confirm is dead is never assumed safe to clean up.
+        """
         record = self.store.get(task_id)
+        if record.state in TERMINAL_STATES:
+            return record
         if record.state is TaskState.QUEUED:
             self._finalize_workspace(task_id)
             return self.store.transition(task_id, TaskState.CANCELLED, reason, {"reason": reason})
-        record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
-        handle = self._process_handles.pop(record.id, None)
+        handle = self._process_handles.get(task_id)
         if handle is not None:
+            record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            self._process_handles.pop(record.id, None)
             cancellation = self.opencode_adapter.cancel(handle)
             target = TaskState.CANCELLED if cancellation["group_terminated"] else TaskState.FAILED
             message = "OpenCode process group terminated" if cancellation["group_terminated"] else "OpenCode process group termination unconfirmed"
             if cancellation["group_terminated"]:
                 self._finalize_workspace(record.id)
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
-        self._finalize_workspace(record.id)
-        return self.store.transition(record.id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
+
+        if record.profile != "opencode":
+            self._finalize_workspace(task_id)
+            if record.state is not TaskState.CANCELLING:
+                self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            return self.store.transition(task_id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
+
+        status = self._process_group_status(task_id)
+        launch = self.store.get_launch(task_id)
+        if launch is not None:
+            self.store.mark_launch_reconciled(task_id)
+
+        if status == "no_launch":
+            # Anomalous for an opencode task (start() always records a launch
+            # before RUNNING) — nothing durable to signal or protect either way.
+            self._finalize_workspace(task_id)
+            if record.state is not TaskState.CANCELLING:
+                self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            return self.store.transition(task_id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
+
+        if status == "unknown":
+            # Never signal a pgid we can't confirm liveness for.
+            if record.state in (TaskState.PREPARING, TaskState.RUNNING):
+                return self.store.transition(
+                    task_id, TaskState.RECOVERY_REQUIRED,
+                    "Cannot confirm process group liveness from persisted metadata; refusing to signal an unverified pgid",
+                    {"reason": "runtime_metadata_missing_or_invalid"},
+                )
+            self.store.event(
+                task_id, "task.reconciliation_checked", record.state, record.state,
+                "Cancellation requested but process group liveness still cannot be confirmed",
+                {"reason": "runtime_metadata_missing_or_invalid"},
+            )
+            return record
+
+        if record.state is not TaskState.CANCELLING:
+            self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+
+        if status == "dead":
+            self._finalize_workspace(task_id)
+            return self.store.transition(
+                task_id, TaskState.CANCELLED, "OpenCode process group already terminated",
+                {"reason": reason, "cancellation": {"signals_sent": [], "group_terminated": True, "note": "confirmed dead via persisted pgid before any signal was sent"}},
+            )
+
+        cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.opencode_adapter.grace_period_seconds)
+        if cancellation["group_terminated"]:
+            self._finalize_workspace(task_id)
+            return self.store.transition(
+                task_id, TaskState.CANCELLED, "OpenCode process group terminated via persisted pgid after broker restart",
+                {"reason": reason, "cancellation": cancellation},
+            )
+        return self.store.transition(
+            task_id, TaskState.RECOVERY_REQUIRED, "Cancellation signalled via persisted pgid but termination could not be confirmed",
+            {"reason": reason, "cancellation": cancellation},
+        )
 
     def status(self, task_id: str) -> dict:
         record = self.store.get(task_id)
-        return {**record.json(), "events": self.store.events(task_id), "artifacts": self.store.artifact_manifest(task_id)}
-
-    def _last_known_process_group_alive(self, task_id: str) -> bool:
-        run_event = next((e for e in reversed(self.store.events(task_id)) if e["type"] == "task.running"), None)
-        pgid = run_event["metadata"].get("pgid") if run_event else None
-        if pgid is None:
-            return False
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
+        return {
+            **record.json(),
+            "events": self.store.events(task_id),
+            "artifacts": self.store.artifact_manifest(task_id),
+            "runtime_launch": self.store.get_launch(task_id),
+        }
 
     def _finalize_workspace(self, task_id: str) -> None:
         """Capture diff/status evidence and release a task's worktree lease, if any.
@@ -243,8 +465,19 @@ class Broker:
         `broker_verified` is always true here because this is, by
         construction, the broker's own subprocess execution — as opposed to
         whatever an adapter/agent merely reports about itself.
+
+        Refuses outright on a recovery_required task: its worktree lease is
+        still active (by design — reconciliation never releases a lease it
+        can't prove is safe), but a persisted-alive process group may still be
+        writing to it, so running commands there would race an unobserved
+        process rather than verify a settled result.
         """
         record = self.store.get(task_id)
+        if record.state is TaskState.RECOVERY_REQUIRED:
+            raise ValueError(
+                "Cannot run verification: task requires reconciliation before further action "
+                "(state=recovery_required; its process group may still be alive)"
+            )
         lease = self.store.get_lease(task_id)
         if record.execution_mode == ISOLATED_WORKTREE:
             if lease is None or lease["status"] != "active":

@@ -200,10 +200,14 @@ scoped, not oversights:
 
 ## 9. Risks and open questions
 
-- **Runtime process durability**: today's process supervision does not
-  survive a broker restart mid-task for at least one adapter (see RFC-001
-  known limitations). Is durable re-attachment required for MVP, or is
-  "safely fail closed on restart" sufficient? (Tracked for Phase 5B.)
+- **Runtime process durability**: resolved for Phase 5B as "safely fail
+  closed on restart," not durable re-attachment — a fresh broker instance
+  reconciles a durable launch record against the process group's actual
+  liveness, reaching a truthful `failed` when it's confirmed dead or an
+  explicit `recovery_required` state when it isn't, never a fabricated
+  success (see [RFC-001](RFC-001.md) §8 and [phase-5b.md](phase-5b.md)).
+  Whether *transparent* re-attachment is ever required for MVP remains open;
+  nothing in Phase 5B attempts it.
 - **Verification is opt-in, not enforced**: nothing in the lifecycle
   currently requires a verification pass before a task can report success.
   Should the product require verification for a workspace-writable task to

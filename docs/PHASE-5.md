@@ -14,25 +14,41 @@ Scope: documentation and CI only, no runtime/product behavior change.
 This is a plan for what comes next, not an assertion that 5B/5C are
 implemented. Both remain open work.
 
-## Phase 5B (planned) — Lifecycle recovery / idempotent collection
+## Phase 5B (this PR) — Lifecycle recovery / idempotent collection
 
 Problem: a broker restart mid-task loses the in-memory process handle for a
-running OpenCode task (RFC-001 §8). Current mitigation is fail-safe cleanup
-(never delete a possibly-live process's worktree/lease); there is no actual
-re-attachment, and a second `collect()` call on an already-terminal task
-raises `InvalidTransition` rather than idempotently returning the prior
-result (phase-4.md known limitations).
+running OpenCode task (RFC-001 §8). The Phase 2–5A mitigation was fail-safe
+cleanup only (never delete a possibly-live process's worktree/lease, but
+otherwise fail immediately on any lost handle); there was no durable launch
+identity to reconcile against, and a second `collect()` call on an
+already-terminal task raised `InvalidTransition` rather than idempotently
+returning the prior result (phase-4.md known limitations).
 
-Planned scope:
+Implemented in this PR — see [phase-5b.md](phase-5b.md) for the full design,
+state table, and operator procedure:
 
-- Durable recovery path: on broker startup, reconcile any task left in a
-  non-terminal state against its last known process-group metadata, rather
-  than only discovering it at the next cleanup attempt.
-- Idempotent `collect()`: a second collect call on an already-terminal task
-  should return the stored result rather than raising.
-- Explicit decision on whether true re-attachment (resuming supervision of a
-  still-running adapter process) is in scope, or whether "detect and fail
-  closed without data loss" is the target bar.
+- Durable launch identity (`store.runtime_launches`), persisted the moment an
+  adapter subprocess actually exists.
+- Explicit reconciliation (`Broker.reconcile()` / `reconcile_pending()`, CLI
+  `reconcile`/`reconcile-all`, MCP `reconcile`): a fresh `Broker` instance can
+  inspect and act on a durable launch record with no in-memory
+  `ProcessHandle`, reaching a truthful `failed` when the process group is
+  confirmed dead, or an explicit non-terminal `recovery_required` state when
+  it's still alive or liveness can't be confirmed — never a fabricated
+  success.
+- Idempotent `collect()`: a second call on an already-terminal task returns
+  the stored result with no re-transition, no duplicate cleanup, and (at the
+  MCP layer) no re-run verification.
+- Safer `cancel()`: an OpenCode task with a lost handle is no longer treated
+  like a mock task; it's reconciled against its durable launch record first,
+  and a confirmed-alive process group can be cancelled directly via its
+  persisted pgid.
+
+Explicitly not in scope (see phase-5b.md "What this is not"): transparent
+re-attachment to a still-running OpenCode process's output stream. That
+remains impossible for the same reason Phase 2/3 named it out of scope — a
+new OS process cannot regain a `Popen`/child relationship with an orphaned
+subprocess.
 
 ## Phase 5C (planned) — Verification gate + real Hermes field acceptance
 

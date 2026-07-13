@@ -25,7 +25,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .models import TaskRequest
+from .models import TaskRequest, TaskState
 from .service import Broker
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -197,9 +197,14 @@ def handle_status(broker: Broker, args: dict) -> dict:
 
 def handle_collect(broker: Broker, args: dict) -> dict:
     task_id = _require_task_id(args)
+    record = broker.store.get(task_id)  # raises KeyError for an unknown task, same as every other tool
     verify_commands = _read_json_artifact(broker, task_id, "verify_commands.json")
-    broker_verification = None
-    if verify_commands is not None:
+    # Re-reading the prior verification.json (rather than re-running commands)
+    # is what makes a repeated collect() on an already-terminal task idempotent:
+    # only the one time the task is genuinely RUNNING does verification still
+    # need to happen before the worktree it targets gets released.
+    broker_verification = _read_json_artifact(broker, task_id, "verification.json")
+    if verify_commands is not None and record.state is TaskState.RUNNING:
         try:
             broker_verification = broker.verify(task_id, verify_commands)
         except Exception as error:
@@ -213,6 +218,15 @@ def handle_collect(broker: Broker, args: dict) -> dict:
         "runtime_result": _read_json_artifact(broker, task_id, "result.json"),
         "broker_verification": broker_verification,
     }
+
+
+def handle_reconcile(broker: Broker, args: dict) -> dict:
+    task_id = args.get("task_id")
+    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
+        raise ValueError("'task_id' must be a non-empty string when provided")
+    if task_id:
+        return {"reconciled": [_task_summary(broker.reconcile(task_id))]}
+    return {"reconciled": [_task_summary(record) for record in broker.reconcile_pending()]}
 
 
 def handle_cancel(broker: Broker, args: dict) -> dict:
@@ -312,6 +326,15 @@ MESSAGE_INPUT_SCHEMA = {
     },
     "required": ["task_id", "content"],
 }
+RECONCILE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "description": "Reconcile only this task. Omit to reconcile every running/recovery_required opencode task this broker instance can see without an in-memory process handle (e.g. right after a restart).",
+        },
+    },
+}
 
 TOOLS = {
     "delegate": {
@@ -343,6 +366,16 @@ TOOLS = {
         "description": "Always returns an explicit unsupported response: Recollect Lines has no in-flight steering channel for any adapter.",
         "inputSchema": MESSAGE_INPUT_SCHEMA,
         "handler": handle_message,
+    },
+    "reconcile": {
+        "description": (
+            "Reconcile one (or, if task_id is omitted, every) opencode task's durable runtime-launch record "
+            "against its actual process-group liveness. Use this after a broker restart, before collect/cancel, "
+            "to safely discover whether an in-flight task's process is confirmed dead (moves to failed) or still "
+            "alive (moves to recovery_required — never a fabricated success, never an unsafe workspace deletion)."
+        ),
+        "inputSchema": RECONCILE_INPUT_SCHEMA,
+        "handler": handle_reconcile,
     },
 }
 

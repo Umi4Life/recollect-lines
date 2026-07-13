@@ -20,6 +20,63 @@ from .models import TaskRecord
 DEFAULT_COMMAND_PREFIX = ("npx", "--yes", "opencode-ai@1.17.18")
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
 
+# ponytail: a flag-name heuristic, not exhaustive secret scanning. Nothing in
+# DEFAULT_COMMAND_PREFIX/build_command currently carries a secret, but any
+# future argv-based flag whose name looks like one of these is redacted
+# before the command is persisted durably (see Broker.start()/record_launch).
+SECRET_FLAG_MARKERS = ("token", "key", "secret", "password", "credential")
+REDACTED_VALUE = "***REDACTED***"
+
+
+def redact_command(command: list) -> list:
+    """Best-effort redaction of a suspicious flag's value, in either
+    `--flag value` (two argv entries) or `--flag=value` (one entry) form.
+
+    Only argv entries that look like a flag (leading `-`) are checked against
+    SECRET_FLAG_MARKERS — otherwise an already-redacted or coincidentally
+    marker-shaped *value* (e.g. a task prompt containing the word "secret")
+    would itself be misread as a flag on the next iteration and cascade into
+    redacting the following, unrelated argument.
+    """
+    redacted = list(command)
+    for index, part in enumerate(redacted):
+        if not part.startswith("-"):
+            continue
+        if "=" in part:
+            flag_name, _, _value = part.partition("=")
+            if any(marker in flag_name.lower().lstrip("-") for marker in SECRET_FLAG_MARKERS):
+                redacted[index] = f"{flag_name}={REDACTED_VALUE}"
+            continue
+        if index + 1 >= len(redacted):
+            continue
+        flag = part.lower().lstrip("-")
+        if any(marker in flag for marker in SECRET_FLAG_MARKERS):
+            redacted[index + 1] = REDACTED_VALUE
+    return redacted
+
+
+def group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def group_dead_within(pgid: int, timeout: float, interval: float = 0.05) -> bool:
+    # SIGKILL delivery is asynchronous: a grandchild (e.g. the real `opencode`
+    # process under npm's `sh -c` wrapper) can outlive the top-level popen.wait()
+    # by a beat while the kernel tears it down. A single instantaneous check right
+    # after the signal races that teardown, so poll briefly instead.
+    deadline = time.monotonic() + timeout
+    while group_alive(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+    return True
+
 
 @dataclass
 class ProcessHandle:
@@ -43,6 +100,11 @@ class OpenCodeAdapter:
     def __init__(self, command_prefix=DEFAULT_COMMAND_PREFIX, grace_period_seconds: float = DEFAULT_GRACE_PERIOD_SECONDS):
         self.command_prefix = tuple(command_prefix)
         self.grace_period_seconds = grace_period_seconds
+
+    @property
+    def runtime_label(self) -> str:
+        """A human-readable adapter/version label for durable launch records."""
+        return self.command_prefix[-1] if self.command_prefix else self.name
 
     def build_command(self, workspace: str, prompt: str) -> list:
         return [*self.command_prefix, "run", "--pure", "--format", "json", "--dir", workspace, prompt]
@@ -75,27 +137,6 @@ class OpenCodeAdapter:
         }
         return metadata, handle
 
-    def _group_alive(self, pgid: int) -> bool:
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
-
-    def _group_dead_within(self, pgid: int, timeout: float, interval: float = 0.05) -> bool:
-        # SIGKILL delivery is asynchronous: a grandchild (e.g. the real `opencode`
-        # process under npm's `sh -c` wrapper) can outlive the top-level popen.wait()
-        # by a beat while the kernel tears it down. A single instantaneous check right
-        # after the signal races that teardown, so poll briefly instead.
-        deadline = time.monotonic() + timeout
-        while self._group_alive(pgid):
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(interval)
-        return True
-
     def cancel(self, handle: ProcessHandle) -> dict:
         signals_sent = []
         try:
@@ -107,7 +148,7 @@ class OpenCodeAdapter:
             handle.popen.wait(timeout=self.grace_period_seconds)
         except subprocess.TimeoutExpired:
             pass
-        group_terminated = self._group_dead_within(handle.pgid, timeout=1.0)
+        group_terminated = group_dead_within(handle.pgid, timeout=1.0)
         if not group_terminated:
             try:
                 os.killpg(handle.pgid, signal.SIGKILL)
@@ -118,7 +159,7 @@ class OpenCodeAdapter:
                 handle.popen.wait(timeout=self.grace_period_seconds)
             except subprocess.TimeoutExpired:
                 pass
-            group_terminated = self._group_dead_within(handle.pgid, timeout=2.0)
+            group_terminated = group_dead_within(handle.pgid, timeout=2.0)
         return {
             "signals_sent": signals_sent,
             "group_terminated": group_terminated,

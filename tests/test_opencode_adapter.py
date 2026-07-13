@@ -122,17 +122,17 @@ class OpenCodeBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(result["runtime"]["exit_code"], 1)
         self.assertFalse(result["runtime"]["verification"]["tests_broker_verified"])
 
-    def test_collect_without_a_process_handle_fails_instead_of_sticking_in_collecting(self):
+    def test_collect_without_a_process_handle_confirms_dead_process_group_and_fails(self):
         record = self.create()
         self.broker.start(record.id)
         orphaned_handle = self.broker._process_handles.pop(record.id)  # simulate a broker restart losing the handle
+        orphaned_handle.popen.wait(timeout=5)  # let the fixture's short-lived process actually exit first
 
-        try:
-            completed = self.broker.collect(record.id)
-            self.assertEqual(completed.state, TaskState.FAILED)
-            self.assertEqual(completed.state, self.broker.store.get(record.id).state)
-        finally:
-            orphaned_handle.popen.wait(timeout=5)
+        completed = self.broker.collect(record.id)
+
+        self.assertEqual(completed.state, TaskState.FAILED)
+        self.assertEqual(completed.state, self.broker.store.get(record.id).state)
+        self.assertEqual(self.broker.store.events(record.id)[-1]["metadata"]["reason"], "process_group_confirmed_dead")
 
     def test_cancel_terminates_process_group_for_a_ready_long_running_fixture(self):
         record = self.create(task="SLEEP")
