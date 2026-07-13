@@ -25,6 +25,12 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--summary", required=True)
         if name in {"cancel", "timeout"}:
             cmd.add_argument("--reason", default="Cancelled or timed out by caller")
+    verify = sub.add_parser("verify")
+    verify.add_argument("task_id")
+    verify.add_argument(
+        "--command", dest="commands", action="append", required=True,
+        help="JSON-encoded argv array, e.g. '[\"pytest\", \"-q\"]'; may be repeated",
+    )
     sub.add_parser("list")
     return p
 
@@ -45,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.cancel(args.task_id, args.reason).json()
         elif args.command == "timeout":
             output = broker.timeout(args.task_id, args.reason).json()
+        elif args.command == "verify":
+            output = broker.verify(args.task_id, [json.loads(command) for command in args.commands])
         elif args.command == "status":
             output = broker.status(args.task_id)
         else:

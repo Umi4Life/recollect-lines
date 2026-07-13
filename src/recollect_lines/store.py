@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .models import ALLOWED_TRANSITIONS, InvalidTransition, TaskRecord, TaskState, now
+from .models import ALLOWED_TRANSITIONS, InvalidTransition, TaskRecord, TaskState, WorkspaceLeaseConflict, now
 
 
 class TaskStore:
@@ -50,6 +50,18 @@ class TaskStore:
                 metadata_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS events_task_id_id ON events(task_id, id);
+            CREATE TABLE IF NOT EXISTS workspace_leases (
+                task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+                canonical_source TEXT NOT NULL,
+                worktree_path TEXT NOT NULL,
+                branch TEXT NOT NULL,
+                base_sha TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                released_at TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS workspace_leases_active_source
+                ON workspace_leases(canonical_source) WHERE status = 'active';
             """
         )
         self.connection.commit()
@@ -104,13 +116,41 @@ class TaskStore:
         rows = self.connection.execute("SELECT * FROM events WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
         return [{**dict(row), "metadata": json.loads(row["metadata_json"])} for row in rows]
 
-    def write_artifact(self, task_id: str, name: str, content: str) -> Path:
+    def write_artifact(self, task_id: str, name: str, content: str | bytes) -> Path:
         if "/" in name or name in {"", ".", "..", "manifest.json"}:
             raise ValueError("Artifact name must be a simple non-manifest filename")
         path = self.artifacts / task_id / name
-        path.write_text(content)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content)
         self.refresh_manifest(task_id)
         return path
+
+    def acquire_lease(self, task_id: str, canonical_source: str, worktree_path: str, branch: str, base_sha: str) -> None:
+        try:
+            with self.connection:
+                self.connection.execute(
+                    "INSERT INTO workspace_leases "
+                    "(task_id, canonical_source, worktree_path, branch, base_sha, status, created_at, released_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)",
+                    (task_id, canonical_source, worktree_path, branch, base_sha, now()),
+                )
+        except sqlite3.IntegrityError as error:
+            raise WorkspaceLeaseConflict(
+                f"Source workspace already has an active writer lease: {canonical_source}"
+            ) from error
+
+    def release_lease(self, task_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE workspace_leases SET status = 'released', released_at = ? WHERE task_id = ? AND status = 'active'",
+                (now(), task_id),
+            )
+
+    def get_lease(self, task_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute("SELECT * FROM workspace_leases WHERE task_id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
 
     def refresh_manifest(self, task_id: str) -> Path:
         directory = self.artifacts / task_id

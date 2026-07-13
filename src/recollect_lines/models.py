@@ -105,6 +105,10 @@ class InvalidTransition(ValueError):
     pass
 
 
+class WorkspaceLeaseConflict(ValueError):
+    pass
+
+
 def validate_result(result: dict[str, Any], task_id: str) -> None:
     required = {"task_id", "state", "summary", "runtime"}
     missing = required - result.keys()

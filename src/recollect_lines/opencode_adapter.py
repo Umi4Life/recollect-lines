@@ -47,11 +47,11 @@ class OpenCodeAdapter:
     def build_command(self, workspace: str, prompt: str) -> list:
         return [*self.command_prefix, "run", "--pure", "--format", "json", "--dir", workspace, prompt]
 
-    def start(self, record: TaskRecord, artifacts_dir: Path) -> tuple[dict, ProcessHandle]:
+    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None) -> tuple[dict, ProcessHandle]:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         events_path = artifacts_dir / "events.jsonl"
         stderr_path = artifacts_dir / "stderr.log"
-        command = self.build_command(record.workspace, record.task)
+        command = self.build_command(workspace or record.workspace, record.task)
         with events_path.open("wb") as events_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(command, stdout=events_file, stderr=stderr_file, start_new_session=True)
         pgid = os.getpgid(popen.pid)
@@ -71,6 +71,7 @@ class OpenCodeAdapter:
             "pgid": pgid,
             "events_artifact": events_path.name,
             "stderr_artifact": stderr_path.name,
+            "workspace": workspace or record.workspace,
         }
         return metadata, handle
 
