@@ -35,6 +35,7 @@ class TaskStore:
                 execution_mode TEXT NOT NULL,
                 profile TEXT NOT NULL,
                 timeout_seconds INTEGER NOT NULL,
+                verification_policy TEXT NOT NULL DEFAULT 'none',
                 state TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -77,12 +78,19 @@ class TaskStore:
             );
             """
         )
+        # Additive migration for a pre-5C `tasks` table (CREATE TABLE IF NOT
+        # EXISTS above only applies to a brand-new database): backfill the
+        # verification_policy column so existing rows default to "none" —
+        # exactly Phase 1-5B's evidence-only behavior — with no data loss.
+        existing_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(tasks)")}
+        if "verification_policy" not in existing_columns:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN verification_policy TEXT NOT NULL DEFAULT 'none'")
         self.connection.commit()
 
     def create(self, record: TaskRecord) -> TaskRecord:
         with self.connection:
             self.connection.execute(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*record.json().values(),),
             )
             self.event(record.id, "task.created", None, record.state, "Task accepted", {})

@@ -56,6 +56,29 @@ own context, it should be able to:
 This is "recollect the signal": the parent gets back durable, evidence-backed
 results, not a firehose of agent output it has to babysit or re-parse.
 
+### 3.1 Delegation shape: dynamic, not fixed
+
+The five flows above compose into whatever task graph a parent agent
+decides it needs, created and extended at runtime — not a single
+predefined pipeline. A requirements-to-implementation sequence is one
+valid usage pattern; so is running several independent investigations in
+parallel, having one delegate critique another delegate's plan (a
+bounded "model council" comparison — the parent decides when the
+comparison is sufficient; the broker never runs an unlimited or automatic
+debate loop on its own), or delegating narrow, unrelated lookups on an ad
+hoc basis. The broker enforces deterministic bounds (timeout, concurrency,
+one writer per workspace) on whatever graph the parent constructs; it does
+not prescribe the graph's shape, and it is not a requirements-to-PR
+workflow engine.
+
+The broker is also meant to be reusable across more than one parent-agent
+host and more than one delegate runtime: nothing in its interface (CLI or
+MCP) or its policy layer is specific to one calling host or one runtime
+adapter. See [RFC-001](RFC-001.md) §1 for the adapter boundary that is
+meant to keep adding a runtime from requiring broker changes, and §8/§9
+for the current, honest gap between that design goal and how many
+adapters are actually implemented today.
+
 ## 4. Goals and MVP success criteria
 
 Goals:
@@ -194,6 +217,9 @@ scoped, not oversights:
 - **Provider lock-in as a requirement** — the product must not be defined in
   terms of one specific model runtime, language runtime, or storage engine;
   today's choices are implementation, not contract (see RFC-001).
+- **A fixed requirements-to-PR pipeline as the only supported shape** —
+  see §3.1; dynamic, runtime-constructed task graphs are the default
+  assumption, not an extension bolted onto a rigid workflow.
 - **Live mid-task steering** — no requirement that a parent be able to send
   a delegate agent additional input after it has started; a delegate runs to
   completion, timeout, or cancellation.
@@ -208,14 +234,24 @@ scoped, not oversights:
   success (see [RFC-001](RFC-001.md) §8 and [phase-5b.md](phase-5b.md)).
   Whether *transparent* re-attachment is ever required for MVP remains open;
   nothing in Phase 5B attempts it.
-- **Verification is opt-in, not enforced**: nothing in the lifecycle
-  currently requires a verification pass before a task can report success.
-  Should the product require verification for a workspace-writable task to
-  be trusted? (Tracked for Phase 5C.)
-- **Single-adapter compatibility evidence**: current truthful-verification
-  and cancellation evidence has been exercised thoroughly against one real
-  runtime. Confidence in these product requirements generalizing to a
-  second real runtime is not yet established.
+- **Verification is opt-in per task, by design**: Phase 5C added a
+  `verification_policy` lifecycle option (`none`/`advisory`/`required`) a
+  caller sets per task; the broker never silently applies a stricter
+  policy than the caller asked for. Nothing globally forces every
+  workspace-writable task through `required` — that remains a caller/host
+  policy decision, not a broker-enforced default. See
+  [phase-5c.md](phase-5c.md).
+- **Heterogeneous adapter coverage is the largest remaining MVP gap**: the
+  product's MVP boundary calls for at least two heterogeneous runtime
+  adapters, with Claude Code CLI and Codex CLI named as the preferred
+  initial pair. Only one adapter — OpenCode, marked experimental — is
+  implemented today (RFC-001 §2, §8). Truthful-verification and
+  cancellation evidence has been exercised thoroughly against that one
+  real runtime; confidence in these product requirements generalizing to a
+  second, differently-shaped runtime (a different CLI output format,
+  different cancellation semantics, a different auth model) is not yet
+  established. This gap is not closed by Phase 5C and is not currently
+  scheduled.
 
 ## 10. Acceptance checklist
 
@@ -231,6 +267,9 @@ scoped, not oversights:
 - [ ] All of the above hold after a restart of the broker process between
       steps, for at least the durable (non-in-memory) parts of task state.
 - [ ] No required external network service exists for the core lifecycle.
+- [ ] At least two heterogeneous runtime adapters exist and can run
+      concurrently under the same broker (currently **unmet** — one
+      experimental adapter, OpenCode, is implemented; see §9).
 
 ## 11. Terminology
 

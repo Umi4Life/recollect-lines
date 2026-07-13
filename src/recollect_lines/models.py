@@ -51,7 +51,12 @@ ALLOWED_TRANSITIONS = {
         TaskState.COLLECTING, TaskState.CANCELLING, TaskState.FAILED, TaskState.TIMED_OUT, TaskState.RECOVERY_REQUIRED,
     },
     TaskState.CANCELLING: {TaskState.CANCELLED, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
-    TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED},
+    # RECOVERY_REQUIRED is reachable from COLLECTING too: a broker can crash
+    # after popping the in-memory process handle (runtime already reaped, or
+    # verification already in flight) but before the final terminal
+    # transition — see Broker._RECONCILABLE_STATES / reconcile() and
+    # docs/phase-5c.md. Reconciliation from here never fabricates a success.
+    TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
     TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED},
 }
 
@@ -69,6 +74,20 @@ DEFAULT_PROFILES = {
     "opencode": ProfilePolicy("opencode", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
 }
 
+# Verification-gate policy (Phase 5C): distinguishes evidence-only from
+# gating verification without inventing a new terminal state per outcome —
+# see Broker._apply_verification_gate and docs/phase-5c.md.
+#   "none"     — no automatic gating; any declared verify_commands still run
+#                as evidence (unchanged from Phase 3/5B), but never affect
+#                the task's terminal state. Default; fully backward
+#                compatible with every pre-5C caller.
+#   "advisory" — a verification failure downgrades a runtime success to
+#                succeeded_with_warnings; it never blocks a success outright.
+#   "required" — a verification failure (or missing/blocked verification)
+#                forces a would-be success to failed. A runtime failure is
+#                never "rescued" by passing verification either way.
+VERIFICATION_POLICIES = ("none", "advisory", "required")
+
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
@@ -81,6 +100,7 @@ class TaskRequest:
     execution_mode: str = "read_only"
     profile: str = "mock"
     timeout_seconds: int = 1800
+    verification_policy: str = "none"
 
 
 @dataclass(frozen=True)
@@ -91,6 +111,7 @@ class TaskRecord:
     execution_mode: str
     profile: str
     timeout_seconds: int
+    verification_policy: str
     state: TaskState
     created_at: str
     updated_at: str
@@ -105,6 +126,7 @@ class TaskRecord:
             execution_mode=request.execution_mode,
             profile=request.profile,
             timeout_seconds=request.timeout_seconds,
+            verification_policy=request.verification_policy,
             state=TaskState.CREATED,
             created_at=timestamp,
             updated_at=timestamp,
@@ -154,3 +176,28 @@ def validate_result(result: dict[str, Any], task_id: str) -> None:
         raise ValueError("Result summary must be a non-empty string")
     if not isinstance(result["runtime"], dict) or not isinstance(result["runtime"].get("adapter"), str):
         raise ValueError("Result runtime.adapter must be a string")
+
+
+def validate_verify_commands(commands: Any) -> None:
+    """Shared by CLI, MCP, and Broker.create() so no interface duplicates this policy check."""
+    valid = isinstance(commands, list) and all(
+        isinstance(command, list) and command and all(isinstance(part, str) for part in command)
+        for command in commands
+    )
+    if not valid:
+        raise ValueError("verify_commands must be an array of non-empty argv arrays of strings")
+
+
+def verification_gate_label(gate: dict[str, Any]) -> str:
+    """Collapse a stored verification-gate outcome into one of four caller-facing labels:
+    runtime_reported (policy=none, or advisory/required with nothing to check),
+    advisory_verified / advisory_verification_failed, required_verified, or
+    blocked_failed_verification (required policy, missing/blocked/failed verification).
+    """
+    policy = gate.get("policy", "none")
+    outcome = gate.get("outcome", "not_configured")
+    if policy == "required":
+        return "required_verified" if outcome == "passed" else "blocked_failed_verification"
+    if policy == "advisory":
+        return "advisory_verification_failed" if outcome == "failed" else "advisory_verified"
+    return "runtime_reported"

@@ -4,13 +4,22 @@ import argparse
 import json
 from pathlib import Path
 
-from .models import InvalidTransition, TaskRequest
+from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
+from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="recollect")
     p.add_argument("--home", type=Path, default=Path(".recollect"))
+    p.add_argument(
+        "--opencode-command", default=None,
+        help=(
+            "Advanced: override the opencode adapter's command prefix as a JSON array "
+            "(e.g. to pin a specific opencode-ai version, or point at a deterministic "
+            "stand-in binary for testing). Defaults to the built-in npx opencode-ai invocation."
+        ),
+    )
     sub = p.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--task", required=True)
@@ -18,6 +27,11 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read_only")
     create.add_argument("--profile", default="mock")
     create.add_argument("--timeout", type=int, default=1800)
+    create.add_argument("--verification-policy", default="none", choices=VERIFICATION_POLICIES)
+    create.add_argument(
+        "--verify-command", dest="verify_commands", action="append", default=None,
+        help="JSON-encoded argv array run as broker-verified evidence when this task is collected; may be repeated",
+    )
     for name in ("start", "status", "complete", "collect", "cancel", "timeout", "reconcile"):
         cmd = sub.add_parser(name)
         cmd.add_argument("task_id")
@@ -38,10 +52,13 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    broker = Broker(args.home)
+    adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
+    broker = Broker(args.home, opencode_adapter=adapter)
     try:
         if args.command == "create":
-            output = broker.create(TaskRequest(args.task, args.workspace, args.mode, args.profile, args.timeout)).json()
+            request = TaskRequest(args.task, args.workspace, args.mode, args.profile, args.timeout, args.verification_policy)
+            verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
+            output = broker.create(request, verify_commands=verify_commands).json()
         elif args.command == "start":
             output = broker.start(args.task_id).json()
         elif args.command == "complete":
