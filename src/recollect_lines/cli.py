@@ -9,8 +9,8 @@ from .service import Broker
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="sidecar")
-    p.add_argument("--home", type=Path, default=Path(".sidecar"))
+    p = argparse.ArgumentParser(prog="recollect")
+    p.add_argument("--home", type=Path, default=Path(".recollect"))
     sub = p.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--task", required=True)

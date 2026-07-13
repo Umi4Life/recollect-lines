@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sidecar-broker"
+name = "recollect-lines"
 version = "0.1.0"
-description = "Local-first side-agent delegation broker"
+description = "Local-first broker for delegating agent work and recollecting evidence-backed results"
 requires-python = ">=3.11"
 
 [project.scripts]
-sidecar = "sidecar.cli:main"
+recollect = "recollect_lines.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

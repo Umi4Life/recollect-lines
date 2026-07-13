@@ -4,8 +4,8 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from sidecar.models import InvalidTransition, TaskRequest, TaskState
-from sidecar.service import Broker
+from recollect_lines.models import InvalidTransition, TaskRequest, TaskState
+from recollect_lines.service import Broker
 
 
 class BrokerTests(unittest.TestCase):
