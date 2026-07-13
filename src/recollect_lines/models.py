@@ -51,6 +51,7 @@ class ProfilePolicy:
 
 DEFAULT_PROFILES = {
     "mock": ProfilePolicy("mock", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
+    "opencode": ProfilePolicy("opencode", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
 }
 
 

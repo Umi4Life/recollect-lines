@@ -18,7 +18,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read_only")
     create.add_argument("--profile", default="mock")
     create.add_argument("--timeout", type=int, default=1800)
-    for name in ("start", "status", "complete", "cancel", "timeout"):
+    for name in ("start", "status", "complete", "collect", "cancel", "timeout"):
         cmd = sub.add_parser(name)
         cmd.add_argument("task_id")
         if name == "complete":
@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.start(args.task_id).json()
         elif args.command == "complete":
             output = broker.complete(args.task_id, args.summary).json()
+        elif args.command == "collect":
+            output = broker.collect(args.task_id).json()
         elif args.command == "cancel":
             output = broker.cancel(args.task_id, args.reason).json()
         elif args.command == "timeout":
