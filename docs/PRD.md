@@ -65,7 +65,10 @@ valid usage pattern; so is running several independent investigations in
 parallel, having one delegate critique another delegate's plan (a
 bounded "model council" comparison — the parent decides when the
 comparison is sufficient; the broker never runs an unlimited or automatic
-debate loop on its own), or delegating narrow, unrelated lookups on an ad
+debate loop on its own, and this stays a usage pattern the parent directs,
+never a provider-specific feature; see [RFC-001](RFC-001.md) §10.5 for the
+planned, not-yet-implemented discovery/routing work this pattern will
+eventually build on), or delegating narrow, unrelated lookups on an ad
 hoc basis. The broker enforces deterministic bounds (timeout, concurrency,
 one writer per workspace) on whatever graph the parent constructs; it does
 not prescribe the graph's shape, and it is not a requirements-to-PR
@@ -250,8 +253,24 @@ scoped, not oversights:
   real runtime; confidence in these product requirements generalizing to a
   second, differently-shaped runtime (a different CLI output format,
   different cancellation semantics, a different auth model) is not yet
-  established. This gap is not closed by Phase 5C and is not currently
-  scheduled.
+  established. This gap is not closed by Phase 5C. A post-Phase-5C roadmap
+  decision has since sequenced it as Phase 6A (Claude Code CLI adapter),
+  Phase 6B (Codex CLI adapter), and Phase 6B.5 (Cursor CLI adapter), each a
+  real runtime adapter under §11's definition below — see
+  [RFC-001](RFC-001.md) §10 for the full sequence and design constraints.
+  None of Phase 6 is implemented yet; this is a scheduling decision, not
+  new capability.
+- **Plural model-provider support is a distinct, separately scheduled
+  gap**: today nothing in this codebase talks to a model provider
+  directly — adapters supervise a CLI, which itself owns provider/auth
+  concerns. A configurable, plural OpenAI-compatible provider
+  configuration layer (named entries such as DeepSeek, Qwen, or a local
+  endpoint) is scheduled as Phase 6C, with capability discovery,
+  policy-aware routing, and bounded parent-directed model-council usage
+  patterns (§3.1) scheduled as Phase 6D — see [RFC-001](RFC-001.md) §10.
+  A provider configuration entry is not a runtime adapter: it never grants
+  agent tools, worktree access, cancellation, or streaming on its own (see
+  §11's adapter/provider distinction). Neither phase is implemented yet.
 
 ## 10. Acceptance checklist
 
@@ -269,15 +288,29 @@ scoped, not oversights:
 - [ ] No required external network service exists for the core lifecycle.
 - [ ] At least two heterogeneous runtime adapters exist and can run
       concurrently under the same broker (currently **unmet** — one
-      experimental adapter, OpenCode, is implemented; see §9).
+      experimental adapter, OpenCode, is implemented; Claude Code CLI,
+      Codex CLI, and Cursor CLI are sequenced as Phase 6A/6B/6B.5 but not
+      yet implemented; see §9).
 
 ## 11. Terminology
 
 - **Parent agent**: the caller delegating work; consumer of the product.
 - **Broker**: the local component owning task lifecycle, persistence, and
   policy enforcement (implementation name; see RFC-001).
-- **Adapter**: the component translating the broker's generic "run this
-  task" into a specific runtime's invocation (e.g. a specific CLI).
+- **Adapter** (runtime adapter): the component translating the broker's
+  generic "run this task" into a specific runtime's invocation, including
+  its process/session lifecycle, output parsing, and cancellation
+  semantics (e.g. a specific CLI such as OpenCode, or the Claude Code,
+  Codex, and Cursor CLIs sequenced in [RFC-001](RFC-001.md) §10). An
+  adapter is what actually supervises a coding-agent runtime.
+- **Provider configuration**: a named, configured description of a model
+  endpoint — base URL, credentials reference, model aliases, and declared
+  API capabilities — as distinct from an adapter. A provider configuration
+  entry (e.g. a DeepSeek or Qwen endpoint per [RFC-001](RFC-001.md) §10)
+  does not by itself grant agent tools, workspace/worktree access,
+  cancellation, or streaming; those must be separately and explicitly
+  declared by whatever runtime speaks to that endpoint. Provider selection
+  is orthogonal to adapter/runtime selection.
 - **Runtime-reported evidence**: a claim (e.g. "tests passed") made by the
   delegate/runtime itself, taken at face value and labeled as such — never
   silently treated as independently confirmed.

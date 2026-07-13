@@ -87,5 +87,29 @@ the original product PRD: at least two heterogeneous runtime adapters
 (Claude Code CLI and Codex CLI are the PRD's preferred initial pair). Only
 one experimental adapter (OpenCode) is implemented. See
 [PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8 for the full, honest
-capability accounting — that gap remains open and unscheduled after this
-PR.
+capability accounting — that gap remained open and unscheduled at the end
+of this PR's original scope; see Phase 6 below for the roadmap decision
+made after.
+
+## Phase 6 (planned, not implemented) — Adapter and provider expansion
+
+A post-Phase-5C roadmap decision sequenced the next phases without
+implementing any of them here:
+
+- **Phase 6A** — Claude Code CLI adapter.
+- **Phase 6B** — Codex CLI adapter.
+- **Phase 6B.5** — Cursor CLI adapter (a real runtime adapter, not an
+  OpenAI-compatible-provider alias).
+- **Phase 6C** — configurable, plural OpenAI-compatible provider fabric
+  (named entries such as DeepSeek, Qwen, or a local endpoint) and a
+  capability-limited direct-API runtime foundation.
+- **Phase 6D** — runtime/provider capability discovery, policy-aware
+  routing, and bounded parent-directed model-council usage patterns.
+
+Recollect Lines remains provider- and host-neutral throughout: a runtime
+adapter (supervises a concrete CLI) and a provider configuration (names a
+model endpoint and its declared capabilities) stay distinct concepts, and
+no phase above is a hard-coded vendor branch. See
+[RFC-001.md](RFC-001.md) §10 for the full design constraints and
+[PRD.md](PRD.md) §9 for the product-level framing. This section records
+sequencing only — no Phase 6 code exists in this repository yet.

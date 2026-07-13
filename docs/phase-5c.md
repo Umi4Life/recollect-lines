@@ -174,6 +174,17 @@ PR's acceptance evidence should be read as having satisfied. See
 [PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8 for the full,
 continuously-honest capability accounting.
 
+**Addendum (post-5C):** a roadmap decision made after this phase's own
+implementation work landed has since sequenced that gap as Phase 6A
+(Claude Code CLI adapter), Phase 6B (Codex CLI adapter), and Phase 6B.5
+(Cursor CLI adapter), alongside a separately scheduled Phase 6C (plural,
+configurable OpenAI-compatible provider fabric and a capability-limited
+direct-API runtime foundation) and Phase 6D (capability discovery,
+policy-aware routing, and bounded model-council patterns). See
+[PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10 for the full
+sequence and design constraints. This addendum is documentation only — it
+schedules Phase 6, it does not implement any of it.
+
 ## Test evidence
 
 - `tests/test_verification_gate.py`: all three policy outcomes against

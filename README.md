@@ -34,9 +34,15 @@ known limitations, and `docs/phase-*.md` for per-phase evidence.
 **Honest gap against the product PRD:** the MVP boundary calls for at
 least two heterogeneous runtime adapters, with Claude Code CLI and Codex
 CLI as the preferred initial pair. Only one adapter — OpenCode, marked
-experimental — is implemented today. See
-[`docs/PRD.md`](docs/PRD.md) §9 and [`docs/RFC-001.md`](docs/RFC-001.md)
-§8 for the full capability accounting.
+experimental — is implemented today. A post-Phase-5C roadmap decision has
+since sequenced Claude Code CLI (Phase 6A), Codex CLI (Phase 6B), and
+Cursor CLI (Phase 6B.5) as the next adapters, plus a separately scheduled
+plural OpenAI-compatible provider fabric (Phase 6C) and capability
+discovery/routing/bounded model-council patterns (Phase 6D) — none
+implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
+[`docs/RFC-001.md`](docs/RFC-001.md) §8/§10, and
+[`docs/PHASE-5.md`](docs/PHASE-5.md) for the full capability accounting
+and roadmap.
 
 ## CI
 
