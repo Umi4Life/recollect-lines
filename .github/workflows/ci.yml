@@ -25,8 +25,11 @@ jobs:
       - name: Run test suite
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-      - name: Byte-compile source and tests
-        run: python3 -m compileall -q src tests
+      - name: Run generic MCP-host acceptance harness
+        run: python3 scripts/mcp_acceptance.py
+
+      - name: Byte-compile source, tests, and scripts
+        run: python3 -m compileall -q src tests scripts
 
       - name: Check for whitespace errors
         run: git diff --check $(git hash-object -t tree /dev/null)

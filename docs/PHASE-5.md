@@ -50,21 +50,66 @@ remains impossible for the same reason Phase 2/3 named it out of scope — a
 new OS process cannot regain a `Popen`/child relationship with an orphaned
 subprocess.
 
-## Phase 5C (planned) — Verification gate + real Hermes field acceptance
+## Phase 5C (this PR) — Verification gate, timeout liveness safety, and generic MCP-host acceptance
 
-Problem: verification is caller-invoked, not enforced (PRD §9, RFC-001 §9).
-Nothing in the lifecycle graph currently requires a broker-verified check
-before a workspace-writable task can report success.
+Problem: verification was caller-invoked, not enforceable (PRD §9,
+RFC-001 §9), and `Broker.timeout()` finalized (and could delete) a
+workspace without ever checking whether the process group it was timing
+out was actually still alive ([phase-5b.md](phase-5b.md), "Non-goals
+carried forward").
 
-Planned scope:
+Implemented in this PR — see [phase-5c.md](phase-5c.md) for the full
+design, decision tables, and test evidence:
 
-- A lifecycle option that requires a passing `Broker.verify()` pass before a
-  task can reach `succeeded`, with a clearly labeled distinct terminal state
-  or reason when verification is required but not supplied or fails.
-- A real field acceptance run driven by Hermes (or an equivalent operator)
-  exercising the full delegate → observe → collect → cancel flow against a
-  real workspace and a real adapter, with raw results reported (not just
-  unit-test evidence).
+- An opt-in, per-task `verification_policy` (`none` / `advisory` /
+  `required`) folded into the real lifecycle (`complete()`/`collect()`),
+  not just the pre-existing caller-invoked `verify()`.
+- `Broker.timeout()` now classifies process-group liveness — the same
+  restart-safety classification `reconcile()`/`cancel()` already used —
+  before finalizing a workspace, closing the gap named in phase-5b.md.
+- A generic MCP-host acceptance harness (`scripts/mcp_acceptance.py`): a
+  real stdio JSON-RPC client driving a real `recollect-mcp` subprocess
+  against a disposable local Git fixture, proving the delegate → observe
+  → collect → cancel lifecycle end to end using the standard MCP stdio
+  protocol any compliant host could speak.
 
-Both items are unimplemented as of Phase 5A; this document records intent
-and sequencing, not completed work.
+**Documentation correction:** this section previously described the
+acceptance work above as "driven by Hermes." That was an error — Recollect
+Lines is provider- and host-neutral (see [PRD.md](PRD.md) §1, §3.1);
+Hermes is one possible operator environment among many, never a required
+dependency. The harness this phase actually delivers assumes no specific
+host and requires no Hermes installation to run; see
+[README.md](../README.md) for a generic MCP client configuration example
+alongside one clearly labeled, optional Hermes example.
+
+This phase does **not** close the codebase's largest remaining gap against
+the original product PRD: at least two heterogeneous runtime adapters
+(Claude Code CLI and Codex CLI are the PRD's preferred initial pair). Only
+one experimental adapter (OpenCode) is implemented. See
+[PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8 for the full, honest
+capability accounting — that gap remained open and unscheduled at the end
+of this PR's original scope; see Phase 6 below for the roadmap decision
+made after.
+
+## Phase 6 (planned, not implemented) — Adapter and provider expansion
+
+A post-Phase-5C roadmap decision sequenced the next phases without
+implementing any of them here:
+
+- **Phase 6A** — Claude Code CLI adapter.
+- **Phase 6B** — Codex CLI adapter.
+- **Phase 6B.5** — Cursor CLI adapter (a real runtime adapter, not an
+  OpenAI-compatible-provider alias).
+- **Phase 6C** — configurable, plural OpenAI-compatible provider fabric
+  (named entries such as DeepSeek, Qwen, or a local endpoint) and a
+  capability-limited direct-API runtime foundation.
+- **Phase 6D** — runtime/provider capability discovery, policy-aware
+  routing, and bounded parent-directed model-council usage patterns.
+
+Recollect Lines remains provider- and host-neutral throughout: a runtime
+adapter (supervises a concrete CLI) and a provider configuration (names a
+model endpoint and its declared capabilities) stay distinct concepts, and
+no phase above is a hard-coded vendor branch. See
+[RFC-001.md](RFC-001.md) §10 for the full design constraints and
+[PRD.md](PRD.md) §9 for the product-level framing. This section records
+sequencing only — no Phase 6 code exists in this repository yet.

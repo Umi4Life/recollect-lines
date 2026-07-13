@@ -25,7 +25,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .models import TaskRequest, TaskState
+from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
+from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -70,15 +71,6 @@ def _tool_result(tool: str, ok: bool, data: Any = None, error: dict | None = Non
 # --- shared argument helpers -----------------------------------------------
 
 
-def _validate_verify_commands(commands: Any) -> None:
-    valid = isinstance(commands, list) and all(
-        isinstance(command, list) and command and all(isinstance(part, str) for part in command)
-        for command in commands
-    )
-    if not valid:
-        raise ValueError("verify_commands must be an array of non-empty argv arrays of strings")
-
-
 def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     """Validate one delegate-shaped item, raising ValueError on any bad field.
 
@@ -104,10 +96,13 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     timeout_seconds = item.get("timeout_seconds", 1800)
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds < 1:
         raise ValueError("timeout_seconds must be a positive integer")
+    verification_policy = item.get("verification_policy", "none")
+    if verification_policy not in VERIFICATION_POLICIES:
+        raise ValueError(f"verification_policy must be one of {VERIFICATION_POLICIES}, got {verification_policy!r}")
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
-        _validate_verify_commands(verify_commands)
-    return TaskRequest(task, workspace, execution_mode, profile, timeout_seconds), verify_commands
+        validate_verify_commands(verify_commands)
+    return TaskRequest(task, workspace, execution_mode, profile, timeout_seconds, verification_policy), verify_commands
 
 
 def _require_task_id(args: dict) -> str:
@@ -124,6 +119,7 @@ def _task_summary(record) -> dict:
         "workspace": record.workspace,
         "execution_mode": record.execution_mode,
         "profile": record.profile,
+        "verification_policy": record.verification_policy,
     }
 
 
@@ -146,9 +142,7 @@ def _create_and_start(broker: Broker, item: Any) -> tuple[Any, Exception | None]
     something went wrong with an already-persisted task.
     """
     request, verify_commands = _build_task_request(item)
-    record = broker.create(request)
-    if verify_commands is not None:
-        broker.store.write_artifact(record.id, "verify_commands.json", json.dumps(verify_commands, indent=2) + "\n")
+    record = broker.create(request, verify_commands=verify_commands)
     try:
         record = broker.start(record.id)
     except Exception as error:
@@ -196,27 +190,24 @@ def handle_status(broker: Broker, args: dict) -> dict:
 
 
 def handle_collect(broker: Broker, args: dict) -> dict:
+    """Collect a task's runtime-reported result, plus any broker-verified
+    evidence. Verification (if verify_commands were declared at delegate
+    time) and its effect on the terminal state are entirely Broker.collect()'s
+    responsibility (Phase 5C) — this handler only reads back the artifacts a
+    single `collect()` call already produced, which is what makes a repeated
+    call on an already-terminal task idempotent (no re-run verification, see
+    tests/test_verification_gate.py).
+    """
     task_id = _require_task_id(args)
-    record = broker.store.get(task_id)  # raises KeyError for an unknown task, same as every other tool
-    verify_commands = _read_json_artifact(broker, task_id, "verify_commands.json")
-    # Re-reading the prior verification.json (rather than re-running commands)
-    # is what makes a repeated collect() on an already-terminal task idempotent:
-    # only the one time the task is genuinely RUNNING does verification still
-    # need to happen before the worktree it targets gets released.
-    broker_verification = _read_json_artifact(broker, task_id, "verification.json")
-    if verify_commands is not None and record.state is TaskState.RUNNING:
-        try:
-            broker_verification = broker.verify(task_id, verify_commands)
-        except Exception as error:
-            # Best-effort: a verify failure (e.g. the isolated worktree was already
-            # released) must never block returning the runtime-collected result below.
-            broker_verification = {"ran": False, "error": str(error)}
+    broker.store.get(task_id)  # raises KeyError for an unknown task, same as every other tool
     record = broker.collect(task_id)
+    gate = _read_json_artifact(broker, task_id, "verification_gate.json")
     return {
         "task_id": record.id,
         "state": record.state.value,
         "runtime_result": _read_json_artifact(broker, task_id, "result.json"),
-        "broker_verification": broker_verification,
+        "broker_verification": _read_json_artifact(broker, task_id, "verification.json"),
+        "verification_gate": {**gate, "label": verification_gate_label(gate)} if gate else None,
     }
 
 
@@ -289,6 +280,19 @@ DELEGATE_INPUT_SCHEMA = {
             "items": {"type": "array", "items": {"type": "string"}, "minItems": 1},
             "description": "Optional argv-array commands (never shell strings) run as broker-verified evidence when this task is collected.",
         },
+        "verification_policy": {
+            "type": "string",
+            "enum": list(VERIFICATION_POLICIES),
+            "default": "none",
+            "description": (
+                "Controls whether verify_commands can affect this task's terminal outcome. 'none' (default) "
+                "runs any declared verify_commands as evidence only, with no effect on the task's terminal "
+                "state — fully backward compatible with delegate calls that predate this field. 'advisory' "
+                "downgrades a runtime success to succeeded_with_warnings if verification fails, but never "
+                "blocks it. 'required' blocks a runtime success into failed if any declared command fails, "
+                "or if verification_policy is 'required' but no verify_commands were declared at all."
+            ),
+        },
     },
     "required": ["task", "workspace"],
 }
@@ -353,7 +357,12 @@ TOOLS = {
         "handler": handle_status,
     },
     "collect": {
-        "description": "Collect a completed task's runtime-reported result, plus broker-verified command evidence for any verify_commands supplied at delegate time.",
+        "description": (
+            "Collect a completed task's runtime-reported result, plus broker-verified command evidence for "
+            "any verify_commands supplied at delegate time. verification_gate.label distinguishes whether the "
+            "returned state is runtime_reported (evidence-only), advisory_verified/advisory_verification_failed, "
+            "required_verified, or blocked_failed_verification — see verification_policy on delegate."
+        ),
         "inputSchema": COLLECT_INPUT_SCHEMA,
         "handler": handle_collect,
     },
@@ -487,12 +496,21 @@ def serve(broker: Broker, instream, outstream) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="recollect-mcp", description="Local stdio MCP interface for the Recollect Lines broker.")
     parser.add_argument("--home", type=Path, default=Path(".recollect"), help="Broker home directory (matches `recollect --home`).")
+    parser.add_argument(
+        "--opencode-command", default=None,
+        help=(
+            "Advanced: override the opencode adapter's command prefix as a JSON array "
+            "(e.g. to pin a specific opencode-ai version, or point at a deterministic "
+            "stand-in binary for testing/acceptance). Defaults to the built-in npx opencode-ai invocation."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    broker = Broker(args.home)
+    adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
+    broker = Broker(args.home, opencode_adapter=adapter)
     try:
         serve(broker, sys.stdin, sys.stdout)
     finally:

@@ -11,6 +11,7 @@ from .adapters import AdapterCapabilities
 from .models import (
     DEFAULT_PROFILES,
     TERMINAL_STATES,
+    VERIFICATION_POLICIES,
     ProfilePolicy,
     RecoveryRequired,
     TaskRecord,
@@ -19,6 +20,7 @@ from .models import (
     WorkspaceLeaseConflict,
     now,
     validate_result,
+    validate_verify_commands,
 )
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .store import TaskStore
@@ -69,14 +71,24 @@ class Broker:
             raise ValueError(f"Profile {policy.name} does not permit mode {request.execution_mode}")
         if request.timeout_seconds > policy.max_timeout_seconds:
             raise ValueError(f"Profile {policy.name} maximum timeout is {policy.max_timeout_seconds} seconds")
+        if request.verification_policy not in VERIFICATION_POLICIES:
+            raise ValueError(f"Unknown verification_policy: {request.verification_policy}")
         if self.store.active_count(policy.name) >= policy.max_concurrency:
             raise ValueError(f"Profile {policy.name} concurrency limit reached")
         return policy
 
-    def create(self, request: TaskRequest) -> TaskRecord:
+    def create(self, request: TaskRequest, verify_commands: list[list[str]] | None = None) -> TaskRecord:
+        """Create a task, optionally declaring the broker-verified commands its
+        verification_policy will gate on. Shared by the CLI and MCP surfaces so
+        neither duplicates this policy check (PRD §6).
+        """
         self._validate_request(request)
+        if verify_commands is not None:
+            validate_verify_commands(verify_commands)
         record = self.store.create(TaskRecord.new(request))
         self.store.write_artifact(record.id, "request.json", json.dumps(record.json(), indent=2) + "\n")
+        if verify_commands is not None:
+            self.store.write_artifact(record.id, "verify_commands.json", json.dumps(verify_commands, indent=2) + "\n")
         return self.store.transition(record.id, TaskState.QUEUED, "Task queued", {})
 
     def start(self, task_id: str) -> TaskRecord:
@@ -148,8 +160,11 @@ class Broker:
         result = {"task_id": record.id, "state": "succeeded", "summary": summary, "runtime": {"adapter": "mock"}}
         validate_result(result, record.id)
         self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+        final_state, gate = self._apply_verification_gate(record.id, record, TaskState.SUCCEEDED)
+        self._write_gate_artifact(record.id, gate)
         self._finalize_workspace(record.id)
-        return self.store.transition(record.id, TaskState.SUCCEEDED, "Mock task completed", {"result_artifact": "result.json"})
+        message = "Mock task completed" if final_state is TaskState.SUCCEEDED else f"Mock task blocked by verification gate ({gate['outcome']})"
+        return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "verification_gate": gate})
 
     def collect(self, task_id: str) -> TaskRecord:
         """Collect a task's runtime-reported result.
@@ -173,24 +188,34 @@ class Broker:
             if collected["exit_code"] != 0:
                 result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or "OpenCode exited with a non-zero status", "runtime": runtime}
                 self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+                _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
+                self._write_gate_artifact(record.id, gate)
                 self._finalize_workspace(record.id)
-                return self.store.transition(record.id, TaskState.FAILED, "OpenCode task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
+                return self.store.transition(record.id, TaskState.FAILED, "OpenCode task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
             state = TaskState.SUCCEEDED if collected["summary"] else TaskState.SUCCEEDED_WITH_WARNINGS
             result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or "OpenCode run produced no text result", "runtime": runtime}
             validate_result(result, record.id)
             self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+            final_state, gate = self._apply_verification_gate(record.id, record, state)
+            self._write_gate_artifact(record.id, gate)
             self._finalize_workspace(record.id)
-            return self.store.transition(record.id, state, "OpenCode task completed", {"result_artifact": "result.json", "exit_code": collected["exit_code"]})
+            message = "OpenCode task completed" if final_state is state else f"OpenCode task blocked by verification gate ({gate['outcome']})"
+            return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
         if record.profile != "opencode":
             # No subprocess was ever involved for this profile (mock tasks are
             # collected via complete(), not collect()); this is a caller/protocol
-            # error, not a restart, and there is nothing to reconcile.
+            # error, not a restart, and there is nothing to reconcile. Any
+            # declared verify_commands still run here as evidence (matching
+            # Phase 3/5B's MCP-level behavior) — they just can never rescue this
+            # protocol error into a success, whatever the policy.
+            _, gate = self._apply_verification_gate(task_id, record, TaskState.FAILED)
+            self._write_gate_artifact(task_id, gate)
             self._finalize_workspace(task_id)
             return self.store.transition(
                 task_id,
                 TaskState.FAILED,
                 "No running OpenCode process handle for task (broker restart or already collected)",
-                {"reason": "missing_process_handle"},
+                {"reason": "missing_process_handle", "verification_gate": gate},
             )
         reconciled = self.reconcile(task_id)
         if reconciled.state is not TaskState.FAILED:
@@ -219,8 +244,14 @@ class Broker:
     # handle exists for it: RUNNING/PREPARING from an ordinary restart (the
     # crash can land either just before or just after the RUNNING transition
     # — record_launch() happens first either way), CANCELLING from a crash
-    # mid-signal, and RECOVERY_REQUIRED from a previous reconciliation pass.
-    _RECONCILABLE_STATES = (TaskState.PREPARING, TaskState.RUNNING, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED)
+    # mid-signal, COLLECTING from a crash after the in-memory handle was
+    # popped (runtime already reaped, or a verification gate already in
+    # flight) but before the terminal transition (Phase 5C — see
+    # docs/phase-5c.md), and RECOVERY_REQUIRED from a previous reconciliation
+    # pass.
+    _RECONCILABLE_STATES = (
+        TaskState.PREPARING, TaskState.RUNNING, TaskState.COLLECTING, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED,
+    )
 
     def reconcile(self, task_id: str) -> TaskRecord:
         """Reconcile a task's durable runtime-launch record against reality.
@@ -315,8 +346,76 @@ class Broker:
         return {"signals_sent": signals_sent, "group_terminated": terminated, "exit_code": None}
 
     def timeout(self, task_id: str, reason: str = "Task exceeded configured timeout") -> TaskRecord:
-        self._finalize_workspace(task_id)
-        return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
+        """Time out a task, but only after classifying whether its runtime process
+        group (if any) is actually still alive — the same restart-safety
+        classification `reconcile()`/`cancel()` use (Phase 5B), applied here to
+        close the gap where a timeout clock alone used to finalize (and delete)
+        a workspace a still-running process might still be writing to.
+
+        Idempotent: an already-terminal task is returned unchanged. A
+        confirmed-alive (or liveness-unconfirmed) process group is never
+        treated as evidence the workspace is safe to finalize — it's driven
+        through the same in-memory or pgid-based cancellation `cancel()` uses,
+        and only a confirmed termination allows the workspace to be released.
+        An unconfirmed group lands in `recovery_required` with the
+        workspace/lease untouched, never `timed_out` on the caller's say-so
+        alone.
+        """
+        record = self.store.get(task_id)
+        if record.state in TERMINAL_STATES:
+            return record
+
+        handle = self._process_handles.get(task_id)
+        if handle is not None:
+            self._process_handles.pop(task_id, None)
+            cancellation = self.opencode_adapter.cancel(handle)
+            if cancellation["group_terminated"]:
+                self._finalize_workspace(task_id)
+                return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason, "cancellation": cancellation})
+            return self.store.transition(
+                task_id, TaskState.RECOVERY_REQUIRED,
+                "Timeout fired but the runtime process group could not be confirmed terminated; workspace retained",
+                {"reason": reason, "cancellation": cancellation},
+            )
+
+        if record.profile != "opencode":
+            # Mock tasks never hold a subprocess; nothing to protect.
+            self._finalize_workspace(task_id)
+            return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
+
+        status = self._process_group_status(task_id)
+        launch = self.store.get_launch(task_id)
+        if launch is not None:
+            self.store.mark_launch_reconciled(task_id)
+
+        if status in ("dead", "no_launch"):
+            self._finalize_workspace(task_id)
+            detail = "process_group_confirmed_dead" if status == "dead" else "missing_process_handle"
+            return self.store.transition(
+                task_id, TaskState.TIMED_OUT, reason,
+                {"reason": reason, "liveness": detail, "pgid": launch["pgid"] if launch else None},
+            )
+
+        if status == "alive":
+            cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.opencode_adapter.grace_period_seconds)
+            if cancellation["group_terminated"]:
+                self._finalize_workspace(task_id)
+                return self.store.transition(
+                    task_id, TaskState.TIMED_OUT, reason,
+                    {"reason": reason, "liveness": "process_group_alive_then_terminated", "cancellation": cancellation},
+                )
+            return self.store.transition(
+                task_id, TaskState.RECOVERY_REQUIRED,
+                "Timeout fired while the persisted process group was still alive and could not be confirmed terminated; workspace retained",
+                {"reason": reason, "liveness": "process_group_alive_after_restart", "cancellation": cancellation},
+            )
+
+        # status == "unknown": pgid missing/invalid — never treated as proof of death.
+        return self.store.transition(
+            task_id, TaskState.RECOVERY_REQUIRED,
+            "Timeout fired but process group liveness could not be confirmed from persisted metadata; refusing to finalize",
+            {"reason": reason, "liveness": "runtime_metadata_missing_or_invalid"},
+        )
 
     def cancel(self, task_id: str, reason: str) -> TaskRecord:
         """Cancel a task, observing (never assuming) whether the work actually stopped.
@@ -452,6 +551,73 @@ class Broker:
             task_id, "task.workspace_released", None, None,
             "Broker released the isolated worktree", {"release": release_result},
         )
+
+    def _load_verify_commands(self, task_id: str) -> list[list[str]] | None:
+        path = self.store.artifacts / task_id / "verify_commands.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def _apply_verification_gate(self, task_id: str, record: TaskRecord, candidate_state: TaskState) -> tuple[TaskState, dict]:
+        """Fold any declared broker-run verification into `candidate_state` per the
+        task's verification_policy. Always called after the runtime has
+        definitely finished (a runtime result/candidate_state already exists)
+        and before `_finalize_workspace` releases the worktree lease, so
+        verification still sees the same workspace the runtime task wrote to.
+
+        Declared verify_commands always run (as broker-verified evidence)
+        whenever present, independent of the runtime outcome — unconditional
+        evidence collection, matching Phase 3/5B's existing behavior and the
+        PRD's evidence-first pillar. Whether the *outcome* changes
+        `candidate_state` depends on policy:
+          - "none": never — evidence-only, the default, fully backward
+            compatible with every pre-5C caller.
+          - "advisory": a failure downgrades a runtime success to
+            succeeded_with_warnings; it never blocks a success outright, and
+            never touches an already-failed candidate.
+          - "required": a failure (or missing/blocked verification) forces a
+            runtime success to failed. A runtime failure is never "rescued"
+            by passing verification either way.
+        """
+        policy = record.verification_policy
+        commands = self._load_verify_commands(task_id)
+        gate = {"policy": policy, "commands_declared": bool(commands)}
+        is_candidate_success = candidate_state in (TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS)
+
+        if not commands:
+            gate["outcome"] = "not_configured"
+            if policy == "required" and is_candidate_success:
+                gate["outcome"] = "blocked_no_commands_declared"
+                return TaskState.FAILED, gate
+            return candidate_state, gate
+
+        try:
+            verification = self.verify(task_id, commands)
+        except Exception as error:
+            gate["outcome"] = "blocked_verification_error"
+            gate["error"] = str(error)
+            if policy == "required" and is_candidate_success:
+                return TaskState.FAILED, gate
+            return candidate_state, gate
+
+        gate["verification_artifact"] = "verification.json"
+        passed = bool(verification["commands"]) and all(command["passed"] for command in verification["commands"])
+        gate["outcome"] = "passed" if passed else "failed"
+
+        if passed or not is_candidate_success:
+            return candidate_state, gate
+        if policy == "required":
+            return TaskState.FAILED, gate
+        if policy == "advisory":
+            return TaskState.SUCCEEDED_WITH_WARNINGS, gate
+        return candidate_state, gate  # policy == "none": informational only
+
+    def _write_gate_artifact(self, task_id: str, gate: dict) -> None:
+        """Skip writing when nothing meaningful happened (policy=none, no commands
+        declared) so a plain evidence-only task's artifact manifest is unchanged
+        from pre-5C behavior.
+        """
+        if not gate["commands_declared"] and gate["policy"] != "required":
+            return
+        self.store.write_artifact(task_id, "verification_gate.json", json.dumps(gate, indent=2, sort_keys=True) + "\n")
 
     def verify(self, task_id: str, commands: list[list[str]]) -> dict:
         """Run broker-declared verification commands as argv arrays (never shell=True).
