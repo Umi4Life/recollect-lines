@@ -41,6 +41,19 @@ ALLOWED_TRANSITIONS = {
 }
 
 
+@dataclass(frozen=True)
+class ProfilePolicy:
+    name: str
+    allowed_modes: frozenset[str]
+    max_timeout_seconds: int
+    max_concurrency: int
+
+
+DEFAULT_PROFILES = {
+    "mock": ProfilePolicy("mock", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
+}
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -89,3 +102,18 @@ class TaskRecord:
 
 class InvalidTransition(ValueError):
     pass
+
+
+def validate_result(result: dict[str, Any], task_id: str) -> None:
+    required = {"task_id", "state", "summary", "runtime"}
+    missing = required - result.keys()
+    if missing:
+        raise ValueError(f"Result missing required fields: {', '.join(sorted(missing))}")
+    if result["task_id"] != task_id:
+        raise ValueError("Result task_id does not match the task")
+    if result["state"] not in {TaskState.SUCCEEDED.value, TaskState.SUCCEEDED_WITH_WARNINGS.value}:
+        raise ValueError("Result state must be a successful terminal state")
+    if not isinstance(result["summary"], str) or not result["summary"].strip():
+        raise ValueError("Result summary must be a non-empty string")
+    if not isinstance(result["runtime"], dict) or not isinstance(result["runtime"].get("adapter"), str):
+        raise ValueError("Result runtime.adapter must be a string")

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .models import TaskRequest
+from .models import InvalidTransition, TaskRequest
 from .service import Broker
 
 
@@ -18,13 +18,13 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read_only")
     create.add_argument("--profile", default="mock")
     create.add_argument("--timeout", type=int, default=1800)
-    for name in ("start", "status", "complete", "cancel"):
+    for name in ("start", "status", "complete", "cancel", "timeout"):
         cmd = sub.add_parser(name)
         cmd.add_argument("task_id")
         if name == "complete":
             cmd.add_argument("--summary", required=True)
-        if name == "cancel":
-            cmd.add_argument("--reason", default="Cancelled by caller")
+        if name in {"cancel", "timeout"}:
+            cmd.add_argument("--reason", default="Cancelled or timed out by caller")
     sub.add_parser("list")
     return p
 
@@ -41,11 +41,16 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.complete(args.task_id, args.summary).json()
         elif args.command == "cancel":
             output = broker.cancel(args.task_id, args.reason).json()
+        elif args.command == "timeout":
+            output = broker.timeout(args.task_id, args.reason).json()
         elif args.command == "status":
             output = broker.status(args.task_id)
         else:
             output = [record.json() for record in broker.store.list()]
         print(json.dumps(output, indent=2, sort_keys=True))
         return 0
+    except (KeyError, ValueError, InvalidTransition) as error:
+        print(json.dumps({"error": {"code": type(error).__name__, "message": str(error)}}, sort_keys=True))
+        return 2
     finally:
         broker.close()
