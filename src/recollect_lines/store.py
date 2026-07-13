@@ -15,7 +15,7 @@ class TaskStore:
         self.home.mkdir(parents=True, exist_ok=True)
         self.artifacts = home / "artifacts"
         self.artifacts.mkdir(exist_ok=True)
-        self.connection = sqlite3.connect(home / "recollect.db", timeout=5, check_same_thread=False)
+        self.connection = sqlite3.connect(home / "recollectlines.db", timeout=5, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
