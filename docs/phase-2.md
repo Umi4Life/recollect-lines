@@ -41,8 +41,12 @@ broker via `profile="opencode"`; the existing mock lifecycle is untouched.
    the same factual metadata attached.
 5. **Collection.** `collect()` parses `events.jsonl` line by line, skipping
    blank lines and counting (not raising on) malformed JSON. It takes the
-   last event with `type == "text"` and a non-empty `text` field as the
-   candidate summary. The result always carries
+   last event with `type == "text"` as the candidate summary, reading the
+   text from a top-level `text` field or, failing that, a nested `part.text`
+   field — the real `opencode run --format json` CLI nests the text under
+   `part`, while the test fixture uses a flatter shape; both are handled so
+   the fixture-backed unit tests and a live run against the real CLI agree.
+   The result always carries
    `verification: {tests_broker_verified: false, source: "runtime_reported"}`
    — Phase 2 never independently re-runs or checks anything the runtime
    claims, so it never claims to.
@@ -50,8 +54,35 @@ broker via `profile="opencode"`; the existing mock lifecycle is untouched.
    `record.profile == "opencode"`; a new `Broker.collect(task_id)` drives the
    OpenCode-specific COLLECTING → SUCCEEDED/SUCCEEDED_WITH_WARNINGS/FAILED
    transition. Process handles live in an in-memory dict on the broker
-   instance, never touched by mock-profile tasks. No unit test starts a real
-   OpenCode process; all subprocess tests use the local fixture script.
+   instance, never touched by mock-profile tasks. If a handle is missing
+   (broker restart, or `collect()` called twice) the task fails immediately
+   instead of getting stuck in COLLECTING with no valid outgoing transition.
+7. **Cancellation liveness.** After sending a signal, `cancel()` polls
+   process-group liveness for a short bounded window (1s after SIGTERM, 2s
+   after SIGKILL) rather than checking once immediately — `SIGKILL` delivery
+   is asynchronous, and a grandchild process (e.g. the real `opencode`
+   binary under npm's `sh -c` wrapper) can outlive the top-level
+   `popen.wait()` by a beat while the kernel tears it down.
+
+## Real CLI smoke verification
+
+All of the above was additionally exercised against the actual
+`npx --yes opencode-ai@1.17.18` CLI (not just the local test fixture) in a
+disposable git-initialized workspace, with real model access available in
+that environment:
+
+- A full `create` → `start` → `collect` run reached `SUCCEEDED` with a
+  correct, model-generated summary of the fixture's `add.py`.
+- A `start` → `cancel` run against a real multi-process tree (`npx` → `sh -c`
+  → `opencode`) reached `CANCELLED` with `group_terminated: true`, confirmed
+  independently via `os.killpg(pgid, 0)` after the call returned.
+- This exercise is what surfaced the nested `part.text` summary shape and the
+  liveness-check race documented above — both were bugs until this round of
+  smoke testing against the real CLI, and no unit test alone would have
+  caught either since the fixture script's shape and process tree don't
+  match the real CLI's.
+- No unit test starts a real OpenCode process; all subprocess *unit* tests
+  still use the local fixture script for hermetic, fast, offline runs.
 
 ## Known limitations
 

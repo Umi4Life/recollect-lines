@@ -35,6 +35,13 @@ def main():
         emit({"type": "text", "text": "partial result despite malformed line"})
         return 0
 
+    if "NESTED_PART" in prompt:
+        # Mirrors the real `opencode run --format json` event shape, where the
+        # top-level event only carries type="text"; the actual text lives at
+        # event["part"]["text"], not event["text"].
+        emit({"type": "text", "part": {"type": "text", "text": f"nested summary for {workspace}"}})
+        return 0
+
     if "NONZERO_EXIT" in prompt:
         emit({"type": "text", "text": "about to fail"})
         print("boom", file=sys.stderr, flush=True)

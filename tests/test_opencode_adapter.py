@@ -96,6 +96,14 @@ class OpenCodeBrokerIntegrationTests(unittest.TestCase):
         self.assertIn("events.jsonl", manifest_names)
         self.assertIn("stderr.log", manifest_names)
 
+    def test_collect_reads_summary_from_the_real_cli_nested_part_shape(self):
+        record = self.create(task="NESTED_PART")
+        self.broker.start(record.id)
+        completed = self.broker.collect(record.id)
+        self.assertEqual(completed.state, TaskState.SUCCEEDED)
+        result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
+        self.assertEqual(result["summary"], "nested summary for /repo")
+
     def test_collect_is_defensive_against_malformed_jsonl_lines(self):
         record = self.create(task="MALFORMED")
         self.broker.start(record.id)
@@ -113,6 +121,18 @@ class OpenCodeBrokerIntegrationTests(unittest.TestCase):
         result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
         self.assertEqual(result["runtime"]["exit_code"], 1)
         self.assertFalse(result["runtime"]["verification"]["tests_broker_verified"])
+
+    def test_collect_without_a_process_handle_fails_instead_of_sticking_in_collecting(self):
+        record = self.create()
+        self.broker.start(record.id)
+        orphaned_handle = self.broker._process_handles.pop(record.id)  # simulate a broker restart losing the handle
+
+        try:
+            completed = self.broker.collect(record.id)
+            self.assertEqual(completed.state, TaskState.FAILED)
+            self.assertEqual(completed.state, self.broker.store.get(record.id).state)
+        finally:
+            orphaned_handle.popen.wait(timeout=5)
 
     def test_cancel_terminates_process_group_for_a_ready_long_running_fixture(self):
         record = self.create(task="SLEEP")

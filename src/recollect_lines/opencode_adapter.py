@@ -10,6 +10,7 @@ import json
 import os
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,6 +83,18 @@ class OpenCodeAdapter:
             return True
         return True
 
+    def _group_dead_within(self, pgid: int, timeout: float, interval: float = 0.05) -> bool:
+        # SIGKILL delivery is asynchronous: a grandchild (e.g. the real `opencode`
+        # process under npm's `sh -c` wrapper) can outlive the top-level popen.wait()
+        # by a beat while the kernel tears it down. A single instantaneous check right
+        # after the signal races that teardown, so poll briefly instead.
+        deadline = time.monotonic() + timeout
+        while self._group_alive(pgid):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(interval)
+        return True
+
     def cancel(self, handle: ProcessHandle) -> dict:
         signals_sent = []
         try:
@@ -93,7 +106,8 @@ class OpenCodeAdapter:
             handle.popen.wait(timeout=self.grace_period_seconds)
         except subprocess.TimeoutExpired:
             pass
-        if self._group_alive(handle.pgid):
+        group_terminated = self._group_dead_within(handle.pgid, timeout=1.0)
+        if not group_terminated:
             try:
                 os.killpg(handle.pgid, signal.SIGKILL)
                 signals_sent.append("SIGKILL")
@@ -103,9 +117,10 @@ class OpenCodeAdapter:
                 handle.popen.wait(timeout=self.grace_period_seconds)
             except subprocess.TimeoutExpired:
                 pass
+            group_terminated = self._group_dead_within(handle.pgid, timeout=2.0)
         return {
             "signals_sent": signals_sent,
-            "group_terminated": not self._group_alive(handle.pgid),
+            "group_terminated": group_terminated,
             "exit_code": handle.popen.returncode,
         }
 
@@ -124,11 +139,15 @@ class OpenCodeAdapter:
                     malformed_event_lines += 1
         summary = None
         for event in reversed(events):
-            if isinstance(event, dict) and event.get("type") == "text":
-                text = event.get("text")
-                if isinstance(text, str) and text.strip():
-                    summary = text.strip()
-                    break
+            if not isinstance(event, dict) or event.get("type") != "text":
+                continue
+            text = event.get("text")
+            if not isinstance(text, str):
+                part = event.get("part")
+                text = part.get("text") if isinstance(part, dict) else None
+            if isinstance(text, str) and text.strip():
+                summary = text.strip()
+                break
         stderr_text = handle.stderr_path.read_text(errors="replace") if handle.stderr_path.exists() else ""
         return {
             "exit_code": exit_code,

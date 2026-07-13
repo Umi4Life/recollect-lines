@@ -75,10 +75,15 @@ class Broker:
         return self.store.transition(record.id, TaskState.SUCCEEDED, "Mock task completed", {"result_artifact": "result.json"})
 
     def collect(self, task_id: str) -> TaskRecord:
-        record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting OpenCode result", {})
-        handle = self._process_handles.pop(record.id, None)
+        handle = self._process_handles.pop(task_id, None)
         if handle is None:
-            raise ValueError(f"No running OpenCode process for task: {task_id}")
+            return self.store.transition(
+                task_id,
+                TaskState.FAILED,
+                "No running OpenCode process handle for task (broker restart or already collected)",
+                {"reason": "missing_process_handle"},
+            )
+        record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting OpenCode result", {})
         collected = self.opencode_adapter.collect(handle)
         self.store.refresh_manifest(record.id)
         runtime = {"adapter": "opencode", **collected}
