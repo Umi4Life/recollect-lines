@@ -15,31 +15,34 @@ dependency.
 - [`docs/PRD.md`](docs/PRD.md) — canonical, provider-neutral product requirements.
 - [`docs/RFC-001.md`](docs/RFC-001.md) — current implementation RFC (architecture, evidence, known limitations).
 - [`docs/PHASE-5.md`](docs/PHASE-5.md) — roadmap for the next planned work.
+- [`docs/phase-6a.md`](docs/phase-6a.md) — Claude Code CLI runtime adapter: compatibility spike, design, permission mapping, real smoke evidence.
 - [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
 - `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
 
 ## Implementation status
 
-Phases 1-5C are implemented: durable SQLite task/event storage, explicit
+Phases 1-6A are implemented: durable SQLite task/event storage, explicit
 task-state transitions, local artifact directories with integrity
 manifests, profile-policy validation, timeout/cancellation lifecycle
 handling with process-group liveness classification, durable
 restart recovery and idempotent collection, an opt-in per-task
 verification-gate policy, a deterministic mock adapter, an experimental
-OpenCode runtime adapter, Git worktree workspace isolation with
-broker-side verification, and a local stdio MCP interface — plus the CLI.
-See [`docs/RFC-001.md`](docs/RFC-001.md) for the full architecture and
-known limitations, and `docs/phase-*.md` for per-phase evidence.
+OpenCode runtime adapter, an experimental Claude Code CLI runtime adapter
+(Phase 6A), Git worktree workspace isolation with broker-side
+verification, and a local stdio MCP interface — plus the CLI. See
+[`docs/RFC-001.md`](docs/RFC-001.md) for the full architecture and known
+limitations, and `docs/phase-*.md` for per-phase evidence.
 
 **Honest gap against the product PRD:** the MVP boundary calls for at
 least two heterogeneous runtime adapters, with Claude Code CLI and Codex
-CLI as the preferred initial pair. Only one adapter — OpenCode, marked
-experimental — is implemented today. A post-Phase-5C roadmap decision has
-since sequenced Claude Code CLI (Phase 6A), Codex CLI (Phase 6B), and
-Cursor CLI (Phase 6B.5) as the next adapters, plus a separately scheduled
-plural OpenAI-compatible provider fabric (Phase 6C) and capability
-discovery/routing/bounded model-council patterns (Phase 6D) — none
-implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
+CLI as the preferred initial pair. Phase 6A implements the Claude Code CLI
+adapter, so this codebase now has two adapters — OpenCode and Claude Code,
+both marked experimental — meeting that "at least two" boundary. A
+post-Phase-5C roadmap decision sequenced Codex CLI (Phase 6B) and Cursor
+CLI (Phase 6B.5) as further adapters, plus a separately scheduled plural
+OpenAI-compatible provider fabric (Phase 6C) and capability
+discovery/routing/bounded model-council patterns (Phase 6D) — none of
+6B/6B.5/6C/6D implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
 [`docs/RFC-001.md`](docs/RFC-001.md) §8/§10, and
 [`docs/PHASE-5.md`](docs/PHASE-5.md) for the full capability accounting
 and roadmap.

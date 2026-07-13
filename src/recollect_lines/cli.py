@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .claude_code_adapter import ClaudeCodeAdapter
 from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
 from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
@@ -18,6 +19,14 @@ def parser() -> argparse.ArgumentParser:
             "Advanced: override the opencode adapter's command prefix as a JSON array "
             "(e.g. to pin a specific opencode-ai version, or point at a deterministic "
             "stand-in binary for testing). Defaults to the built-in npx opencode-ai invocation."
+        ),
+    )
+    p.add_argument(
+        "--claude-command", default=None,
+        help=(
+            "Advanced: override the Claude Code adapter's command prefix as a JSON array "
+            "(e.g. to point at a deterministic stand-in binary for testing). "
+            "Defaults to the built-in `claude` CLI invocation."
         ),
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -52,8 +61,9 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
-    broker = Broker(args.home, opencode_adapter=adapter)
+    opencode_adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
+    claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
+    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter)
     try:
         if args.command == "create":
             request = TaskRequest(args.task, args.workspace, args.mode, args.profile, args.timeout, args.verification_policy)

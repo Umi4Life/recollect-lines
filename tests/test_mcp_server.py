@@ -7,17 +7,21 @@ import unittest
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+FAKE_CLAUDE = Path(__file__).parent / "fixtures" / "fake_claude.py"
 
 
 class McpStdioClient:
     """Drives a real `python -m recollect_lines.mcp_server` subprocess over its stdio transport."""
 
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, claude_command: list | None = None):
         env = dict(os.environ)
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{SRC_DIR}{os.pathsep}{existing}" if existing else str(SRC_DIR)
+        args = [sys.executable, "-m", "recollect_lines.mcp_server", "--home", str(home)]
+        if claude_command is not None:
+            args += ["--claude-command", json.dumps(claude_command)]
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "recollect_lines.mcp_server", "--home", str(home)],
+            args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -314,6 +318,54 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(schemas["cancel"]["required"], ["task_id"])
         self.assertEqual(schemas["message"]["required"], ["task_id", "content"])
         self.assertNotIn("required", schemas["reconcile"])  # task_id is optional: omit to reconcile every pending task
+
+    def test_profile_schema_lists_claude_code_alongside_mock_and_opencode(self):
+        self.initialize()
+        listed = self.client.request("tools/list")
+        schemas = {tool["name"]: tool["inputSchema"] for tool in listed["result"]["tools"]}
+        self.assertEqual(set(schemas["delegate"]["properties"]["profile"]["enum"]), {"mock", "opencode", "claude_code"})
+
+
+class ClaudeCodeMcpSelectionTests(unittest.TestCase):
+    """Runtime discovery/selection contract: a profile="claude_code" delegate call is
+    dispatched to ClaudeCodeAdapter (not silently treated as mock/opencode), driven
+    end-to-end through the real MCP stdio surface against the deterministic fixture
+    CLI — never the real network/quota-consuming `claude` binary.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+        self.client = McpStdioClient(self.home, claude_command=[sys.executable, str(FAKE_CLAUDE)])
+        self.initialize()
+
+    def tearDown(self):
+        self.client.close()
+        self.tempdir.cleanup()
+
+    def initialize(self):
+        return self.client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+
+    def test_delegate_with_claude_code_profile_runs_the_adapter_and_collects_a_result(self):
+        delegated = self.client.call_tool("delegate", {
+            "task": "what is the magic number",
+            "workspace": str(self.workspace),
+            "execution_mode": "read_only",
+            "profile": "claude_code",
+        })
+        payload = json.loads(delegated["result"]["content"][0]["text"])
+        self.assertFalse(delegated["result"]["isError"])
+        task_id = payload["data"]["task_id"]
+        self.assertEqual(payload["data"]["profile"], "claude_code")
+
+        collected = self.client.call_tool("collect", {"task_id": task_id})
+        collected_payload = json.loads(collected["result"]["content"][0]["text"])
+        self.assertFalse(collected["result"]["isError"])
+        self.assertEqual(collected_payload["data"]["state"], "succeeded")
+        self.assertEqual(collected_payload["data"]["runtime_result"]["runtime"]["adapter"], "claude_code")
+        self.assertIn("42", collected_payload["data"]["runtime_result"]["summary"])
 
 
 if __name__ == "__main__":

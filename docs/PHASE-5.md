@@ -91,25 +91,30 @@ capability accounting — that gap remained open and unscheduled at the end
 of this PR's original scope; see Phase 6 below for the roadmap decision
 made after.
 
-## Phase 6 (planned, not implemented) — Adapter and provider expansion
+## Phase 6 — Adapter and provider expansion (6A implemented, 6B/6B.5/6C/6D planned)
 
-A post-Phase-5C roadmap decision sequenced the next phases without
-implementing any of them here:
+A post-Phase-5C roadmap decision sequenced the next phases:
 
-- **Phase 6A** — Claude Code CLI adapter.
-- **Phase 6B** — Codex CLI adapter.
+- **Phase 6A** — Claude Code CLI adapter. **Implemented** — see
+  [phase-6a.md](phase-6a.md) for the full compatibility-spike evidence,
+  `ClaudeCodeAdapter` design, permission-mode mapping, real bounded smoke,
+  and test evidence. `service.py`'s adapter dispatch was generalized to a
+  profile-keyed `subprocess_adapters` lookup so this required no
+  Claude-specific branching in broker core.
+- **Phase 6B** — Codex CLI adapter. Not implemented.
 - **Phase 6B.5** — Cursor CLI adapter (a real runtime adapter, not an
-  OpenAI-compatible-provider alias).
+  OpenAI-compatible-provider alias). Not implemented.
 - **Phase 6C** — configurable, plural OpenAI-compatible provider fabric
   (named entries such as DeepSeek, Qwen, or a local endpoint) and a
-  capability-limited direct-API runtime foundation.
+  capability-limited direct-API runtime foundation. Not implemented.
 - **Phase 6D** — runtime/provider capability discovery, policy-aware
-  routing, and bounded parent-directed model-council usage patterns.
+  routing, and bounded parent-directed model-council usage patterns. Not
+  implemented.
 
 Recollect Lines remains provider- and host-neutral throughout: a runtime
 adapter (supervises a concrete CLI) and a provider configuration (names a
 model endpoint and its declared capabilities) stay distinct concepts, and
 no phase above is a hard-coded vendor branch. See
 [RFC-001.md](RFC-001.md) §10 for the full design constraints and
-[PRD.md](PRD.md) §9 for the product-level framing. This section records
-sequencing only — no Phase 6 code exists in this repository yet.
+[PRD.md](PRD.md) §9 for the product-level framing. Phase 6B, 6B.5, 6C, and
+6D remain sequencing only — no code for them exists in this repository yet.
