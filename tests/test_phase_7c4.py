@@ -163,6 +163,7 @@ class Phase74OperatorControlTests(unittest.TestCase):
             cancel_out = broker_b.operator_control(task_id, "cancel", reason="operator test cancel")
             self.assertTrue(cancel_out["ok"])
             self.assertEqual(cancel_out["result"]["state"], "cancelled")
+            broker_b.close()
 
             broker_b2, task_id2 = self._adopted_broker("DURABLE_SHORT")
             self.assertTrue(
