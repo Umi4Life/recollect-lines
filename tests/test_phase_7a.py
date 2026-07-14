@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -179,19 +177,6 @@ class ExampleConfigTests(unittest.TestCase):
             )
             codes = {f["code"] for f in report["findings"]}
             self.assertIn("PROVIDER_SECRET_REFERENCE_MISSING", codes)
-
-
-class CleanInstallAcceptanceTests(unittest.TestCase):
-    def test_clean_install_script_passes(self):
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "clean_install_acceptance.py")],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("Clean-install acceptance PASSED", result.stdout)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,10 @@ def _manual_install(python: Path, scripts: Path) -> None:
         script.chmod(0o755)
 
 
+def _scripts_installed(scripts: Path) -> bool:
+    return (scripts / "recollect-lines").exists() and (scripts / "recollect-mcp").exists()
+
+
 def _pip_wheel_install(python: Path, tmp_path: Path) -> bool:
     bootstrap = run_optional([str(python), "-m", "pip", "install", "setuptools>=68", "wheel"])
     if bootstrap.returncode != 0:
@@ -101,10 +105,10 @@ def main() -> int:
             python = venv_dir / "bin" / "python"
             scripts = venv_dir / "bin"
 
-        if _pip_wheel_install(python, tmp_path):
+        if _pip_wheel_install(python, tmp_path) and _scripts_installed(scripts):
             print("Installed package via local wheel (pip).")
         else:
-            print("Pip wheel install unavailable; using offline manual install fallback.")
+            print("Pip wheel install unavailable or incomplete; using offline manual install fallback.")
             _manual_install(python, scripts)
 
         env = {"PATH": f"{scripts}{os.pathsep}{os.environ.get('PATH', '')}"}
