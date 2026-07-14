@@ -118,8 +118,8 @@ def _require_task_id(args: dict) -> str:
     return task_id
 
 
-def _task_summary(record) -> dict:
-    return {
+def _task_summary(record, broker: Broker | None = None) -> dict:
+    summary = {
         "task_id": record.id,
         "state": record.state.value,
         "workspace": record.workspace,
@@ -128,6 +128,11 @@ def _task_summary(record) -> dict:
         "provider": record.provider,
         "verification_policy": record.verification_policy,
     }
+    if broker is not None:
+        detail = broker.reconcile_detail(record.id)
+        if detail is not None:
+            summary["reconciliation"] = detail
+    return summary
 
 
 def _read_json_artifact(broker: Broker, task_id: str, name: str) -> Any:
@@ -223,8 +228,9 @@ def handle_reconcile(broker: Broker, args: dict) -> dict:
     if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
         raise ValueError("'task_id' must be a non-empty string when provided")
     if task_id:
-        return {"reconciled": [_task_summary(broker.reconcile(task_id))]}
-    return {"reconciled": [_task_summary(record) for record in broker.reconcile_pending()]}
+        record = broker.reconcile(task_id)
+        return {"reconciled": [_task_summary(record, broker)]}
+    return {"reconciled": [_task_summary(record, broker) for record in broker.reconcile_pending()]}
 
 
 def handle_cancel(broker: Broker, args: dict) -> dict:

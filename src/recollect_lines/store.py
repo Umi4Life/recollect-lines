@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import ALLOWED_TRANSITIONS, InvalidTransition, TaskRecord, TaskState, WorkspaceLeaseConflict, now
+from .durable_reconciliation import DEFAULT_LEASE_TTL_SECONDS, LAUNCH_KIND_LEGACY
 
 
 class TaskStore:
@@ -88,6 +89,25 @@ class TaskStore:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN verification_policy TEXT NOT NULL DEFAULT 'none'")
         if "provider" not in existing_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN provider TEXT")
+        launch_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(runtime_launches)")}
+        if "durable_launch_id" not in launch_columns:
+            self.connection.execute("ALTER TABLE runtime_launches ADD COLUMN durable_launch_id TEXT")
+        if "launch_kind" not in launch_columns:
+            self.connection.execute(
+                "ALTER TABLE runtime_launches ADD COLUMN launch_kind TEXT NOT NULL DEFAULT 'legacy_subprocess'"
+            )
+        self.connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS durable_recovery_leases (
+                durable_launch_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+                broker_id TEXT NOT NULL,
+                broker_epoch INTEGER NOT NULL,
+                acquired_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            """
+        )
         self.connection.commit()
 
     def create(self, record: TaskRecord) -> TaskRecord:
@@ -192,6 +212,8 @@ class TaskStore:
     def record_launch(
         self, task_id: str, *, adapter: str, adapter_label: str, pid: int | None, pgid: int | None,
         command: list[str], workspace: str, events_artifact: str | None, stderr_artifact: str | None,
+        durable_launch_id: str | None = None,
+        launch_kind: str = LAUNCH_KIND_LEGACY,
     ) -> None:
         """Persist durable launch identity the moment an adapter process is actually spawned.
 
@@ -200,9 +222,13 @@ class TaskStore:
         with self.connection:
             self.connection.execute(
                 "INSERT INTO runtime_launches "
-                "(task_id, adapter, adapter_label, pid, pgid, launched_at, command_json, workspace, events_artifact, stderr_artifact) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (task_id, adapter, adapter_label, pid, pgid, now(), json.dumps(command), workspace, events_artifact, stderr_artifact),
+                "(task_id, adapter, adapter_label, pid, pgid, launched_at, command_json, workspace, "
+                "events_artifact, stderr_artifact, durable_launch_id, launch_kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id, adapter, adapter_label, pid, pgid, now(), json.dumps(command), workspace,
+                    events_artifact, stderr_artifact, durable_launch_id, launch_kind,
+                ),
             )
 
     def get_launch(self, task_id: str) -> dict[str, Any] | None:
@@ -219,6 +245,75 @@ class TaskStore:
                 "UPDATE runtime_launches SET reconciliation_marker = 'reconciled' WHERE task_id = ?",
                 (task_id,),
             )
+
+    def try_acquire_recovery_lease(
+        self,
+        *,
+        task_id: str,
+        durable_launch_id: str,
+        broker_id: str,
+        broker_epoch: int,
+        ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+    ) -> bool:
+        """Atomic recovery lease: one active reconciler per durable launch."""
+        acquired_at = now()
+        expires_at = self._lease_expiry_iso(ttl_seconds)
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT broker_id, broker_epoch, expires_at FROM durable_recovery_leases WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                self.connection.execute(
+                    "INSERT INTO durable_recovery_leases "
+                    "(durable_launch_id, task_id, broker_id, broker_epoch, acquired_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (durable_launch_id, task_id, broker_id, broker_epoch, acquired_at, expires_at),
+                )
+                return True
+            if self._lease_expired(row["expires_at"]):
+                self.connection.execute("DELETE FROM durable_recovery_leases WHERE task_id = ?", (task_id,))
+                self.connection.execute(
+                    "INSERT INTO durable_recovery_leases "
+                    "(durable_launch_id, task_id, broker_id, broker_epoch, acquired_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (durable_launch_id, task_id, broker_id, broker_epoch, acquired_at, expires_at),
+                )
+                return True
+            if row["broker_id"] == broker_id and row["broker_epoch"] == broker_epoch:
+                self.connection.execute(
+                    "UPDATE durable_recovery_leases SET expires_at = ?, durable_launch_id = ? WHERE task_id = ?",
+                    (expires_at, durable_launch_id, task_id),
+                )
+                return True
+            return False
+
+    def release_recovery_lease(self, task_id: str) -> None:
+        with self.connection:
+            self.connection.execute("DELETE FROM durable_recovery_leases WHERE task_id = ?", (task_id,))
+
+    def get_recovery_lease(self, task_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM durable_recovery_leases WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _lease_expiry_iso(ttl_seconds: float) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat()
+
+    @staticmethod
+    def _lease_expired(expires_at: str) -> bool:
+        from datetime import UTC, datetime
+
+        try:
+            return datetime.now(UTC) >= datetime.fromisoformat(expires_at)
+        except ValueError:
+            return True
 
     def refresh_manifest(self, task_id: str) -> Path:
         directory = self.artifacts / task_id

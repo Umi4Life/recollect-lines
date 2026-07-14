@@ -14,6 +14,7 @@ class AdapterCapabilities:
     supports_process_group_cancellation: bool
     reports_broker_verified_tests: bool
     recovery_control: RecoveryControlContract
+    uses_durable_subprocess_runner: bool = False
 
 
 @runtime_checkable

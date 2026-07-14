@@ -92,6 +92,16 @@ DIRECT_API_RECOVERY_CONTROL = RecoveryControlContract(
         ControlAction.COLLECT,
     }),
 )
+# Declared only for the proven durable-subprocess fixture path (Phase 7C.3 tests).
+# Production subprocess CLIs remain observe_and_cancel until independently proven.
+DURABLE_SUBPROCESS_RECOVERY_CONTROL = RecoveryControlContract(
+    recovery_level=RecoveryLevel.COLLECT_AFTER_RESTART,
+    supported_control_actions=frozenset({
+        ControlAction.STATUS,
+        ControlAction.CANCEL,
+        ControlAction.COLLECT,
+    }),
+)
 
 # Unproven conclusions when only offline help/version evidence exists.
 UNPROVEN_PROVIDER_NATIVE_RESUME = "unproven"

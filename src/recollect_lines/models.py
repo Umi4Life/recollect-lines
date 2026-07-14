@@ -57,7 +57,7 @@ ALLOWED_TRANSITIONS = {
     # transition — see Broker._RECONCILABLE_STATES / reconcile() and
     # docs/phase-5c.md. Reconciliation from here never fabricates a success.
     TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
-    TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED},
+    TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED, TaskState.RUNNING},
 }
 
 
