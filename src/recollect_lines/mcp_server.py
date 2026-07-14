@@ -45,7 +45,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-PROFILES = ("mock", "opencode", "claude_code", "codex", "cursor")
+PROFILES = ("mock", "opencode", "claude_code", "codex", "cursor", "openai_compatible")
 
 
 class ProtocolError(Exception):
@@ -102,10 +102,13 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     verification_policy = item.get("verification_policy", "none")
     if verification_policy not in VERIFICATION_POLICIES:
         raise ValueError(f"verification_policy must be one of {VERIFICATION_POLICIES}, got {verification_policy!r}")
+    provider = item.get("provider")
+    if provider is not None and (not isinstance(provider, str) or not provider.strip()):
+        raise ValueError("'provider' must be a non-empty string when provided")
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
         validate_verify_commands(verify_commands)
-    return TaskRequest(task, workspace, execution_mode, profile, timeout_seconds, verification_policy), verify_commands
+    return TaskRequest(task, workspace, execution_mode, profile, provider, timeout_seconds, verification_policy), verify_commands
 
 
 def _require_task_id(args: dict) -> str:
@@ -122,6 +125,7 @@ def _task_summary(record) -> dict:
         "workspace": record.workspace,
         "execution_mode": record.execution_mode,
         "profile": record.profile,
+        "provider": record.provider,
         "verification_policy": record.verification_policy,
     }
 
@@ -274,8 +278,13 @@ DELEGATE_INPUT_SCHEMA = {
             "description": (
                 "mock is a deterministic no-op adapter for testing; opencode runs the real OpenCode CLI as a "
                 "supervised subprocess; claude_code runs the real Claude Code CLI (`claude -p`) as a supervised "
-                "subprocess; codex runs the real Codex CLI (`codex exec`) as a supervised subprocess."
+                "subprocess; codex runs the real Codex CLI (`codex exec`) as a supervised subprocess; "
+                "openai_compatible sends a chat-completions request through a named provider from --providers-config."
             ),
+        },
+        "provider": {
+            "type": "string",
+            "description": "Named provider entry (required when profile is openai_compatible).",
         },
         "timeout_seconds": {
             "type": "integer",
@@ -536,6 +545,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Defaults to the built-in `cursor-agent` CLI invocation."
         ),
     )
+    parser.add_argument(
+        "--providers-config", type=Path, default=None,
+        help="Path to a JSON provider configuration file (required for openai_compatible profile tasks).",
+    )
     return parser
 
 
@@ -545,7 +558,14 @@ def main(argv: list[str] | None = None) -> int:
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
     cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
-    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter, codex_adapter=codex_adapter, cursor_adapter=cursor_adapter)
+    broker = Broker(
+        args.home,
+        opencode_adapter=opencode_adapter,
+        claude_code_adapter=claude_code_adapter,
+        codex_adapter=codex_adapter,
+        cursor_adapter=cursor_adapter,
+        providers_config=args.providers_config,
+    )
     try:
         serve(broker, sys.stdin, sys.stdout)
     finally:

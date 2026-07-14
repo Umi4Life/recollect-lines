@@ -331,7 +331,7 @@ class McpServerTests(unittest.TestCase):
         schemas = {tool["name"]: tool["inputSchema"] for tool in listed["result"]["tools"]}
         self.assertEqual(
             set(schemas["delegate"]["properties"]["profile"]["enum"]),
-            {"mock", "opencode", "claude_code", "codex", "cursor"},
+            {"mock", "opencode", "claude_code", "codex", "cursor", "openai_compatible"},
         )
 
 

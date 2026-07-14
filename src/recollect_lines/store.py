@@ -34,6 +34,7 @@ class TaskStore:
                 workspace TEXT NOT NULL,
                 execution_mode TEXT NOT NULL,
                 profile TEXT NOT NULL,
+                provider TEXT,
                 timeout_seconds INTEGER NOT NULL,
                 verification_policy TEXT NOT NULL DEFAULT 'none',
                 state TEXT NOT NULL,
@@ -85,13 +86,28 @@ class TaskStore:
         existing_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(tasks)")}
         if "verification_policy" not in existing_columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN verification_policy TEXT NOT NULL DEFAULT 'none'")
+        if "provider" not in existing_columns:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN provider TEXT")
         self.connection.commit()
 
     def create(self, record: TaskRecord) -> TaskRecord:
         with self.connection:
             self.connection.execute(
-                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (*record.json().values(),),
+                "INSERT INTO tasks (id, task, workspace, execution_mode, profile, provider, timeout_seconds, verification_policy, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record.id,
+                    record.task,
+                    record.workspace,
+                    record.execution_mode,
+                    record.profile,
+                    record.provider,
+                    record.timeout_seconds,
+                    record.verification_policy,
+                    record.state.value,
+                    record.created_at,
+                    record.updated_at,
+                ),
             )
             self.event(record.id, "task.created", None, record.state, "Task accepted", {})
         (self.artifacts / record.id).mkdir(exist_ok=True)
@@ -174,7 +190,7 @@ class TaskStore:
         return dict(row) if row else None
 
     def record_launch(
-        self, task_id: str, *, adapter: str, adapter_label: str, pid: int, pgid: int,
+        self, task_id: str, *, adapter: str, adapter_label: str, pid: int | None, pgid: int | None,
         command: list[str], workspace: str, events_artifact: str | None, stderr_artifact: str | None,
     ) -> None:
         """Persist durable launch identity the moment an adapter process is actually spawned.

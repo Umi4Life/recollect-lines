@@ -75,6 +75,8 @@ DEFAULT_PROFILES = {
     "claude_code": ProfilePolicy("claude_code", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
     "codex": ProfilePolicy("codex", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
     "cursor": ProfilePolicy("cursor", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
+    # Phase 6C: direct OpenAI-compatible HTTP runtime — read_only only; requires provider name.
+    "openai_compatible": ProfilePolicy("openai_compatible", frozenset({"read_only"}), 3600, 2),
 }
 
 # Verification-gate policy (Phase 5C): distinguishes evidence-only from
@@ -102,6 +104,7 @@ class TaskRequest:
     workspace: str
     execution_mode: str = "read_only"
     profile: str = "mock"
+    provider: str | None = None
     timeout_seconds: int = 1800
     verification_policy: str = "none"
 
@@ -113,6 +116,7 @@ class TaskRecord:
     workspace: str
     execution_mode: str
     profile: str
+    provider: str | None
     timeout_seconds: int
     verification_policy: str
     state: TaskState
@@ -128,6 +132,7 @@ class TaskRecord:
             workspace=request.workspace,
             execution_mode=request.execution_mode,
             profile=request.profile,
+            provider=request.provider,
             timeout_seconds=request.timeout_seconds,
             verification_policy=request.verification_policy,
             state=TaskState.CREATED,

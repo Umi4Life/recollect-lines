@@ -11,6 +11,7 @@ from .adapters import AdapterCapabilities
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
+from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .models import (
     DEFAULT_PROFILES,
     TERMINAL_STATES,
@@ -26,6 +27,7 @@ from .models import (
     validate_verify_commands,
 )
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
+from .providers import ProviderConfigError, load_providers_config
 from .store import TaskStore
 from .workspace import WorkspaceError, WorkspaceManager, canonical_source, capture_head
 
@@ -53,6 +55,9 @@ class Broker:
         claude_code_adapter: ClaudeCodeAdapter | None = None,
         codex_adapter: CodexAdapter | None = None,
         cursor_adapter: CursorAdapter | None = None,
+        providers_config: Path | None = None,
+        direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
+        environ: dict[str, str] | None = None,
     ):
         self.store = TaskStore(home)
         self.adapter = MockAdapter()
@@ -72,11 +77,19 @@ class Broker:
         }
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)
+        self._environ = environ
+        if direct_api_runtime is not None:
+            self.direct_api_runtime = direct_api_runtime
+        elif providers_config is not None:
+            self.direct_api_runtime = OpenAiCompatibleDirectRuntime(load_providers_config(providers_config), environ=environ)
+        else:
+            self.direct_api_runtime = None
         # In-memory only, one broker process per running task; a restart loses
         # this dict. That's fine: `store.runtime_launches` is the durable record
         # a fresh Broker reconciles against (see reconcile()/reconcile_pending()
         # and docs/phase-5b.md). Transparent re-attachment remains out of scope.
         self._process_handles: dict[str, object] = {}
+        self._direct_api_handles: dict[str, object] = {}
 
     def close(self) -> None:
         self.store.close()
@@ -97,6 +110,16 @@ class Broker:
             raise ValueError(f"Profile {policy.name} maximum timeout is {policy.max_timeout_seconds} seconds")
         if request.verification_policy not in VERIFICATION_POLICIES:
             raise ValueError(f"Unknown verification_policy: {request.verification_policy}")
+        if request.profile == DIRECT_API_PROFILE:
+            if self.direct_api_runtime is None:
+                raise ValueError(
+                    f"Profile {DIRECT_API_PROFILE!r} requires a provider configuration (--providers-config)"
+                )
+            if not request.provider:
+                raise ValueError(f"Profile {DIRECT_API_PROFILE!r} requires a named provider (--provider)")
+            self.direct_api_runtime.get_provider(request.provider)
+        elif request.provider is not None:
+            raise ValueError(f"provider is only valid with profile {DIRECT_API_PROFILE!r}")
         if self.store.active_count(policy.name) >= policy.max_concurrency:
             raise ValueError(f"Profile {policy.name} concurrency limit reached")
         return policy
@@ -148,6 +171,35 @@ class Broker:
                     {"reason": "workspace_allocation_failed", "error": str(error)},
                 )
             effective_workspace = worktree_path
+        if record.profile == DIRECT_API_PROFILE:
+            runtime = self.direct_api_runtime
+            assert runtime is not None
+            try:
+                metadata, handle = runtime.start(record, self.store.artifacts / record.id)
+            except Exception as error:
+                if record.execution_mode == ISOLATED_WORKTREE:
+                    lease = self.store.get_lease(record.id)
+                    if lease is not None and lease["status"] == "active":
+                        self.workspaces.release(lease["canonical_source"], lease["worktree_path"])
+                        self.store.release_lease(record.id)
+                return self.store.transition(
+                    record.id, TaskState.FAILED, f"Direct API runtime failed to start: {error}",
+                    {"reason": "direct_api_start_failed", "error": str(error)},
+                )
+            self._direct_api_handles[record.id] = handle
+            self.store.record_launch(
+                record.id,
+                adapter=runtime.name,
+                adapter_label=runtime.runtime_label,
+                pid=None,
+                pgid=None,
+                command=[f"provider={metadata['provider']}", f"model={metadata['model']}", f"base_url={metadata['base_url']}"],
+                workspace=metadata["workspace"],
+                events_artifact=metadata["events_artifact"],
+                stderr_artifact=metadata["stderr_artifact"],
+            )
+            self.store.refresh_manifest(record.id)
+            return self.store.transition(record.id, TaskState.RUNNING, f"{runtime.name} direct API request started", metadata)
         adapter = self.subprocess_adapters.get(record.profile)
         if adapter is not None:
             try:
@@ -204,6 +256,40 @@ class Broker:
         record = self.store.get(task_id)
         if record.state in TERMINAL_STATES:
             return record
+        if task_id in self._direct_api_handles:
+            handle = self._direct_api_handles.pop(task_id)
+            runtime = self.direct_api_runtime
+            assert runtime is not None
+            record = self.store.transition(task_id, TaskState.COLLECTING, f"Collecting {runtime.name} result", {})
+            collected = runtime.collect(handle)
+            self.store.refresh_manifest(record.id)
+            runtime_payload = {"adapter": runtime.name, **collected}
+            if collected.get("exit_code") != 0:
+                result = {
+                    "task_id": record.id,
+                    "state": TaskState.FAILED.value,
+                    "summary": collected.get("summary") or collected.get("error_message") or f"{runtime.name} request failed",
+                    "runtime": runtime_payload,
+                }
+                self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+                _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
+                self._write_gate_artifact(record.id, gate)
+                self._finalize_workspace(record.id)
+                return self.store.transition(record.id, TaskState.FAILED, f"{runtime.name} task failed", {"result_artifact": "result.json", "exit_code": collected.get("exit_code"), "verification_gate": gate})
+            state = TaskState.SUCCEEDED if collected.get("summary") else TaskState.SUCCEEDED_WITH_WARNINGS
+            result = {
+                "task_id": record.id,
+                "state": state.value,
+                "summary": collected.get("summary") or f"{runtime.name} run produced no text result",
+                "runtime": runtime_payload,
+            }
+            validate_result(result, record.id)
+            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+            final_state, gate = self._apply_verification_gate(record.id, record, state)
+            self._write_gate_artifact(record.id, gate)
+            self._finalize_workspace(record.id)
+            message = f"{runtime.name} task completed" if final_state is state else f"{runtime.name} task blocked by verification gate ({gate['outcome']})"
+            return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected.get("exit_code"), "verification_gate": gate})
         if task_id in self._process_handles:
             handle = self._process_handles.pop(task_id)
             adapter = self.subprocess_adapters[record.profile]
@@ -227,6 +313,11 @@ class Broker:
             self._finalize_workspace(record.id)
             message = f"{adapter.name} task completed" if final_state is state else f"{adapter.name} task blocked by verification gate ({gate['outcome']})"
             return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
+        if record.profile == DIRECT_API_PROFILE:
+            reconciled = self.reconcile(task_id)
+            if reconciled.state is not TaskState.FAILED:
+                raise RecoveryRequired(task_id, reconciled.state)
+            return reconciled
         if record.profile not in self.subprocess_adapters:
             # No subprocess was ever involved for this profile (mock tasks are
             # collected via complete(), not collect()); this is a caller/protocol
@@ -290,12 +381,22 @@ class Broker:
         never touches a workspace/lease it cannot prove is safe to release.
         """
         record = self.store.get(task_id)
-        if record.state in TERMINAL_STATES or task_id in self._process_handles:
+        if record.state in TERMINAL_STATES or task_id in self._process_handles or task_id in self._direct_api_handles:
             return record
         if record.state not in self._RECONCILABLE_STATES:
             return record
-        if record.profile not in self.subprocess_adapters:
+        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
             return record  # mock tasks never hold a subprocess; nothing to reconcile
+        if record.profile == DIRECT_API_PROFILE:
+            launch = self.store.get_launch(task_id)
+            if launch is not None:
+                self.store.mark_launch_reconciled(task_id)
+            self._finalize_workspace(task_id)
+            return self.store.transition(
+                task_id, TaskState.FAILED,
+                "Direct API request was in flight when the broker restarted; outcome could not be observed",
+                {"reason": "direct_api_restart_no_reattachment", "provider": launch.get("command", [None])[0] if launch else None},
+            )
         adapter_name = self.subprocess_adapters[record.profile].name
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
@@ -339,9 +440,10 @@ class Broker:
         return [
             self.reconcile(record.id)
             for record in self.store.list()
-            if record.profile in self.subprocess_adapters
+            if (record.profile in self.subprocess_adapters or record.profile == DIRECT_API_PROFILE)
             and record.state in self._RECONCILABLE_STATES
             and record.id not in self._process_handles
+            and record.id not in self._direct_api_handles
         ]
 
     def _cancel_by_pgid(self, pgid: int, grace_period_seconds: float = 10.0) -> dict:
@@ -393,6 +495,21 @@ class Broker:
         if record.state in TERMINAL_STATES:
             return record
 
+        direct_handle = self._direct_api_handles.get(task_id)
+        if direct_handle is not None:
+            self._direct_api_handles.pop(task_id, None)
+            runtime = self.direct_api_runtime
+            assert runtime is not None
+            cancellation = runtime.cancel(direct_handle)
+            if cancellation["group_terminated"]:
+                self._finalize_workspace(task_id)
+                return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason, "cancellation": cancellation})
+            return self.store.transition(
+                task_id, TaskState.RECOVERY_REQUIRED,
+                "Timeout fired but the direct API request could not be confirmed aborted",
+                {"reason": reason, "cancellation": cancellation},
+            )
+
         handle = self._process_handles.get(task_id)
         if handle is not None:
             self._process_handles.pop(task_id, None)
@@ -406,10 +523,17 @@ class Broker:
                 {"reason": reason, "cancellation": cancellation},
             )
 
-        if record.profile not in self.subprocess_adapters:
+        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
             # Mock tasks never hold a subprocess; nothing to protect.
             self._finalize_workspace(task_id)
             return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
+
+        if record.profile == DIRECT_API_PROFILE:
+            self._finalize_workspace(task_id)
+            return self.store.transition(
+                task_id, TaskState.TIMED_OUT, reason,
+                {"reason": reason, "liveness": "direct_api_no_in_memory_handle"},
+            )
 
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
@@ -465,6 +589,21 @@ class Broker:
         if record.state is TaskState.QUEUED:
             self._finalize_workspace(task_id)
             return self.store.transition(task_id, TaskState.CANCELLED, reason, {"reason": reason})
+        direct_handle = self._direct_api_handles.get(task_id)
+        if direct_handle is not None:
+            runtime = self.direct_api_runtime
+            assert runtime is not None
+            record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            self._direct_api_handles.pop(record.id, None)
+            cancellation = runtime.cancel(direct_handle)
+            target = TaskState.CANCELLED if cancellation["group_terminated"] else TaskState.FAILED
+            message = (
+                "Direct API request aborted" if cancellation["group_terminated"]
+                else "Direct API request abort unconfirmed"
+            )
+            if cancellation["group_terminated"]:
+                self._finalize_workspace(record.id)
+            return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
         handle = self._process_handles.get(task_id)
         if handle is not None:
             adapter_name = self.subprocess_adapters[record.profile].name
@@ -477,11 +616,21 @@ class Broker:
                 self._finalize_workspace(record.id)
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
 
-        if record.profile not in self.subprocess_adapters:
+        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
             self._finalize_workspace(task_id)
             if record.state is not TaskState.CANCELLING:
                 self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             return self.store.transition(task_id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
+
+        if record.profile == DIRECT_API_PROFILE:
+            if record.state is not TaskState.CANCELLING:
+                self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            self._finalize_workspace(task_id)
+            return self.store.transition(
+                task_id, TaskState.CANCELLED,
+                "Direct API request marked cancelled; in-flight HTTP cannot be aborted after broker restart",
+                {"reason": reason, "note": "no_session_reattachment"},
+            )
 
         adapter_name = self.subprocess_adapters[record.profile].name
         status = self._process_group_status(task_id)
