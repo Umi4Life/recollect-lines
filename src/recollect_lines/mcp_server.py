@@ -610,7 +610,7 @@ def serve(broker: Broker, instream, outstream) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="recollect-mcp", description="Local stdio MCP interface for the Recollect Lines broker.")
-    parser.add_argument("--home", type=Path, default=Path(".recollect"), help="Broker home directory (matches `recollect --home`).")
+    parser.add_argument("--home", type=Path, default=Path(".recollect"), help="Broker home directory (matches `recollect-lines --home`).")
     parser.add_argument(
         "--opencode-command", default=None,
         help=(

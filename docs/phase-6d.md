@@ -15,7 +15,7 @@ erase that boundary.
 
 ## Capability discovery
 
-`Broker.discover_capabilities()` (CLI `recollect discover`, MCP
+`Broker.discover_capabilities()` (CLI `recollect-lines discover`, MCP
 `discover_capabilities`) returns:
 
 - **`runtimes`** — every registered profile (`mock`, subprocess adapters,
@@ -37,7 +37,7 @@ Observed availability is **broker-probed evidence**, not a runtime self-report.
 
 ## Policy-aware selection
 
-`Broker.select_candidates(...)` (CLI `recollect select`, MCP `select_candidates`)
+`Broker.select_candidates(...)` (CLI `recollect-lines select`, MCP `select_candidates`)
 accepts parent requirements:
 
 - `execution_mode`
@@ -51,7 +51,7 @@ conditions. **Does not rank or pick a winner.**
 
 ## Bounded council graphs
 
-Parents supply a JSON plan (CLI `recollect council validate|execute`, MCP
+Parents supply a JSON plan (CLI `recollect-lines council validate|execute`, MCP
 `council_validate` / `council_execute`):
 
 ```json

@@ -167,7 +167,7 @@ class RecoveryRequired(ValueError):
         self.state = state
         super().__init__(
             f"Task {task_id} is {state.value} and requires reconciliation "
-            "(call Broker.reconcile()/`recollect reconcile`) before it can be collected"
+            "(call Broker.reconcile()/`recollect-lines reconcile`) before it can be collected"
         )
 
 

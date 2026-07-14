@@ -28,6 +28,10 @@ jobs:
       - name: Run generic MCP-host acceptance harness
         run: python3 scripts/mcp_acceptance.py
 
+      - name: Run clean-install acceptance (Phase 7A)
+        if: matrix.python-version == '3.11'
+        run: python3 scripts/clean_install_acceptance.py
+
       - name: Byte-compile source, tests, and scripts
         run: python3 -m compileall -q src tests scripts
 
@@ -38,5 +42,6 @@ jobs:
         if: matrix.python-version == '3.11'
         run: |
           python3 -m pip install .
-          recollect --help
+          recollect-lines --help
           recollect-mcp --help
+          ! command -v recollect

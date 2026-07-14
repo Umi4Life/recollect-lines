@@ -17,6 +17,7 @@ dependency.
 - [`docs/PHASE-5.md`](docs/PHASE-5.md) — roadmap for the next planned work.
 - [`docs/phase-6c.md`](docs/phase-6c.md) — OpenAI-compatible provider fabric and direct HTTP runtime.
 - [`docs/phase-6d.md`](docs/phase-6d.md) — capability discovery, routing, bounded councils.
+- [`docs/phase-7a.md`](docs/phase-7a.md) — field readiness, doctor, examples, clean-install proof.
 - [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
 - `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
 
@@ -55,14 +56,31 @@ and roadmap.
 against Python 3.11 and 3.13: the full unittest suite (`PYTHONPATH=src`),
 the generic MCP-host acceptance harness (`scripts/mcp_acceptance.py`),
 `compileall`, and a whitespace check. On one matrix leg it also installs the
-package and smoke-tests the `recollect`/`recollect-mcp` console entry
-points. It runs no external services, network calls, or model credentials.
+package and smoke-tests the `recollect-lines`/`recollect-mcp` console entry
+points, and runs the offline clean-install acceptance script. It runs no external services, network calls, or model credentials.
 
 ## Run tests
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+## Clean-install acceptance (Phase 7A)
+
+Proves a fresh `pip install .` exposes `recollect-lines` (not the removed `recollect` alias):
+
+```bash
+python3 scripts/clean_install_acceptance.py
+```
+
+## Operational diagnostics
+
+```bash
+recollect-lines --home ~/.recollect doctor
+recollect-lines --home ~/.recollect --providers-config examples/litellm-openai-compatible/providers.json doctor --json
+```
+
+See [`docs/phase-7a.md`](docs/phase-7a.md) for migration from `recollect` → `recollect-lines`, example configs, and release checklist.
 
 ## Run the generic MCP-host acceptance harness
 

@@ -9,7 +9,7 @@ description = "Local-first broker for delegating agent work and recollecting evi
 requires-python = ">=3.11"
 
 [project.scripts]
-recollect = "recollect_lines.cli:main"
+recollect-lines = "recollect_lines.cli:main"
 recollect-mcp = "recollect_lines.mcp_server:main"
 
 [tool.setuptools]

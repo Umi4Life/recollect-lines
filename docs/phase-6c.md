@@ -90,7 +90,7 @@ Honest limitations recorded on every result:
 ## Integration surfaces
 
 - `Broker(..., providers_config=Path)` loads named providers once at construction.
-- `recollect --providers-config … create --profile openai_compatible --provider …`
+- `recollect-lines --providers-config … create --profile openai_compatible --provider …`
 - `recollect-mcp --providers-config …` — MCP `delegate`/`delegate_batch` accept
   optional `provider` when `profile` is `openai_compatible`.
 - Existing CLI/MCP adapter overrides (`--opencode-command`, etc.) unchanged.
