@@ -56,6 +56,14 @@ def kill_pgid(pgid: int) -> None:
         pass
 
 
+def kill_and_reap_popen(popen, pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    popen.wait(timeout=5)
+
+
 def durable_broker(home: Path, **kwargs) -> Broker:
     adapter = FixtureDurableAdapter(home, max_stdout_bytes=4096, max_stderr_bytes=1024)
     profiles = {**DEFAULT_PROFILES, FIXTURE_DURABLE_PROFILE.name: FIXTURE_DURABLE_PROFILE}
@@ -80,6 +88,7 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
         self.workspace = self.tempdir.name
         self._task_ids: list[str] = []
         self._supervisors: list = []
+        self._orphaned_popens: list[tuple[object, int]] = []
 
     def tearDown(self):
         for broker_attr in ("broker", "broker_a", "broker_b"):
@@ -101,6 +110,7 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
                 except Exception:
                     supervisor.kill()
                     supervisor.wait(timeout=2)
+        self._reap_orphaned_popens()
         self.tempdir.cleanup()
         gc.collect()
 
@@ -115,10 +125,18 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
         self._task_ids.append(record.id)
         return broker, record.id
 
+    def _reap_orphaned_popens(self) -> None:
+        for popen, pgid in self._orphaned_popens:
+            kill_and_reap_popen(popen, pgid)
+        self._orphaned_popens.clear()
+
     def _simulate_broker_loss(self, broker: Broker, task_id: str) -> None:
         handle = broker._process_handles.pop(task_id)
         if hasattr(handle, "durable") and handle.durable.supervisor is not None:
             self._supervisors.append(handle.durable.supervisor)
+        popen = getattr(handle, "popen", None)
+        if popen is not None:
+            self._orphaned_popens.append((popen, handle.pgid))
 
     def test_broker_restart_adopts_exact_running_launch(self):
         broker_a, task_id = self._start_durable("DURABLE_HANG")
@@ -293,21 +311,29 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
         broker_a.close()
 
     def test_legacy_opencode_stays_recovery_required_without_adoption(self):
-        broker_a = fake_opencode_broker(self.home)
-        record = broker_a.create(TaskRequest("SLEEP", self.workspace, profile="opencode"))
-        broker_a.start(record.id)
-        self._simulate_broker_loss(broker_a, record.id)
-        broker_a.close()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResourceWarning)
+            broker_a = fake_opencode_broker(self.home)
+            record = broker_a.create(TaskRequest("SLEEP", self.workspace, profile="opencode"))
+            broker_a.start(record.id)
+            pgid = broker_a.store.get_launch(record.id)["pgid"]
+            self.assertTrue(_pgid_alive(pgid))
+            self._simulate_broker_loss(broker_a, record.id)
+            broker_a.close()
 
-        broker_b = fake_opencode_broker(self.home)
-        self.broker_b = broker_b
-        reconciled = broker_b.reconcile(record.id)
-        self.assertEqual(reconciled.state, TaskState.RECOVERY_REQUIRED)
-        self.assertNotIn(record.id, broker_b._adopted_durable_handles)
-        with self.assertRaises(RecoveryRequired):
-            broker_b.collect(record.id)
-        pgid = broker_b.store.get_launch(record.id)["pgid"]
-        kill_pgid(pgid)
+            broker_b = fake_opencode_broker(self.home)
+            self.broker_b = broker_b
+            reconciled = broker_b.reconcile(record.id)
+            self.assertEqual(reconciled.state, TaskState.RECOVERY_REQUIRED)
+            self.assertNotIn(record.id, broker_b._adopted_durable_handles)
+            with self.assertRaises(RecoveryRequired):
+                broker_b.collect(record.id)
+            self.assertTrue(
+                _pgid_alive(pgid),
+                "legacy OpenCode must stay running until explicitly reaped; durable adoption is forbidden",
+            )
+            self._reap_orphaned_popens()
+            self.assertFalse(_pgid_alive(pgid), "legacy OpenCode child must not survive deterministic cleanup")
 
     def test_no_secret_sentinel_in_db_manifest_or_reconcile_output(self):
         with mock.patch.dict(os.environ, {"RL_SECRET_SENTINEL": "rl_secret_sentinel_value"}, clear=False):
