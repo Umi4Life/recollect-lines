@@ -1,5 +1,5 @@
 """Phase 5C: Broker.timeout() must classify process-group liveness before
-finalizing a workspace, closing the gap named in docs/phase-5b.md ("Non-goals
+finalizing a workspace, closing the gap named in docs/history/phases/phase-5b.md ("Non-goals
 carried forward") where a timeout clock alone used to finalize (and delete)
 a workspace an actually-still-running process might still be writing to.
 

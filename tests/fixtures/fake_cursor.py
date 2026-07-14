@@ -2,7 +2,7 @@
 
 Mirrors the `--output-format json` shape confirmed against cursor-agent
 2026.07.09-a3815c0 during the Phase 6B.5 compatibility spike (see
-docs/phase-6b5.md): exactly one JSON object printed to stdout on exit,
+docs/history/phases/phase-6b5.md): exactly one JSON object printed to stdout on exit,
 carrying `type`, `subtype`, `is_error`, `result`, `session_id`, `duration_ms`,
 and `usage`. Behavior is selected by keywords in the trailing prompt argument
 so a single fixture can cover normal, malformed-output, error, and long-running

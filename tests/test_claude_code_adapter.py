@@ -57,7 +57,7 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
 
     def test_build_command_read_only_restricts_tools_to_a_structural_allowlist_excluding_bash(self):
         # --disallowedTools alone leaves Bash nominally available (confirmed
-        # against the real CLI during reconciliation, see docs/phase-6a.md);
+        # against the real CLI during reconciliation, see docs/history/phases/phase-6a.md);
         # --tools is the actual structural guarantee for read_only, since it
         # narrows the tool *set* the model is given, not just a deny-list.
         adapter = fake_adapter()

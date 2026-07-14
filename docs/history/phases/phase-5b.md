@@ -32,7 +32,7 @@ adds:
   would require re-establishing a `Popen`/child relationship the OS doesn't
   let a new process obtain. This was true after Phase 2 and remains true
   here; see [phase-2.md](phase-2.md#known-limitations) and
-  [RFC-001 §8](RFC-001.md).
+  [../design/RFC-001.md](../../design/RFC-001.md) §8.
 - **Not a recovered success.** Nothing in this phase upgrades an unobserved
   runtime outcome into `succeeded`. A dead-but-unconfirmed-successful process
   is reported `failed`, honestly, with a reason that says evidence was lost
@@ -131,7 +131,7 @@ bare, unverified pgid — only after `_process_group_status` reports "alive".
 - Windows process groups, a network/HTTP transport, multi-tenant auth, a
   second real runtime adapter, and a mandatory verification gate remain out
   of scope here exactly as recorded in [PHASE-5.md](PHASE-5.md) and
-  [RFC-001](RFC-001.md) — Phase 5B does not expand that boundary.
+  [RFC-001](../../design/RFC-001.md) — Phase 5B does not expand that boundary.
 - `Broker.timeout()` still finalizes the workspace unconditionally on the
   caller's say-so, without a liveness check of its own. This is a known,
   pre-existing gap adjacent to the one this phase fixes for `collect()`/

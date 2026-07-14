@@ -108,7 +108,7 @@ class Broker:
         # In-memory only, one broker process per running task; a restart loses
         # this dict. That's fine: `store.runtime_launches` is the durable record
         # a fresh Broker reconciles against (see reconcile()/reconcile_pending()
-        # and docs/phase-5b.md). Transparent re-attachment remains out of scope.
+        # and docs/history/phases/phase-5b.md). Transparent re-attachment remains out of scope.
         self._process_handles: dict[str, object] = {}
         self._direct_api_handles: dict[str, object] = {}
         self._adopted_durable_handles: dict[str, AdoptedDurableHandle] = {}
@@ -452,7 +452,7 @@ class Broker:
     # mid-signal, COLLECTING from a crash after the in-memory handle was
     # popped (runtime already reaped, or a verification gate already in
     # flight) but before the terminal transition (Phase 5C — see
-    # docs/phase-5c.md), and RECOVERY_REQUIRED from a previous reconciliation
+    # docs/history/phases/phase-5c.md), and RECOVERY_REQUIRED from a previous reconciliation
     # pass.
     _RECONCILABLE_STATES = (
         TaskState.PREPARING, TaskState.RUNNING, TaskState.COLLECTING, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED,
@@ -657,7 +657,7 @@ class Broker:
         never on bare unverified metadata. PID/PGID reuse is still a real
         residual risk (a killpg "alive" only proves *some* process group with
         this id exists right now, not that it's still the one we launched) —
-        see docs/phase-5b.md for the accepted threat-model tradeoff; there is no
+        see docs/history/phases/phase-5b.md for the accepted threat-model tradeoff; there is no
         further escalation path (e.g. /proc start-time comparison) here.
         """
         signals_sent = []

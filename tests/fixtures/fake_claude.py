@@ -1,7 +1,7 @@
 """Deterministic stand-in for the real Claude Code CLI (`claude -p`), used only in tests.
 
 Mirrors the real `--output-format json` shape confirmed against the installed
-CLI during the Phase 6A compatibility spike (see docs/phase-6a.md): exactly
+CLI during the Phase 6A compatibility spike (see docs/history/phases/phase-6a.md): exactly
 one JSON object printed to stdout on exit, carrying `is_error`, `result`,
 `api_error_status`, and `session_id`. Behavior is selected by keywords in the
 prompt (the positional argument immediately after `-p`, per

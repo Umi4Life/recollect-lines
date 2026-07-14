@@ -164,4 +164,4 @@ git diff --check $(git hash-object -t tree /dev/null)
 ## Related
 
 - [`phase-7a.md`](phase-7a.md) — doctor, examples, clean-install proof
-- [`examples/litellm-openai-compatible/`](../../examples/litellm-openai-compatible/) — secret-free provider example
+- [`examples/litellm-openai-compatible/`](../../../examples/litellm-openai-compatible/) — secret-free provider example

@@ -14,7 +14,7 @@ cancellation, or live steering on their own.
 
 ## Provider configuration
 
-Operators supply a JSON document (schema-equivalent to [RFC-001](RFC-001.md)
+Operators supply a JSON document (schema-equivalent to [RFC-001](../../design/RFC-001.md)
 §10.4's illustrative YAML) via `--providers-config`:
 
 ```json

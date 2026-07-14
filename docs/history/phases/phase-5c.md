@@ -27,11 +27,11 @@ An earlier draft of this phase's planning entry in [PHASE-5.md](PHASE-5.md)
 described its acceptance work as "a real field acceptance run driven by
 Hermes (or an equivalent operator)." That was a documentation error, not a
 product decision: Recollect Lines is a provider- and host-neutral
-delegation broker (see [PRD.md](PRD.md) §1, §3.1); Hermes is one possible
+delegation broker (see [PRD.md](../../design/PRD.md) §1, §3.1); Hermes is one possible
 operator/host environment among many, never a required dependency or an
 acceptance criterion. This phase's actual acceptance harness requires no
 Hermes installation, CLI, account, or configuration to run — it is a
-plain-stdlib JSON-RPC client. See [README.md](../README.md) for a generic
+plain-stdlib JSON-RPC client. See [README.md](../../README.md) for a generic
 MCP client configuration example, with one clearly labeled, optional
 Hermes-specific example alongside it.
 
@@ -171,7 +171,7 @@ adapter (OpenCode, experimental). Phase 5C does not attempt to close that
 gap; it is the single largest piece of unimplemented MVP scope and should
 be treated as the next priority after this phase, not as something this
 PR's acceptance evidence should be read as having satisfied. See
-[PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8 for the full,
+[PRD.md](../../design/PRD.md) §9 and [RFC-001.md](../../design/RFC-001.md) §8 for the full,
 continuously-honest capability accounting.
 
 **Addendum (post-5C):** a roadmap decision made after this phase's own
@@ -181,7 +181,7 @@ implementation work landed has since sequenced that gap as Phase 6A
 configurable OpenAI-compatible provider fabric and a capability-limited
 direct-API runtime foundation) and Phase 6D (capability discovery,
 policy-aware routing, and bounded model-council patterns). See
-[PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10 for the full
+[PHASE-5.md](PHASE-5.md) and [RFC-001.md](../../design/RFC-001.md) §10 for the full
 sequence and design constraints. This addendum is documentation only — it
 schedules Phase 6, it does not implement any of it.
 

@@ -1,7 +1,7 @@
 """Runtime adapter that runs the Claude Code CLI (`claude -p`) as a supervised subprocess.
 
 Command contract is grounded in a real compatibility spike against the
-installed CLI (`claude` 2.1.201) — see docs/phase-6a.md for the exact
+installed CLI (`claude` 2.1.201) — see docs/history/phases/phase-6a.md for the exact
 commands and raw output this adapter's design is based on. Two findings from
 that spike shape everything below:
 
@@ -40,7 +40,7 @@ DEFAULT_COMMAND_PREFIX = ("claude",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
 RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 
-# Spike-validated (docs/phase-6a.md): --permission-mode plan structurally
+# Spike-validated (docs/history/phases/phase-6a.md): --permission-mode plan structurally
 # refuses Edit/Write/NotebookEdit even when a task explicitly asks for a file
 # to be created — it explains it is restricted to read-only actions instead.
 # --disallowedTools is added as defense in depth, not the sole guarantee.
@@ -49,7 +49,7 @@ RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 # since they either bypass more than file edits or have no non-interactive
 # safety evidence behind them.
 #
-# Reconciliation finding (2026-07-14, see docs/phase-6a.md "Reconciliation
+# Reconciliation finding (2026-07-14, see docs/history/phases/phase-6a.md "Reconciliation
 # addendum"): --disallowedTools Edit,Write,NotebookEdit alone leaves Bash
 # nominally available in read_only mode — confirmed against the real CLI,
 # a `whoami` call executed successfully via Bash under exactly this mapping.

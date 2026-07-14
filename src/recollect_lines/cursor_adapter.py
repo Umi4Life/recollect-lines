@@ -1,7 +1,7 @@
 """Runtime adapter that runs the Cursor Agent CLI (`cursor-agent --print`) as a supervised subprocess.
 
 Command contract is grounded in a compatibility spike against the installed CLI
-(`cursor-agent` `2026.07.09-a3815c0`) — see docs/phase-6b5.md. `--output-format
+(`cursor-agent` `2026.07.09-a3815c0`) — see docs/history/phases/phase-6b5.md. `--output-format
 json` (not `--json`) prints exactly one JSON object to stdout when the process
 exits, carrying `type`, `subtype`, `is_error`, `result`, `session_id`,
 `duration_ms`, and `usage`. There is no incremental output to rely on for
@@ -30,7 +30,7 @@ DEFAULT_COMMAND_PREFIX = ("cursor-agent",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
 RUNTIME_DESCRIPTION = "Cursor Agent CLI via cursor-agent --print"
 
-# Spike-validated (docs/phase-6b5.md): `--sandbox enabled` plus `--mode plan`
+# Spike-validated (docs/history/phases/phase-6b5.md): `--sandbox enabled` plus `--mode plan`
 # structurally limits the agent to read-only/planning behavior; `--sandbox
 # disabled` with `--force` is the narrowest mode confirmed for isolated_worktree
 # tasks that must edit files inside the broker-owned worktree. Cursor does not
