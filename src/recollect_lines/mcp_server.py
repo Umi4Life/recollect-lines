@@ -30,6 +30,7 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
 from .opencode_adapter import OpenCodeAdapter
+from .operator_control import OperatorControlRefused
 from .service import Broker
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -241,6 +242,25 @@ def handle_cancel(broker: Broker, args: dict) -> dict:
     return _task_summary(broker.cancel(task_id, reason))
 
 
+def handle_control(broker: Broker, args: dict) -> dict:
+    task_id = _require_task_id(args)
+    action = args.get("action")
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("'action' must be a non-empty string")
+    reason = args.get("reason", "Cancelled by operator control")
+    if not isinstance(reason, str):
+        raise ValueError("'reason' must be a string")
+    content = args.get("content")
+    if content is not None and not isinstance(content, str):
+        raise ValueError("'content' must be a string when provided")
+    return broker.operator_control(
+        task_id,
+        action,
+        reason=reason,
+        message_content=content,
+    )
+
+
 def handle_message(broker: Broker, args: dict) -> dict:
     task_id = _require_task_id(args)
     content = args.get("content")
@@ -400,6 +420,27 @@ CANCEL_INPUT_SCHEMA = {
     },
     "required": ["task_id"],
 }
+CONTROL_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        **_TASK_ID_PROPERTY,
+        "action": {
+            "type": "string",
+            "enum": ["status", "cancel", "collect", "message"],
+            "description": "Explicit operator control action. message is always an explicit unsupported refusal.",
+        },
+        "reason": {
+            "type": "string",
+            "default": "Cancelled by operator control",
+            "description": "Human-readable reason when action is cancel.",
+        },
+        "content": {
+            "type": "string",
+            "description": "Required when action is message (always refused; no in-flight steering).",
+        },
+    },
+    "required": ["task_id", "action"],
+}
 MESSAGE_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -472,6 +513,16 @@ TOOLS = {
         "inputSchema": CANCEL_INPUT_SCHEMA,
         "handler": handle_cancel,
     },
+    "control": {
+        "description": (
+            "Bounded operator recovery/control with an explicit action. Returns a secret-safe "
+            "recovery/control view (task/launch identity, posture, permitted actions, refusal "
+            "reasons) and executes status/cancel/collect only when the 7C.3 gates permit. "
+            "message is always an explicit unsupported refusal."
+        ),
+        "inputSchema": CONTROL_INPUT_SCHEMA,
+        "handler": handle_control,
+    },
     "message": {
         "description": "Always returns an explicit unsupported response: Recollect Lines has no in-flight steering channel for any adapter.",
         "inputSchema": MESSAGE_INPUT_SCHEMA,
@@ -513,6 +564,16 @@ TOOLS = {
 def _dispatch_tool_call(broker: Broker, name: str, arguments: dict) -> dict:
     try:
         data = TOOLS[name]["handler"](broker, arguments)
+    except OperatorControlRefused as error:
+        return _tool_result(
+            name,
+            False,
+            error={
+                "code": error.code,
+                "message": error.message,
+                "control": error.control,
+            },
+        )
     except (ValueError, KeyError) as error:
         return _tool_result(name, False, error={"code": type(error).__name__, "message": str(error)})
     except Exception as error:
