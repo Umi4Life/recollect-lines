@@ -1,11 +1,13 @@
 # Phase 7C RFC — Recovery, control contract, and compatibility evidence
 
-Status: Phase **7C.2** (this document) adds the durable subprocess-runner
-primitive and read-only launch inspection API. Phase **7C.1** defined the typed
-recovery/control contract and no-model-call compatibility evidence. **7C.3**
-broker reconciliation/adoption and **7C.4** operator surfaces remain future
-work. This document does **not** implement broker restart adoption,
-provider-native session resume, or mid-task message injection.
+Status: Phase **7C.3** (this document) adds safe broker-restart reconciliation
+for **eligible durable subprocess launches only** — proof-gated adoption with
+recovery-lease fencing, bounded adopted-handle control (`status`, owned-group
+`cancel`, terminal `collect`), and structured reconcile diagnostics. Phase
+**7C.1** defined the typed recovery/control contract. Phase **7C.2** added the
+durable subprocess-runner primitive and read-only launch inspection.
+**7C.4** operator surfaces remain future work. This document does **not**
+implement provider-native session resume or mid-task message injection.
 
 Related: [RFC-001.md](RFC-001.md), [phase-5b.md](phase-5b.md),
 [phase-6d.md](phase-6d.md), [PRD.md](PRD.md).
@@ -19,18 +21,20 @@ Operators and parent agents need honest answers to:
 - What is declared product capability vs what was observed on one host?
 
 Phase 7C.1 answers these with a **small vocabulary**, **fail-closed validation**,
-and **redacted compatibility evidence** — without changing task execution,
-broker reconciliation, or cancellation semantics.
+and **redacted compatibility evidence**. Phase 7C.3 adds **durable process
+adoption** for a narrowly eligible path only — distinct from provider session
+resume.
 
 ## 2. Terminology (do not conflate)
 
-| Concept | Meaning today (7C.1–7C.2) |
+| Concept | Meaning today (7C.1–7C.3) |
 |---|---|
-| **Process recovery** | Re-acquiring supervision of a surviving OS process after broker loss. **Not implemented** (7C.3). |
-| **Post-restart output collection** | Collecting stdout/stderr/result from a process that outlived the broker. **Durable runner primitive exists (7C.2)**; broker adoption **not wired** (7C.3). |
-| **Provider-native session resume** | CLI/provider re-opening its own persisted session (e.g. `resume` in help text). **Unproven** — help keywords are not adoption proof. |
-| **Continuation task** | Starting a *new* broker task that references prior context. Out of 7C.1 scope; not claimed. |
-| **Cancellation** | Broker-initiated stop via in-memory handle or persisted PGID reconciliation. **Supported** for subprocess CLIs within existing Phase 5B rules. |
+| **Durable process adoption** | After broker restart, a fresh broker re-acquires an **adopted handle** for a surviving durable subprocess launch only after manifest proof, PID+start-identity verification, adapter binding, and recovery-lease acquisition. Supports `status`, owned-group `cancel`, and terminal `collect` — **not** redispatch. **Implemented for the proven `fixture_durable` test runtime (7C.3).** |
+| **Process recovery (legacy)** | Phase 5B PGID reconciliation for in-memory `ProcessHandle` subprocess CLIs (`observe_and_cancel`). Still **fail-closed** to `recovery_required` when alive after restart — unchanged. |
+| **Post-restart output collection** | Collecting bounded stdout/stderr from durable artifacts after adoption. **Proven on `fixture_durable` only** via `collect_after_restart`. |
+| **Provider-native session resume** | CLI/provider re-opening its own persisted session (e.g. `resume` in help text). **Unproven** — help keywords are not adoption proof. **Not implemented.** |
+| **Continuation task** | Starting a *new* broker task that references prior context. Out of 7C scope; not claimed. |
+| **Cancellation** | Broker-initiated stop via in-memory handle, adopted durable handle, or persisted PGID reconciliation (legacy). |
 | **Free-form mid-task steering** | `recollect.message` / stdin injection while running. **Explicitly unsupported** for all runtimes. |
 
 ## 3. Capability vocabulary
@@ -40,138 +44,108 @@ broker reconciliation, or cancellation semantics.
 | Level | Semantics |
 |---|---|
 | `none` | No subprocess/durable launch recovery affordance (mock, direct API). |
-| `observe_and_cancel` | Broker may observe task state and attempt cancellation via persisted launch metadata after restart; **cannot** reattach or collect in-flight output. Current subprocess CLIs. |
-| `collect_after_restart` | Durable runner can collect output after broker restart. **Primitive exists (7C.2); not declared on any runtime yet** — broker reconciliation/adoption is 7C.3. |
-| `session_resume` | Provider-native session resume integrated with broker safety proof. **Not declared today.** |
+| `observe_and_cancel` | Broker may observe task state and attempt cancellation via persisted launch metadata after restart; **cannot** adopt or collect in-flight output. **All production subprocess CLIs (OpenCode, Claude Code, Codex, Cursor).** |
+| `collect_after_restart` | Broker may adopt eligible durable subprocess launches after restart and collect bounded terminal artifacts. **Declared only on the proven `fixture_durable` test runtime (7C.3).** |
+| `session_resume` | Provider-native session resume integrated with broker safety proof. **Not declared. Not implemented.** |
 
 There is **no** global `recoverable: true` flag. Differences between runtime kinds must remain visible.
 
 ### 3.2 Control actions
 
-| Action | Subprocess CLI (7C.1) | Mock | Direct API |
-|---|---|---|---|
-| `status` | supported | supported | supported |
-| `cancel` | supported | supported | supported (HTTP abort) |
-| `collect` | supported while broker holds truth | supported | supported |
-| `message` | **unsupported** | **unsupported** | **unsupported** |
+| Action | Subprocess CLI (legacy) | Durable subprocess (`fixture_durable`) | Mock | Direct API |
+|---|---|---|---|---|
+| `status` | supported | supported (incl. adopted) | supported | supported |
+| `cancel` | supported | supported (owned group; identity proof) | supported | supported (HTTP abort) |
+| `collect` | in-memory only; fail-closed after restart | supported after adoption when terminal | supported | supported |
+| `message` | **unsupported** | **unsupported** | **unsupported** | **unsupported** |
 
-After broker restart, `collect` on subprocess-backed tasks without reconciliation remains **fail-closed** (`RecoveryRequired`) — unchanged from Phase 5B.
+After broker restart, `collect` on **legacy** subprocess-backed tasks without
+reconciliation remains **fail-closed** (`RecoveryRequired`) — unchanged from Phase 5B.
 
 ## 4. State / control matrix (broker truth)
 
 | Task state | `status` | `cancel` | `collect` | `message` | After broker restart |
 |---|---|---|---|---|---|
 | running (in-memory handle) | yes | yes | no (not terminal) | unsupported | N/A |
-| running (no handle) | yes | via reconcile | fail-closed | unsupported | → `recovery_required` or reconcile |
-| recovery_required | yes | via reconcile | fail-closed | unsupported | no fabricated success |
+| running (adopted durable handle) | yes | yes (owned PG) | only if terminal | unsupported | 7C.3 adoption path |
+| running (no handle, legacy launch) | yes | via reconcile | fail-closed | unsupported | → `recovery_required` |
+| recovery_required (legacy) | yes | via reconcile | fail-closed | unsupported | no fabricated success |
+| recovery_required (durable eligible) | yes | after reconcile adoption | after adoption + terminal | unsupported | reconcile may adopt → `running` |
 | terminal | yes | no-op | yes (if succeeded) | unsupported | unchanged |
 
-## 5. Safety proof required before future adoption (7C.2–7C.4)
+## 5. Safety proof required before adoption
 
 Before any runtime may declare `collect_after_restart` or `session_resume`, **all**
 of the following must be present and consistent (fail-closed on missing/corrupt/conflict):
 
 1. **Launch ID** tied to broker home and task ID.
 2. **Task/workspace ownership** — lease and worktree policy still enforced.
-3. **Adapter kind** — must match persisted launch record.
-4. **PID/PGID plus anti-reuse identity** — detect PID reuse; never attach to arbitrary processes.
-5. **Durable runner/artifact proof** — file-backed stdout/stderr offsets or equivalent.
-6. **Broker recovery lease** — single writer / fencing token for reconciliation.
-7. **Sanitized audit evidence** — no credentials, raw argv, or full help dumps in discovery.
+3. **Adapter kind** — must match persisted launch record and manifest `adapter_id`.
+4. **PID/PGID plus anti-reuse identity** — detect PID reuse; never signal on identity mismatch.
+5. **Durable runner/artifact proof** — file-backed stdout/stderr metadata in manifest.
+6. **Broker recovery lease** — single writer / fencing token (`durable_recovery_leases` table).
+7. **Sanitized audit evidence** — no credentials, raw argv, or secrets in DB events, reconcile responses, or collected broker-facing summaries.
 
 Missing or conflicting proof → remain at `observe_and_cancel` or `none`; never optimistic upgrade.
 
 ## 6. Compatibility evidence (no-model-call)
 
-Probe type: `version_help_only` — runs `--version` and `--help` only.
-
-Recorded fields (redacted):
-
-- adapter/runtime identity, schema version, timestamp
-- executable availability (local observation)
-- version fingerprint and help keyword hits (`resume`, `session`, `continue`)
-- help digest fingerprint (SHA-256 prefix), **not** full help text
-- conclusions: `provider_native_session_resume: unproven`, `in_flight_message_control: unproven`
-- declared recovery/control values and remediation steps
-
-**Worker observation (2026-07-14, no model calls):**
-
-| Runtime | Local probe | Version fingerprint (sanitized) | Help keywords observed | Declared `session_resume` |
-|---|---|---|---|---|
-| Claude Code | available | 2.1.177 (Claude Code) | resume, session, continue | **unproven** |
-| Codex CLI | available | 0.144.4 | resume, session | **unproven** |
-| Cursor Agent | available | 2026.07.09-a3815c0 | resume, session, continue | **unproven** |
-| OpenCode | **not observed on probe worker** | — | — | **unproven** (not globally unsupported) |
-| Direct API | N/A (HTTP) | — | — | **none** |
-| Mock/fixture | synthetic | — | — | **none** |
-
-Help keywords alone **must not** elevate conclusions.
+Unchanged from 7C.1 — help keywords alone **must not** elevate conclusions.
+Production subprocess CLIs remain `observe_and_cancel`. Only `fixture_durable`
+(test runtime) declares `collect_after_restart` after 7C.3 proof tests.
 
 ## 7. Phased roadmap
 
 | Phase | Deliverable |
 |---|---|
 | **7C.1** | Typed contract, discovery/doctor/MCP visibility, compatibility evidence model, RFC/matrix |
-| **7C.2** (this PR) | Durable subprocess runner (`durable_runner.py`), bounded owner-private artifacts, read-only `inspect_durable_launch()` |
-| **7C.3** | Safe reconciliation with proof gate (adopt surviving launches; still no provider session resume) |
+| **7C.2** | Durable subprocess runner (`durable_runner.py`), bounded owner-private artifacts, read-only `inspect_durable_launch()` |
+| **7C.3** (this PR) | `durable_reconciliation.py`, recovery lease, broker adoption in `reconcile()`/`collect()`/`cancel()`/`status`, structured reconcile diagnostics |
 | **7C.4** | Operator surface (explicit commands/UI for recovery actions) |
 
-### 7.1 What 7C.2 proves
+### 7.1 What 7C.3 proves
 
-`recollect_lines.durable_runner.DurableSubprocessRunner` is the smallest coherent
-primitive ahead of broker adoption:
+`recollect_lines.durable_reconciliation` wires broker restart reconciliation for
+**eligible durable subprocess launches only**:
 
-1. **Opaque launch ID** independent from task ID, with per-launch directory under
-   `{home}/durable_launches/{launch_id}/` (path containment enforced; no traversal).
-2. **Crash-safe ordering** — running proof (PID, PGID, Linux `/proc` start
-   identity) is atomically persisted **before** the payload `exec`s. A broker may
-   die at any launch boundary without creating an unidentifiable payload process.
-3. **Bounded durable artifacts** — `stdout.log` / `stderr.log` are owner-private
-   (`0700` directory, `0600` files) with explicit `complete` / `truncated`
-   metadata. Manifests never store environment, argv/prompt, or API secrets.
-4. **Read-only inspection** — `inspect_durable_launch()` validates schema, task
-   binding, path containment, and PID+start-identity (never PID alone). Outcomes
-   are fail-closed: `running_identity_matches`, `exited`, `corrupt`,
-   `identity_mismatch`, `not_adoptable_yet`, `path_rejected`. **No adoption.**
+1. **Recovery lease** — atomic SQLite lease binding `task_id`, `durable_launch_id`,
+   `broker_id`, `broker_epoch`, and `expires_at`; competing reconcilers are refused.
+2. **Proof-gated `reconcile()`** — reads manifest safely; verifies task/launch/adapter
+   binding; verifies PID **and** start-identity; refuses on corrupt/traversal/mismatch;
+   adopts only when proof succeeds.
+3. **Adopted handle truth** — `status`, owned-group `cancel`, terminal `collect`
+   only; no redispatch, no stdin/PTY, no provider session resume, no `message`.
+4. **Legacy fail-closed** — direct API, legacy subprocess CLIs, and mock tasks
+   retain `recovery_required` behavior without adoption.
+5. **Redacted diagnostics** — `reconcile` / MCP reconciliation output includes
+   `outcome`, `reason`, and `remediation` without command text, env values, or
+   raw sensitive output.
 
-**Explicit non-goals (7C.2):** durable runner evidence is **not** broker restart
-adoption, **not** provider session resume, and **not** free-form mid-task steering.
-Declared runtime `recovery_level` values remain unchanged (`observe_and_cancel` for
-subprocess CLIs; `none` for mock/direct API).
+**Test runtime:** `FixtureDurableAdapter` (`fixture_durable` profile) is the only
+runtime elevated to `collect_after_restart`. Production CLI adapters are unchanged.
 
-### 7.2 Platform assumptions and privacy boundary
+### 7.2 What remains 7C.4
 
-- **Linux (primary):** process-start identity uses `/proc/<pid>/stat` starttime plus
-  `boot_id`. Inspector refuses identity based on PID alone.
-- **Non-Linux:** start identity is best-effort; inspector remains fail-closed on
-  mismatch. No unsupported cross-platform promises.
-- **Stdout/stderr artifacts:** stored with strict private POSIX modes but **not
-  redacted** at this layer (payload output may contain sensitive material). Only
-  JSON manifests are sanitized (no argv/env/secrets). Honest boundary for 7C.3
-  collectors.
+- Operator-focused recovery UX atop the adoption contract.
+- Optional elevation of production CLI adapters only after per-runtime safety proof.
 
-### 7.3 What remains 7C.3
-
-- Wire broker `reconcile()` / `collect()` to durable launches with proof gate and
-  recovery lease fencing.
-- Elevate declared `recovery_level` only when all §5 safety proofs are present.
-- Reattach stdout/stderr collection to surviving payloads after broker restart.
-
-## 8. Interfaces (unchanged execution)
+## 8. Interfaces
 
 - `recollect.message` — remains structured `unsupported`; no side effects.
-- `Broker.reconcile()` / `reconcile_pending()` — behavior unchanged.
-- Task dispatch, process launch, cancellation — unchanged.
+- `Broker.reconcile()` / `reconcile_pending()` — durable adoption path for eligible
+  launches; legacy paths unchanged; returns structured `reconciliation` metadata
+  via events / `reconcile_detail()`.
+- `recollect-lines reconcile` / MCP `reconcile` — include `reconciliation` object
+  with adoption/refusal outcome (no secrets).
+- Production subprocess dispatch — still uses Phase 5B in-memory `ProcessHandle` path.
 
-Discovery additions:
-
-- `recovery_control` on each runtime/provider inventory entry
-- `recovery_contract_schema_version` on `discover_capabilities` payload
-
-## 9. Known limitations (7C.1–7C.2)
+## 9. Known limitations (7C.1–7C.3)
 
 - Compatibility evidence is host-local; not a universal compatibility promise.
-- No remote HTTP/provider reachability in evidence probes.
-- OpenCode unavailability on one worker is an observation, not a product verdict.
-- `collect_after_restart` and `session_resume` are reserved vocabulary only; no runtime declares them yet.
-- Durable runner exists as a library primitive; broker adapters still use the Phase 5B in-memory `ProcessHandle` path until 7C.3.
+- `collect_after_restart` is declared only on `fixture_durable` (test runtime).
+- Production subprocess CLIs remain `observe_and_cancel`; PGID-only reconciliation
+  retains accepted PID-reuse residual risk (phase-5b.md).
+- Owner-private stdout/stderr under `durable_launches/` are not redacted at rest;
+  broker-facing collect summaries and reconcile diagnostics are redacted.
+- `session_resume` and `message` remain unavailable.
+- Durable adoption does not replace provider-native session resume.

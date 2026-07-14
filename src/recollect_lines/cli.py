@@ -201,9 +201,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "status":
             output = broker.status(args.task_id)
         elif args.command == "reconcile":
-            output = broker.reconcile(args.task_id).json()
+            record = broker.reconcile(args.task_id)
+            output = {**record.json(), "reconciliation": broker.reconcile_detail(args.task_id)}
         elif args.command == "reconcile-all":
-            output = [record.json() for record in broker.reconcile_pending()]
+            output = [
+                {**record.json(), "reconciliation": broker.reconcile_detail(record.id)}
+                for record in broker.reconcile_pending()
+            ]
         elif args.command == "discover":
             output = broker.discover_capabilities()
         elif args.command == "select":

@@ -8,6 +8,21 @@ import time
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
+from .durable_reconciliation import (
+    AdoptedDurableHandle,
+    LAUNCH_KIND_DURABLE,
+    ReconcileDetail,
+    ReconcileOutcome,
+    adopt_durable_handle,
+    adopted_cancel,
+    adopted_collect,
+    adopted_status,
+    evaluate_durable_reconciliation,
+    is_durable_launch_row,
+    load_broker_identity,
+    make_reconcile_detail,
+)
+from .fixture_durable_adapter import FixtureDurableAdapter
 from .recovery_contract import SYNTHETIC_RECOVERY_CONTROL
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
@@ -57,6 +72,7 @@ class Broker:
         claude_code_adapter: ClaudeCodeAdapter | None = None,
         codex_adapter: CodexAdapter | None = None,
         cursor_adapter: CursorAdapter | None = None,
+        fixture_durable_adapter: FixtureDurableAdapter | None = None,
         providers_config: Path | None = None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
         environ: dict[str, str] | None = None,
@@ -67,6 +83,7 @@ class Broker:
         self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter()
         self.codex_adapter = codex_adapter or CodexAdapter()
         self.cursor_adapter = cursor_adapter or CursorAdapter()
+        self.fixture_durable_adapter = fixture_durable_adapter
         # Every subprocess-backed adapter, keyed by the profile name that selects
         # it — the one place profile-to-adapter dispatch lives, so start()/
         # collect()/cancel()/timeout()/reconcile() never hard-code a specific
@@ -77,6 +94,8 @@ class Broker:
             self.codex_adapter.name: self.codex_adapter,
             self.cursor_adapter.name: self.cursor_adapter,
         }
+        if self.fixture_durable_adapter is not None:
+            self.subprocess_adapters[self.fixture_durable_adapter.name] = self.fixture_durable_adapter
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)
         self._environ = environ
@@ -92,9 +111,19 @@ class Broker:
         # and docs/phase-5b.md). Transparent re-attachment remains out of scope.
         self._process_handles: dict[str, object] = {}
         self._direct_api_handles: dict[str, object] = {}
+        self._adopted_durable_handles: dict[str, AdoptedDurableHandle] = {}
+        self._broker_identity = load_broker_identity(self.store.home)
+        self._last_reconcile_details: dict[str, ReconcileDetail] = {}
 
     def close(self) -> None:
+        for task_id in list(self._adopted_durable_handles):
+            self.store.release_recovery_lease(task_id)
+        self._adopted_durable_handles.clear()
         self.store.close()
+
+    def reconcile_detail(self, task_id: str) -> dict | None:
+        detail = self._last_reconcile_details.get(task_id)
+        return detail.to_dict() if detail else None
 
     def _validate_request(self, request: TaskRequest) -> ProfilePolicy:
         if not request.task.strip():
@@ -219,19 +248,29 @@ class Broker:
             # exists, before the task even reaches RUNNING — a fresh Broker must
             # be able to reconcile against this row even if this process crashes
             # on the very next line.
+            stored_command = (
+                ["<durable-subprocess>", adapter.name]
+                if metadata.get("launch_kind") == LAUNCH_KIND_DURABLE
+                else redact_command(metadata["command"])
+            )
             self.store.record_launch(
                 record.id,
                 adapter=adapter.name,
                 adapter_label=adapter.runtime_label,
                 pid=handle.pid,
                 pgid=handle.pgid,
-                command=redact_command(metadata["command"]),
+                command=stored_command,
                 workspace=metadata["workspace"],
                 events_artifact=metadata["events_artifact"],
                 stderr_artifact=metadata["stderr_artifact"],
+                durable_launch_id=metadata.get("durable_launch_id"),
+                launch_kind=metadata.get("launch_kind", "legacy_subprocess"),
             )
             self.store.refresh_manifest(record.id)
-            return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", metadata)
+            event_metadata = metadata
+            if metadata.get("launch_kind") == LAUNCH_KIND_DURABLE:
+                event_metadata = {**metadata, "command": stored_command}
+            return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", event_metadata)
         return self.store.transition(record.id, TaskState.RUNNING, "Mock adapter started", self.adapter.start_metadata(record, effective_workspace))
 
     def complete(self, task_id: str, summary: str) -> TaskRecord:
@@ -315,6 +354,8 @@ class Broker:
             self._finalize_workspace(record.id)
             message = f"{adapter.name} task completed" if final_state is state else f"{adapter.name} task blocked by verification gate ({gate['outcome']})"
             return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
+        if task_id in self._adopted_durable_handles:
+            return self._collect_adopted_durable(task_id, record)
         if record.profile == DIRECT_API_PROFILE:
             reconciled = self.reconcile(task_id)
             if reconciled.state is not TaskState.FAILED:
@@ -340,6 +381,51 @@ class Broker:
         if reconciled.state is not TaskState.FAILED:
             raise RecoveryRequired(task_id, reconciled.state)
         return reconciled
+
+    def _collect_adopted_durable(self, task_id: str, record: TaskRecord) -> TaskRecord:
+        adopted = self._adopted_durable_handles.pop(task_id)
+        adapter_name = adopted.adapter_id
+        record = self.store.transition(task_id, TaskState.COLLECTING, f"Collecting adopted {adapter_name} durable result", {})
+        collected = adopted_collect(adopted)
+        self.store.release_recovery_lease(task_id)
+        self.store.refresh_manifest(record.id)
+        runtime = {"adapter": adapter_name, **collected}
+        if collected["exit_code"] != 0:
+            result = {
+                "task_id": record.id,
+                "state": TaskState.FAILED.value,
+                "summary": collected.get("summary") or f"{adapter_name} durable payload exited with a non-zero status",
+                "runtime": runtime,
+            }
+            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+            _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
+            self._write_gate_artifact(record.id, gate)
+            self._finalize_workspace(record.id)
+            return self.store.transition(
+                record.id, TaskState.FAILED, f"{adapter_name} task failed",
+                {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate, "adopted_durable": True},
+            )
+        state = TaskState.SUCCEEDED if collected.get("summary") else TaskState.SUCCEEDED_WITH_WARNINGS
+        result = {
+            "task_id": record.id,
+            "state": state.value,
+            "summary": collected.get("summary") or f"{adapter_name} durable run produced no text result",
+            "runtime": runtime,
+        }
+        validate_result(result, record.id)
+        self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+        final_state, gate = self._apply_verification_gate(record.id, record, state)
+        self._write_gate_artifact(record.id, gate)
+        self._finalize_workspace(record.id)
+        message = (
+            f"{adapter_name} task completed from adopted durable artifacts"
+            if final_state is state else
+            f"{adapter_name} task blocked by verification gate ({gate['outcome']})"
+        )
+        return self.store.transition(
+            record.id, final_state, message,
+            {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate, "adopted_durable": True},
+        )
 
     def _process_group_status(self, task_id: str) -> str:
         """Classify the durably-persisted process group for `task_id`.
@@ -381,6 +467,10 @@ class Broker:
         re-running it while the process group is still alive just logs an
         audit event and makes no state change; it never asserts success and
         never touches a workspace/lease it cannot prove is safe to release.
+
+        Durable subprocess launches (Phase 7C.3) may be adopted after proof
+        and recovery-lease acquisition; legacy subprocess/direct paths remain
+        fail-closed as before.
         """
         record = self.store.get(task_id)
         if record.state in TERMINAL_STATES or task_id in self._process_handles or task_id in self._direct_api_handles:
@@ -389,6 +479,11 @@ class Broker:
             return record
         if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
             return record  # mock tasks never hold a subprocess; nothing to reconcile
+        launch = self.store.get_launch(task_id)
+        if is_durable_launch_row(launch) and record.profile in self.subprocess_adapters:
+            adapter = self.subprocess_adapters[record.profile]
+            if getattr(adapter.capabilities, "uses_durable_subprocess_runner", False):
+                return self._reconcile_durable_subprocess(task_id, record, launch, adapter.name)
         if record.profile == DIRECT_API_PROFILE:
             launch = self.store.get_launch(task_id)
             if launch is not None:
@@ -430,6 +525,110 @@ class Broker:
             return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, {"reason": reason, "pgid": launch["pgid"] if launch else None})
         self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, {"reason": reason})
         return record
+
+    def _reconcile_durable_subprocess(
+        self,
+        task_id: str,
+        record: TaskRecord,
+        launch: dict,
+        adapter_name: str,
+    ) -> TaskRecord:
+        durable_launch_id = launch["durable_launch_id"]
+        if task_id in self._adopted_durable_handles:
+            detail = make_reconcile_detail(
+                ReconcileOutcome.ALREADY_ADOPTED,
+                "task already holds an adopted durable handle in this broker instance",
+                launch_id=durable_launch_id,
+                adapter_id=adapter_name,
+            )
+            self._last_reconcile_details[task_id] = detail
+            self._emit_reconcile_event(task_id, record, detail)
+            return record
+
+        proof_outcome, inspection, reason = evaluate_durable_reconciliation(
+            self.store.home,
+            task_id=task_id,
+            expected_adapter_id=adapter_name,
+            durable_launch_id=durable_launch_id,
+            launch_row_adapter=launch["adapter"],
+        )
+        if proof_outcome not in {ReconcileOutcome.ADOPTED_RUNNING, ReconcileOutcome.ADOPTED_TERMINAL_COLLECTABLE}:
+            detail = make_reconcile_detail(
+                proof_outcome,
+                reason,
+                launch_id=durable_launch_id,
+                adapter_id=adapter_name,
+                inspection=inspection,
+            )
+            self._last_reconcile_details[task_id] = detail
+            self.store.mark_launch_reconciled(task_id)
+            message = f"Durable reconciliation refused: {reason}"
+            metadata = detail.to_dict()
+            if record.state is not TaskState.RECOVERY_REQUIRED:
+                return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, metadata)
+            self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, metadata)
+            return record
+
+        acquired = self.store.try_acquire_recovery_lease(
+            task_id=task_id,
+            durable_launch_id=durable_launch_id,
+            broker_id=self._broker_identity.broker_id,
+            broker_epoch=self._broker_identity.epoch,
+        )
+        if not acquired:
+            detail = make_reconcile_detail(
+                ReconcileOutcome.REFUSED_LEASE_CONTENDED,
+                "another broker holds an active recovery lease for this launch",
+                launch_id=durable_launch_id,
+                adapter_id=adapter_name,
+                inspection=inspection,
+            )
+            self._last_reconcile_details[task_id] = detail
+            message = detail.reason
+            metadata = detail.to_dict()
+            if record.state is not TaskState.RECOVERY_REQUIRED:
+                return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, metadata)
+            self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, metadata)
+            return record
+
+        terminal = proof_outcome is ReconcileOutcome.ADOPTED_TERMINAL_COLLECTABLE
+        adopted = adopt_durable_handle(
+            self.store.home,
+            task_id=task_id,
+            launch_id=durable_launch_id,
+            adapter_id=adapter_name,
+            terminal=terminal,
+        )
+        self._adopted_durable_handles[task_id] = adopted
+        detail = make_reconcile_detail(
+            proof_outcome,
+            reason,
+            launch_id=durable_launch_id,
+            adapter_id=adapter_name,
+            inspection=inspection,
+        )
+        self._last_reconcile_details[task_id] = detail
+        self.store.mark_launch_reconciled(task_id)
+        message = (
+            "Adopted terminal durable launch; collect bounded artifacts when ready"
+            if terminal else
+            "Adopted running durable launch after broker-restart proof"
+        )
+        metadata = detail.to_dict()
+        if record.state is TaskState.RECOVERY_REQUIRED or record.state is TaskState.PREPARING:
+            return self.store.transition(task_id, TaskState.RUNNING, message, metadata)
+        self.store.event(task_id, "task.durable_adopted", record.state, record.state, message, metadata)
+        return record
+
+    def _emit_reconcile_event(self, task_id: str, record: TaskRecord, detail: ReconcileDetail) -> None:
+        self.store.event(
+            task_id,
+            "task.reconciliation_checked",
+            record.state,
+            record.state,
+            detail.reason,
+            detail.to_dict(),
+        )
 
     def reconcile_pending(self) -> list[TaskRecord]:
         """Reconcile every subprocess-backed task (any profile in `subprocess_adapters`)
@@ -618,6 +817,23 @@ class Broker:
                 self._finalize_workspace(record.id)
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
 
+        adopted = self._adopted_durable_handles.get(task_id)
+        if adopted is not None:
+            adapter_name = adopted.adapter_id
+            record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
+            cancellation = adopted_cancel(adopted)
+            self._adopted_durable_handles.pop(task_id, None)
+            self.store.release_recovery_lease(task_id)
+            target = TaskState.CANCELLED if cancellation["group_terminated"] else TaskState.FAILED
+            message = (
+                f"{adapter_name} adopted durable process group terminated"
+                if cancellation["group_terminated"] else
+                f"{adapter_name} adopted durable cancellation unconfirmed"
+            )
+            if cancellation["group_terminated"]:
+                self._finalize_workspace(record.id)
+            return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation, "adopted_durable": True})
+
         if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
             self._finalize_workspace(task_id)
             if record.state is not TaskState.CANCELLING:
@@ -687,12 +903,19 @@ class Broker:
 
     def status(self, task_id: str) -> dict:
         record = self.store.get(task_id)
-        return {
+        payload = {
             **record.json(),
             "events": self.store.events(task_id),
             "artifacts": self.store.artifact_manifest(task_id),
             "runtime_launch": self.store.get_launch(task_id),
         }
+        detail = self.reconcile_detail(task_id)
+        if detail is not None:
+            payload["reconciliation"] = detail
+        adopted = self._adopted_durable_handles.get(task_id)
+        if adopted is not None:
+            payload["adopted_durable"] = adopted_status(adopted)
+        return payload
 
     def _finalize_workspace(self, task_id: str) -> None:
         """Capture diff/status evidence and release a task's worktree lease, if any.
