@@ -142,7 +142,7 @@ Integrated into CI on Python 3.11.
 - [ ] `recollect-lines doctor --json` — no blocking findings for your config
 - [ ] `recollect-mcp` registered in MCP host config with matching `--home`
 - [ ] Placeholder secrets exported in deployment environment (never committed)
-- [ ] `python3 scripts/clean_install_acceptance.py` passes
+- [ ] `recollect-lines certify --profile …` — dry-run evidence for your target (see [phase-7b.md](phase-7b.md))
 - [ ] `PYTHONPATH=src python3 -m unittest discover -s tests -v`
 - [ ] `python3 scripts/mcp_acceptance.py`
 

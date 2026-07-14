@@ -33,3 +33,17 @@ recollect-lines --home ~/.recollect \
 ```
 
 After export, `PROVIDER_SECRET_REFERENCE_PRESENT` should appear for `local_litellm`.
+
+## Certification dry-run (Phase 7B)
+
+Offline evidence only — no network probe:
+
+```bash
+recollect-lines --home ~/.recollect \
+  --providers-config examples/litellm-openai-compatible/providers.json \
+  certify --profile openai_compatible --provider local_litellm --json \
+  --output /tmp/litellm-certify-evidence.json
+```
+
+`estimated_cost_usd_upper_bound` is declared for future live opt-in; dry-run does not call the gateway.
+See [`docs/phase-7b.md`](../../docs/phase-7b.md) for live and fixture modes.

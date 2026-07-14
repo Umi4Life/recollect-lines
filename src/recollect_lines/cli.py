@@ -9,7 +9,8 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
 from .opencode_adapter import OpenCodeAdapter
-from .doctor import format_human_report, run_doctor
+from .doctor import format_human_report as format_doctor_report, run_doctor
+from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .service import Broker
 
 
@@ -102,6 +103,19 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Offline-safe operational diagnostics")
     doctor.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
     doctor.add_argument("--workspace", type=Path, default=None, help="Optional workspace path to validate")
+    certify = sub.add_parser("certify", help="Integration certification with explicit target selection")
+    certify.add_argument("--profile", required=True, help="Target profile (required; no default)")
+    certify.add_argument("--provider", default=None, help="Named provider (required when --profile openai_compatible)")
+    certify.add_argument("--json", action="store_true", help="Emit stable redacted machine-readable JSON")
+    certify.add_argument("--output", type=Path, default=None, help="Write redacted evidence JSON atomically to this path")
+    certify.add_argument("--max-cost-usd", type=float, default=None, help="Operator budget ceiling for --execute-live")
+    certify.add_argument("--fixture-execute", action="store_true", help="Run deterministic local fixture certification")
+    certify.add_argument("--execute-live", action="store_true", help="Opt in to live remote execution (billed calls possible)")
+    certify.add_argument(
+        "--i-accept-billed-remote-calls",
+        action="store_true",
+        help="Required with --execute-live: acknowledge paid/billed remote model calls",
+    )
     return p
 
 
@@ -136,7 +150,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
-            print(format_human_report(report))
+            print(format_doctor_report(report))
+        return exit_code
+    if args.command == "certify":
+        report, exit_code = run_certify(CertifyRequest(
+            home=args.home,
+            profile=args.profile,
+            provider=args.provider,
+            providers_config=args.providers_config,
+            output=args.output,
+            max_cost_usd=args.max_cost_usd,
+            execute_live=args.execute_live,
+            acknowledge_billed_remote_calls=args.i_accept_billed_remote_calls,
+            fixture_execute=args.fixture_execute,
+            opencode_adapter=opencode_adapter,
+            claude_code_adapter=claude_code_adapter,
+            codex_adapter=codex_adapter,
+            cursor_adapter=cursor_adapter,
+        ))
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_certify_report(report))
         return exit_code
     broker = Broker(
         args.home,
