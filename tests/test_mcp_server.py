@@ -114,7 +114,7 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(
             names,
             {
-                "delegate", "delegate_batch", "status", "collect", "cancel", "message", "reconcile",
+                "delegate", "delegate_batch", "status", "collect", "cancel", "control", "message", "reconcile",
                 "discover_capabilities", "select_candidates", "council_validate", "council_execute",
             },
         )

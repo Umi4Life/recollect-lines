@@ -11,6 +11,7 @@ from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
 from .opencode_adapter import OpenCodeAdapter
 from .doctor import format_human_report as format_doctor_report, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
+from .operator_control import OperatorControlRefused
 from .service import Broker
 
 
@@ -76,6 +77,23 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--summary", required=True)
         if name in {"cancel", "timeout"}:
             cmd.add_argument("--reason", default="Cancelled or timed out by caller")
+    control = sub.add_parser(
+        "control",
+        help="Operator recovery/control with an explicit action (status, cancel, collect, message)",
+    )
+    control.add_argument("task_id")
+    control.add_argument(
+        "--action",
+        required=True,
+        choices=("status", "cancel", "collect", "message"),
+        help="Explicit control action; message is always an explicit unsupported refusal",
+    )
+    control.add_argument("--reason", default="Cancelled by operator control")
+    control.add_argument(
+        "--content",
+        default=None,
+        help="Required when --action message (always refused; no steering occurs)",
+    )
     verify = sub.add_parser("verify")
     verify.add_argument("task_id")
     verify.add_argument(
@@ -200,6 +218,13 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.verify(args.task_id, [json.loads(command) for command in args.commands])
         elif args.command == "status":
             output = broker.status(args.task_id)
+        elif args.command == "control":
+            output = broker.operator_control(
+                args.task_id,
+                args.action,
+                reason=args.reason,
+                message_content=args.content,
+            )
         elif args.command == "reconcile":
             record = broker.reconcile(args.task_id)
             output = {**record.json(), "reconciliation": broker.reconcile_detail(args.task_id)}
@@ -229,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
             output = [record.json() for record in broker.store.list()]
         print(json.dumps(output, indent=2, sort_keys=True))
         return 0
+    except OperatorControlRefused as error:
+        print(json.dumps({
+            "error": {"code": error.code, "message": error.message},
+            "control": error.control,
+        }, sort_keys=True))
+        return 3
     except (KeyError, ValueError, InvalidTransition) as error:
         print(json.dumps({"error": {"code": type(error).__name__, "message": str(error)}}, sort_keys=True))
         return 2

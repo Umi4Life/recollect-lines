@@ -1,13 +1,14 @@
 # Phase 7C RFC — Recovery, control contract, and compatibility evidence
 
-Status: Phase **7C.3** (this document) adds safe broker-restart reconciliation
-for **eligible durable subprocess launches only** — proof-gated adoption with
-recovery-lease fencing, bounded adopted-handle control (`status`, owned-group
-`cancel`, terminal `collect`), and structured reconcile diagnostics. Phase
-**7C.1** defined the typed recovery/control contract. Phase **7C.2** added the
-durable subprocess-runner primitive and read-only launch inspection.
-**7C.4** operator surfaces remain future work. This document does **not**
-implement provider-native session resume or mid-task message injection.
+Status: Phase **7C.4** (this document) adds bounded operator recovery/control
+surfaces (CLI `control`, MCP `control`) atop the 7C.3 adoption contract —
+explicit `status`/`cancel`/`collect`/`message` actions with a secret-safe
+recovery/control view and fail-closed gates. Phase **7C.3** added safe
+broker-restart reconciliation for **eligible durable subprocess launches only**.
+Phase **7C.1** defined the typed recovery/control contract. Phase **7C.2** added
+the durable subprocess-runner primitive and read-only launch inspection.
+This document does **not** implement provider-native session resume or mid-task
+message injection.
 
 Related: [RFC-001.md](RFC-001.md), [phase-5b.md](phase-5b.md),
 [phase-6d.md](phase-6d.md), [PRD.md](PRD.md).
@@ -100,8 +101,8 @@ Production subprocess CLIs remain `observe_and_cancel`. Only `fixture_durable`
 |---|---|
 | **7C.1** | Typed contract, discovery/doctor/MCP visibility, compatibility evidence model, RFC/matrix |
 | **7C.2** | Durable subprocess runner (`durable_runner.py`), bounded owner-private artifacts, read-only `inspect_durable_launch()` |
-| **7C.3** (this PR) | `durable_reconciliation.py`, recovery lease, broker adoption in `reconcile()`/`collect()`/`cancel()`/`status`, structured reconcile diagnostics |
-| **7C.4** | Operator surface (explicit commands/UI for recovery actions) |
+| **7C.3** | `durable_reconciliation.py`, recovery lease, broker adoption in `reconcile()`/`collect()`/`cancel()`/`status`, structured reconcile diagnostics |
+| **7C.4** (this PR) | Operator surfaces: CLI/MCP `control` with explicit actions, recovery/control view, refusal codes |
 
 ### 7.1 What 7C.3 proves
 
@@ -124,14 +125,36 @@ Production subprocess CLIs remain `observe_and_cancel`. Only `fixture_durable`
 **Test runtime:** `FixtureDurableAdapter` (`fixture_durable` profile) is the only
 runtime elevated to `collect_after_restart`. Production CLI adapters are unchanged.
 
-### 7.2 What remains 7C.4
+### 7.2 What 7C.4 adds
 
-- Operator-focused recovery UX atop the adoption contract.
+`recollect_lines.operator_control` and broker `operator_control()` expose a
+machine-readable recovery/control view for operators and automation:
+
+1. **Explicit actions only** — `status`, `cancel`, `collect`, `message`; no
+   dangerous defaults; `message` is always an explicit unsupported refusal.
+2. **Recovery/control view** — task/launch identity, `recovery_posture`
+   (`observed`, `recovery_required`, `safely_adopted`, `terminal`, `refused`),
+   `permitted_actions`, per-action refusal reasons, and hard distinction:
+   `process_recovery != provider_session_resume != continuation_task !=
+   free_form_steering`.
+3. **Fail-closed execution** — post-restart `cancel`/`collect` on durable
+   launches require 7C.3 proof-gated adoption; legacy/direct paths retain
+   Phase 5B/6C behavior; corrupt/contested evidence refuses control.
+4. **Secret-safe output** — redacted diagnostics in CLI/MCP-visible responses.
+
+**Interfaces:** `recollect-lines control <task_id> --action <action>` (exit 3 on
+refused action); MCP tool `control` with the same contract.
+
+### 7.3 What remains future work
+
 - Optional elevation of production CLI adapters only after per-runtime safety proof.
 
 ## 8. Interfaces
 
-- `recollect.message` — remains structured `unsupported`; no side effects.
+- `recollect.message` / `control --action message` — remains structured
+  `unsupported`; no side effects.
+- `recollect-lines control` / MCP `control` — explicit operator recovery/control
+  with secret-safe view; refuses when 7C.3 gates are not satisfied.
 - `Broker.reconcile()` / `reconcile_pending()` — durable adoption path for eligible
   launches; legacy paths unchanged; returns structured `reconciliation` metadata
   via events / `reconcile_detail()`.
@@ -139,7 +162,7 @@ runtime elevated to `collect_after_restart`. Production CLI adapters are unchang
   with adoption/refusal outcome (no secrets).
 - Production subprocess dispatch — still uses Phase 5B in-memory `ProcessHandle` path.
 
-## 9. Known limitations (7C.1–7C.3)
+## 9. Known limitations (7C.1–7C.4)
 
 - Compatibility evidence is host-local; not a universal compatibility promise.
 - `collect_after_restart` is declared only on `fixture_durable` (test runtime).

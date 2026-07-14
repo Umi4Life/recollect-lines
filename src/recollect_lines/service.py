@@ -901,6 +901,30 @@ class Broker:
             {"reason": reason, "cancellation": cancellation},
         )
 
+    def operator_control(
+        self,
+        task_id: str,
+        action: str,
+        *,
+        reason: str = "Cancelled by operator control",
+        message_content: str | None = None,
+    ) -> dict:
+        """Bounded operator recovery/control: explicit action, fail-closed gates (Phase 7C.4)."""
+        from .operator_control import execute_operator_control
+
+        return execute_operator_control(
+            self,
+            task_id,
+            action,
+            reason=reason,
+            message_content=message_content,
+        )
+
+    def operator_control_view(self, task_id: str) -> dict:
+        from .operator_control import build_operator_control_view
+
+        return build_operator_control_view(self, task_id)
+
     def status(self, task_id: str) -> dict:
         record = self.store.get(task_id)
         payload = {
