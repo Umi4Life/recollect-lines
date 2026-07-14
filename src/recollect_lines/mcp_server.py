@@ -27,6 +27,7 @@ from typing import Any
 
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
+from .cursor_adapter import CursorAdapter
 from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
 from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
@@ -44,7 +45,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-PROFILES = ("mock", "opencode", "claude_code", "codex")
+PROFILES = ("mock", "opencode", "claude_code", "codex", "cursor")
 
 
 class ProtocolError(Exception):
@@ -527,6 +528,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Defaults to the built-in `codex` CLI invocation."
         ),
     )
+    parser.add_argument(
+        "--cursor-command", default=None,
+        help=(
+            "Advanced: override the Cursor adapter's command prefix as a JSON array "
+            "(e.g. to point at a deterministic stand-in binary for testing/acceptance). "
+            "Defaults to the built-in `cursor-agent` CLI invocation."
+        ),
+    )
     return parser
 
 
@@ -535,7 +544,8 @@ def main(argv: list[str] | None = None) -> int:
     opencode_adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
-    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter, codex_adapter=codex_adapter)
+    cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
+    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter, codex_adapter=codex_adapter, cursor_adapter=cursor_adapter)
     try:
         serve(broker, sys.stdin, sys.stdout)
     finally:

@@ -10,6 +10,7 @@ from pathlib import Path
 from .adapters import AdapterCapabilities
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
+from .cursor_adapter import CursorAdapter
 from .models import (
     DEFAULT_PROFILES,
     TERMINAL_STATES,
@@ -51,12 +52,14 @@ class Broker:
         opencode_adapter: OpenCodeAdapter | None = None,
         claude_code_adapter: ClaudeCodeAdapter | None = None,
         codex_adapter: CodexAdapter | None = None,
+        cursor_adapter: CursorAdapter | None = None,
     ):
         self.store = TaskStore(home)
         self.adapter = MockAdapter()
         self.opencode_adapter = opencode_adapter or OpenCodeAdapter()
         self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter()
         self.codex_adapter = codex_adapter or CodexAdapter()
+        self.cursor_adapter = cursor_adapter or CursorAdapter()
         # Every subprocess-backed adapter, keyed by the profile name that selects
         # it — the one place profile-to-adapter dispatch lives, so start()/
         # collect()/cancel()/timeout()/reconcile() never hard-code a specific
@@ -65,6 +68,7 @@ class Broker:
             self.opencode_adapter.name: self.opencode_adapter,
             self.claude_code_adapter.name: self.claude_code_adapter,
             self.codex_adapter.name: self.codex_adapter,
+            self.cursor_adapter.name: self.cursor_adapter,
         }
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)

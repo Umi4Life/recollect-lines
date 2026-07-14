@@ -74,6 +74,7 @@ DEFAULT_PROFILES = {
     "opencode": ProfilePolicy("opencode", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
     "claude_code": ProfilePolicy("claude_code", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
     "codex": ProfilePolicy("codex", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
+    "cursor": ProfilePolicy("cursor", frozenset({"read_only", "isolated_worktree"}), 3600, 2),
 }
 
 # Verification-gate policy (Phase 5C): distinguishes evidence-only from

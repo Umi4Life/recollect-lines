@@ -14,8 +14,8 @@ Phase 5C's verification-gate and timeout/cancellation-liveness behavior.
 To stay fully local, offline, and deterministic, it points the broker's
 opencode and claude_code adapters at this repo's own deterministic stand-in
 CLIs (tests/fixtures/fake_opencode.py, tests/fixtures/fake_claude.py,
-tests/fixtures/fake_codex.py) via `--opencode-command`/`--claude-command`/
-`--codex-command` — the same override mechanism each adapter documents as
+tests/fixtures/fake_codex.py, tests/fixtures/fake_cursor.py) via `--opencode-command`/`--claude-command`/
+`--codex-command`/`--cursor-command` — the same override mechanism each adapter documents as
 intended for "testing/acceptance" — instead of the real network-dependent
 opencode-ai package, an authenticated `claude` CLI, or an authenticated
 `codex` CLI.
@@ -40,6 +40,7 @@ SRC = ROOT / "src"
 FAKE_OPENCODE = ROOT / "tests" / "fixtures" / "fake_opencode.py"
 FAKE_CLAUDE = ROOT / "tests" / "fixtures" / "fake_claude.py"
 FAKE_CODEX = ROOT / "tests" / "fixtures" / "fake_codex.py"
+FAKE_CURSOR = ROOT / "tests" / "fixtures" / "fake_cursor.py"
 
 TERMINAL_STATES = {"succeeded", "succeeded_with_warnings", "failed", "timed_out", "cancelled"}
 
@@ -61,7 +62,7 @@ class McpStdioClient:
     without importing the test package, exactly as an external host would.
     """
 
-    def __init__(self, home: Path, opencode_command: list[str], claude_command: list[str], codex_command: list[str]):
+    def __init__(self, home: Path, opencode_command: list[str], claude_command: list[str], codex_command: list[str], cursor_command: list[str]):
         env = dict(os.environ)
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{SRC}{os.pathsep}{existing}" if existing else str(SRC)
@@ -72,6 +73,7 @@ class McpStdioClient:
                 "--opencode-command", json.dumps(opencode_command),
                 "--claude-command", json.dumps(claude_command),
                 "--codex-command", json.dumps(codex_command),
+                "--cursor-command", json.dumps(cursor_command),
             ],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
@@ -157,6 +159,7 @@ def main() -> int:
             [sys.executable, str(FAKE_OPENCODE)],
             [sys.executable, str(FAKE_CLAUDE)],
             [sys.executable, str(FAKE_CODEX)],
+            [sys.executable, str(FAKE_CURSOR)],
         )
         try:
             init = client.request(
@@ -260,6 +263,25 @@ def main() -> int:
                 "codex runtime result honestly reports the codex adapter, not a generic/other runtime",
                 (codex_collected.get("runtime_result") or {}).get("runtime", {}).get("adapter") == "codex",
                 str(codex_collected),
+            )
+
+            # --- delegate + collect: the cursor profile through the same generic dispatch ---
+            is_error, cursor_delegated = client.call_tool("delegate", {
+                "task": "Inspect the fixture repository",
+                "workspace": str(source),
+                "execution_mode": "read_only",
+                "profile": "cursor",
+            })
+            check("delegate accepts a read-only cursor task", not is_error, str(cursor_delegated))
+            cursor_task_id = cursor_delegated.get("task_id", "")
+
+            is_error, cursor_collected = client.call_tool("collect", {"task_id": cursor_task_id})
+            check("collect succeeds for a cursor task without a protocol error", not is_error, str(cursor_collected))
+            check("cursor task reaches succeeded", cursor_collected.get("state") == "succeeded", str(cursor_collected))
+            check(
+                "cursor runtime result honestly reports the cursor adapter, not a generic/other runtime",
+                (cursor_collected.get("runtime_result") or {}).get("runtime", {}).get("adapter") == "cursor",
+                str(cursor_collected),
             )
 
             # --- workspace safety: the source fixture is never mutated by delegated work ---
