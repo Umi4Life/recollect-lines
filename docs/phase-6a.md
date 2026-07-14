@@ -103,9 +103,12 @@ reinventing SIGTERM→SIGKILL escalation per adapter:
   "isolated_worktree": "acceptEdits"}`) and raises
   `ClaudeCodeUnsupportedPolicy` (fail-closed, before any subprocess is
   spawned) for anything else — a future `execution_mode` never silently
-  inherits write access. `read_only` additionally passes
-  `--disallowedTools Edit,Write,NotebookEdit` as defense in depth alongside
-  `plan` mode, not as the sole guarantee.
+  inherits write access. `read_only` passes `--tools Read,Grep,Glob`
+  (a structural allowlist — the tool *set* the CLI gives the model, not a
+  deny-list) as the actual guarantee, plus `--disallowedTools
+  Edit,Write,NotebookEdit` layered on top as defense in depth. See
+  "Reconciliation addendum" below for why the allowlist is required and not
+  merely additional defense in depth.
 - **Structured-output parsing**: `collect()` splits stdout into lines,
   parses each independently as JSON, counts (but does not fail on) any
   line that doesn't parse, and takes the last successfully-parsed JSON
@@ -180,6 +183,11 @@ added no new branch to that sequencing.
   files: `plan` mode was independently confirmed (not just documented) to
   refuse file creation (see spike finding 2), and `--disallowedTools
   Edit,Write,NotebookEdit` is layered on top as defense in depth.
+- A `read_only` task's tool set is structurally narrowed to `Read,Grep,Glob`
+  via `--tools` — Bash (and every other built-in tool) does not exist for
+  the model to call at all in this mode, confirmed against the real CLI: it
+  reports having no Bash tool available, rather than merely declining to use
+  one. See "Reconciliation addendum" below for the gap this closed.
 - Execution modes with no validated Claude Code permission-mode mapping fail
   closed (`ClaudeCodeUnsupportedPolicy`, raised inside `build_command()`
   before any subprocess exists) rather than defaulting to a broader mode.
@@ -190,16 +198,17 @@ added no new branch to that sequencing.
 
 ## Test evidence
 
-`tests/test_claude_code_adapter.py` (29 tests) against a deterministic
+`tests/test_claude_code_adapter.py` (30 tests) against a deterministic
 fixture CLI (`tests/fixtures/fake_claude.py`, selected by prompt keyword,
 mirroring `fake_opencode.py`'s existing pattern) covers:
 
 - Command/argument generation: prompt placement immediately after `-p`;
-  `read_only` → `plan` + `--disallowedTools`; `isolated_worktree` →
-  `acceptEdits` with no `--disallowedTools`; `--disallowedTools` always last
-  in argv; fail-closed `ClaudeCodeUnsupportedPolicy` for an unmapped mode;
-  optional `--model`; `--output-format json`/`--no-session-persistence`
-  always present.
+  `read_only` → `plan` + `--tools Read,Grep,Glob` (excluding Bash) +
+  `--disallowedTools`; `isolated_worktree` → `acceptEdits` with no
+  `--tools`/`--disallowedTools`; both variadic flags always argv-final with
+  `--tools` before `--disallowedTools`; fail-closed
+  `ClaudeCodeUnsupportedPolicy` for an unmapped mode; optional `--model`;
+  `--output-format json`/`--no-session-persistence` always present.
 - Redaction: `redact_secrets()` scrubs an Anthropic-shaped API key and a
   bearer token, leaves ordinary text untouched.
 - Structured-output/raw-output collection: a single JSON result object
@@ -237,12 +246,14 @@ confirming `collect` returns `runtime_result.runtime.adapter ==
 "claude_code"` — proof the MCP surface actually dispatches to
 `ClaudeCodeAdapter`, not silently to mock/opencode.
 
-Full suite: **127 tests pass** (96 pre-existing Phase 1–5C tests, unchanged
-and still green, plus 31 new: 29 in `test_claude_code_adapter.py` and 2 in
+Full suite: **128 tests pass** (96 pre-existing Phase 1–5C tests, unchanged
+and still green, plus 32 new: 30 in `test_claude_code_adapter.py` and 2 in
 `test_mcp_server.py`). `python3 -m compileall -q src tests scripts` passes.
-`scripts/mcp_acceptance.py` (OpenCode-only, unmodified) still passes,
-confirming the `service.py` generalization introduced no OpenCode
-regression.
+`scripts/mcp_acceptance.py` now also exercises a `claude_code` read_only
+task (delegate/collect through the deterministic fixture) alongside its
+original OpenCode coverage — see "Reconciliation addendum" below — and
+still passes in full (19/19 checks), confirming the `service.py`
+generalization introduced no OpenCode regression either.
 
 ## Real bounded smoke (completed, distinct from the fixture-only evidence above)
 
@@ -295,6 +306,81 @@ testing against future `claude` CLI releases — the same honesty standard
 No broad implementation work was run against the live API; this phase's
 subscription-quota usage was limited to the three spike calls above and
 this one smoke call.
+
+## Reconciliation addendum (2026-07-14)
+
+Two independent implementations of this phase existed briefly: this one
+(published first, as PR #8) and a separately-developed local commit built on
+the same Phase 5C base, never pushed or reported. Both were compared
+directly — requirements coverage, tests, and (where the docs disagreed) the
+underlying factual claims re-verified against the real, installed `claude`
+2.1.201 CLI, not just read off either document.
+
+Both implementations were sound overall, and most differences between them
+(`--output-format json` vs `stream-json`, `claude_code`/`claude_adapter.py`
+naming, doc structure) were equally-valid style choices — re-verified
+against the real CLI, both output-format claims held up empirically. Neither
+side of those was "wrong," so this phase kept its own (already published,
+already green) choices rather than merging mechanically.
+
+One finding was not a style difference: the local commit's `read_only`
+mapping used `--tools Read,Grep,Glob` (a structural tool-set allowlist),
+while this phase's original `read_only` mapping used only
+`--disallowedTools Edit,Write,NotebookEdit`. Re-verifying both directly
+against the real CLI:
+
+- Under `--permission-mode plan --disallowedTools Edit,Write,NotebookEdit`
+  alone (this phase's original mapping), Bash remained available to the
+  model, and a `whoami` call through it **actually executed** and returned
+  real output — `plan` mode's own file-write refusal does not extend to
+  arbitrary non-write Bash execution, and `--disallowedTools` never named
+  Bash. A second, more sensitive-sounding request (env-var dump piped into
+  `curl`) was declined, but by the model's own judgment, not by any
+  structural mechanism — the same request could plausibly succeed on a
+  different phrasing or a different model turn.
+- Under `--permission-mode plan --tools Read,Grep,Glob` (the local commit's
+  mapping), the same `whoami` request failed structurally: the model
+  reported it has no Bash tool available at all, not merely that it
+  declined to use one.
+
+`read_only` is this phase's explicitly critical-scope guarantee, and a
+guarantee that depends on the model's own judgment call about a given
+request is not the structural guarantee the product constraints require
+("do not overclaim... permission safety"). This was therefore carried over
+as a necessary fix, not a style preference: `build_command()` now emits
+`--tools Read,Grep,Glob` for `read_only` (see `READ_ONLY_TOOLS` in
+`claude_code_adapter.py`), on top of the original `--disallowedTools`
+defense-in-depth, which stays. Nothing else from the local commit was
+merged. The local commit's own branch is preserved at
+`backup/local-phase-6a-7d2ebc0` for reference; it was not merged into this
+history.
+
+This fix was re-verified three ways: a new unit test asserting `--tools`
+excludes Bash for `read_only`
+(`test_build_command_read_only_restricts_tools_to_a_structural_allowlist_excluding_bash`);
+`scripts/mcp_acceptance.py` extended to exercise a `claude_code` `read_only`
+task end-to-end through the fixture CLI (closing the coverage gap that let
+this ship in the first place — the original acceptance harness never
+touched the `claude_code` profile at all); and one additional real,
+bounded smoke call — a fresh `read_only` task through the real broker + real
+MCP stdio surface + real `claude` CLI, disposable fixture
+(`/tmp/rl6a-smoke-recon`, never the project checkout). Observed:
+
+- Command actually launched: `["claude", "-p", "<prompt>",
+  "--output-format", "json", "--permission-mode", "plan",
+  "--no-session-persistence", "--tools", "Read,Grep,Glob",
+  "--disallowedTools", "Edit,Write,NotebookEdit"]` (read from the broker's
+  own durable launch record, not merely `build_command()`'s return value).
+- Result: `summary="zebra-91"`, the exact fact value; `exit_code=0`,
+  `is_error=false`.
+- Fixture repository `git rev-parse HEAD` identical before/after
+  (`1746ecdafd328ec3850d390ac6e2a14966edb834`); `git status --porcelain`
+  empty before and after.
+
+This addendum's own Bash-availability probes (the `whoami` calls above) were
+run directly against the bare `claude` CLI from a shell, outside the broker,
+specifically to compare the two candidate flag mappings — they are not part
+of the adapter's own smoke evidence and are not repeated by CI.
 
 ## Unsupported / remaining constraints
 

@@ -48,6 +48,17 @@ RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 # since they either bypass more than file edits or have no non-interactive
 # safety evidence behind them.
 #
+# Reconciliation finding (2026-07-14, see docs/phase-6a.md "Reconciliation
+# addendum"): --disallowedTools Edit,Write,NotebookEdit alone leaves Bash
+# nominally available in read_only mode — confirmed against the real CLI,
+# a `whoami` call executed successfully via Bash under exactly this mapping.
+# read_only's guarantee is meant to be structural, not cooperative (this is
+# the phase's explicitly called-out critical-scope requirement), so
+# --tools <allowlist> is now applied for read_only: this narrows the tool
+# *set* itself, not just a deny-list, so Bash does not exist for the model to
+# call at all, confirmed against the real CLI (it reports having no Bash
+# tool). --disallowedTools stays layered on top as defense in depth.
+#
 # ponytail: only the two execution_modes the broker currently defines are
 # mapped; build_command() fails closed (raises) for anything else rather than
 # guessing a permission mode, so a future execution_mode never silently
@@ -57,6 +68,7 @@ PERMISSION_MODE_BY_EXECUTION_MODE = {
     "isolated_worktree": "acceptEdits",
 }
 READ_ONLY_DISALLOWED_TOOLS = ("Edit", "Write", "NotebookEdit")
+READ_ONLY_TOOLS = ("Read", "Grep", "Glob")
 
 REDACTED_VALUE = "***REDACTED***"
 # Best-effort scrub applied only to the *concise* fields the broker folds into
@@ -169,6 +181,7 @@ class ClaudeCodeAdapter:
         if self.model:
             command += ["--model", self.model]
         if execution_mode == "read_only":
+            command += ["--tools", ",".join(READ_ONLY_TOOLS)]
             command += ["--disallowedTools", ",".join(READ_ONLY_DISALLOWED_TOOLS)]
         return command
 

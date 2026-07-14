@@ -55,16 +55,34 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
         self.assertIn("Write", disallowed)
         self.assertIn("NotebookEdit", disallowed)
 
+    def test_build_command_read_only_restricts_tools_to_a_structural_allowlist_excluding_bash(self):
+        # --disallowedTools alone leaves Bash nominally available (confirmed
+        # against the real CLI during reconciliation, see docs/phase-6a.md);
+        # --tools is the actual structural guarantee for read_only, since it
+        # narrows the tool *set* the model is given, not just a deny-list.
+        adapter = fake_adapter()
+        command = adapter.build_command("inspect", "read_only")
+        self.assertIn("--tools", command)
+        allowed = command[command.index("--tools") + 1]
+        self.assertIn("Read", allowed)
+        self.assertIn("Grep", allowed)
+        self.assertIn("Glob", allowed)
+        self.assertNotIn("Bash", allowed)
+
     def test_build_command_isolated_worktree_maps_to_acceptedits_without_disallowed_tools(self):
         adapter = fake_adapter()
         command = adapter.build_command("edit stuff", "isolated_worktree")
         self.assertEqual(command[command.index("--permission-mode") + 1], "acceptEdits")
         self.assertNotIn("--disallowedTools", command)
+        self.assertNotIn("--tools", command)
 
     def test_disallowed_tools_flag_is_always_last_so_nothing_positional_trails_a_variadic_flag(self):
         adapter = fake_adapter()
         command = adapter.build_command("inspect", "read_only")
         self.assertEqual(command[-2], "--disallowedTools")
+        # --tools is also variadic; it must precede --disallowedTools (both
+        # already argv-final) rather than trail it and risk swallowing it.
+        self.assertLess(command.index("--tools"), command.index("--disallowedTools"))
 
     def test_build_command_fails_closed_for_an_unmapped_execution_mode(self):
         adapter = fake_adapter()
