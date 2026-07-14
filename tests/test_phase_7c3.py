@@ -15,8 +15,14 @@ from pathlib import Path
 from unittest import mock
 
 from recollect_lines import mcp_server
-from recollect_lines.durable_reconciliation import ReconcileOutcome, is_durable_launch_row
-from recollect_lines.durable_runner import STATE_RUNNING, inspect_durable_launch, load_launch_record
+from recollect_lines.durable_reconciliation import ReconcileOutcome, is_durable_launch_row, wait_for_durable_running
+from recollect_lines.durable_runner import (
+    DurableSubprocessRunner,
+    STATE_EXITED,
+    STATE_RUNNING,
+    inspect_durable_launch,
+    load_launch_record,
+)
 from recollect_lines.fixture_durable_adapter import FixtureDurableAdapter
 from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, RecoveryRequired, TaskRequest, TaskState
 from recollect_lines.opencode_adapter import OpenCodeAdapter
@@ -342,6 +348,23 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
             broker.fixture_durable_adapter.runner.wait(handle.durable, timeout=0.3)
             self.assertFalse(wait_until(lambda: _pgid_alive(pgid), timeout=0.5))
             self.assertIsNone(broker.store.get_recovery_lease(task_id))
+
+    def test_wait_for_durable_running_accepts_fast_exit_launch_proof(self):
+        """Regression: micro-duration fixtures can reach exited between RUNNING polls."""
+        runner = DurableSubprocessRunner(self.home, max_stdout_bytes=4096, max_stderr_bytes=1024)
+        fixture = FIXTURES / "durable_short_payload.py"
+        handle = runner.launch(
+            task_id="fast-exit-proof",
+            adapter_id="fixture_durable",
+            command=[sys.executable, str(fixture)],
+        )
+        self._supervisors.append(handle.supervisor)
+        record = runner.wait(handle, timeout=10)
+        self.assertEqual(record.lifecycle_state, STATE_EXITED)
+        self.assertTrue(record.process.get("pid"))
+        ready = wait_for_durable_running(handle.manifest_path, timeout=1.0, supervisor=handle.supervisor)
+        self.assertEqual(ready.launch_id, handle.launch_id)
+        self.assertIn(ready.lifecycle_state, {STATE_RUNNING, STATE_EXITED})
 
     def test_mcp_and_cli_reconcile_surface_structured_outcome(self):
         broker_a, task_id = self._start_durable("DURABLE_HANG")

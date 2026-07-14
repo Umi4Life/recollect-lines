@@ -97,7 +97,7 @@ class FixtureDurableAdapter:
             adapter_id=self.name,
             command=command,
         )
-        launch_record = wait_for_durable_running(durable.manifest_path)
+        launch_record = wait_for_durable_running(durable.manifest_path, supervisor=durable.supervisor)
         pid = launch_record.process["pid"]
         pgid = launch_record.process["pgid"]
         handle = DurableFixtureHandle(

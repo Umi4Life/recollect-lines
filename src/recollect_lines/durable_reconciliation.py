@@ -11,6 +11,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -341,16 +342,63 @@ def adopted_collect(handle: AdoptedDurableHandle) -> dict[str, Any]:
     }
 
 
-def wait_for_durable_running(manifest_path: Path, *, timeout: float = 10.0, interval: float = 0.05) -> DurableLaunchRecord:
+_TERMINAL_LAUNCH_STATES = frozenset({STATE_EXITED, STATE_TIMED_OUT, STATE_CANCELLED, STATE_FAILED})
+
+
+def _launch_proof_committed(record: DurableLaunchRecord) -> bool:
+    process = record.process
+    pid = process.get("pid")
+    pgid = process.get("pgid")
+    start_identity = process.get("start_identity")
+    return (
+        isinstance(pid, int)
+        and pid > 0
+        and isinstance(pgid, int)
+        and pgid > 0
+        and isinstance(start_identity, str)
+        and bool(start_identity.strip())
+    )
+
+
+def _durable_launch_ready(record: DurableLaunchRecord) -> bool:
+    if record.lifecycle_state == STATE_RUNNING:
+        return True
+    return record.lifecycle_state in _TERMINAL_LAUNCH_STATES and _launch_proof_committed(record)
+
+
+def wait_for_durable_running(
+    manifest_path: Path,
+    *,
+    timeout: float = 10.0,
+    interval: float = 0.05,
+    supervisor: subprocess.Popen[str] | None = None,
+) -> DurableLaunchRecord:
+    """Wait until the supervisor commits launch proof in the manifest.
+
+    Fast payloads may move running -> exited between polls; terminal manifests
+    with pid/pgid/start_identity are accepted once proof is durable on disk.
+    """
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
             record = load_launch_record(manifest_path)
-            if record.lifecycle_state == STATE_RUNNING:
+            if _durable_launch_ready(record):
                 return record
         except ValueError as error:
             last_error = error
+        if supervisor is not None and supervisor.poll() is not None:
+            try:
+                record = load_launch_record(manifest_path)
+            except ValueError as error:
+                last_error = error
+            else:
+                if _durable_launch_ready(record):
+                    return record
+                if record.lifecycle_state == STATE_LAUNCHING:
+                    raise TimeoutError(
+                        "durable launch supervisor exited without committing running proof",
+                    ) from last_error
         time.sleep(interval)
     if last_error is not None:
         raise TimeoutError(f"durable launch did not reach running state: {last_error}") from last_error
