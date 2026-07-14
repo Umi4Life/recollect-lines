@@ -18,6 +18,7 @@ dependency.
 - [`docs/phase-6c.md`](docs/phase-6c.md) — OpenAI-compatible provider fabric and direct HTTP runtime.
 - [`docs/phase-6d.md`](docs/phase-6d.md) — capability discovery, routing, bounded councils.
 - [`docs/phase-7a.md`](docs/phase-7a.md) — field readiness, doctor, examples, clean-install proof.
+- [`docs/phase-7b.md`](docs/phase-7b.md) — explicit integration-certification harness (dry-run default).
 - [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
 - `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
 
@@ -79,6 +80,18 @@ python3 scripts/clean_install_acceptance.py
 recollect-lines --home ~/.recollect doctor
 recollect-lines --home ~/.recollect --providers-config examples/litellm-openai-compatible/providers.json doctor --json
 ```
+
+## Integration certification (Phase 7B)
+
+Offline dry-run by default; explicit opt-in for live or fixture execution:
+
+```bash
+recollect-lines --home ~/.recollect \
+  --providers-config examples/litellm-openai-compatible/providers.json \
+  certify --profile openai_compatible --provider local_litellm --json
+```
+
+See [`docs/phase-7b.md`](docs/phase-7b.md) for live opt-in warnings, fixture certification, and evidence semantics.
 
 See [`docs/phase-7a.md`](docs/phase-7a.md) for migration from `recollect` → `recollect-lines`, example configs, and release checklist.
 

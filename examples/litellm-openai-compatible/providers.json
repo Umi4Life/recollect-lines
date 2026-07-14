@@ -13,7 +13,8 @@
         "structured_output": false,
         "streaming": false,
         "tool_calls": false
-      }
+      },
+      "estimated_cost_usd_upper_bound": 0.05
     }
   }
 }
