@@ -4,9 +4,10 @@
 
 Phase 6B adds a third heterogeneous runtime adapter — `CodexAdapter`, which
 supervises the real `codex` CLI in non-interactive mode (`codex exec`) —
-without changing any core broker lifecycle semantics. Phase 6B.5 (Cursor CLI),
-6C (provider fabric), and 6D (capability discovery/routing) remain planned,
-not implemented; see [PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
+without changing any core broker lifecycle semantics. Phase 6B.5 (Cursor CLI) is
+now implemented — see [phase-6b5.md](phase-6b5.md). Phase 6C (provider fabric),
+and 6D (capability discovery/routing) remain planned, not implemented; see
+[PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
 
 Runtime identity is reported honestly throughout: `"Codex via codex exec"`,
 never a generic model API — see `CodexAdapter.RUNTIME_DESCRIPTION` and every
@@ -110,4 +111,5 @@ one short read-only prompt), not continuous upstream compatibility testing.
   every other adapter.
 - **Durable re-attachment after a broker restart** remains unsupported; `reconcile()`
   applies to `codex` tasks via the same `subprocess_adapters` dispatch.
-- **Phase 6B.5 (Cursor CLI), 6C, and 6D remain planned, not implemented.**
+- **Phase 6C and 6D remain planned, not implemented.** Phase 6B.5 (Cursor CLI)
+  is implemented — see [phase-6b5.md](phase-6b5.md).

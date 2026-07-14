@@ -9,12 +9,13 @@ from pathlib import Path
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 FAKE_CLAUDE = Path(__file__).parent / "fixtures" / "fake_claude.py"
 FAKE_CODEX = Path(__file__).parent / "fixtures" / "fake_codex.py"
+FAKE_CURSOR = Path(__file__).parent / "fixtures" / "fake_cursor.py"
 
 
 class McpStdioClient:
     """Drives a real `python -m recollect_lines.mcp_server` subprocess over its stdio transport."""
 
-    def __init__(self, home: Path, claude_command: list | None = None, codex_command: list | None = None):
+    def __init__(self, home: Path, claude_command: list | None = None, codex_command: list | None = None, cursor_command: list | None = None):
         env = dict(os.environ)
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{SRC_DIR}{os.pathsep}{existing}" if existing else str(SRC_DIR)
@@ -23,6 +24,8 @@ class McpStdioClient:
             args += ["--claude-command", json.dumps(claude_command)]
         if codex_command is not None:
             args += ["--codex-command", json.dumps(codex_command)]
+        if cursor_command is not None:
+            args += ["--cursor-command", json.dumps(cursor_command)]
         self.process = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -322,13 +325,13 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(schemas["message"]["required"], ["task_id", "content"])
         self.assertNotIn("required", schemas["reconcile"])  # task_id is optional: omit to reconcile every pending task
 
-    def test_profile_schema_lists_codex_alongside_mock_opencode_and_claude_code(self):
+    def test_profile_schema_lists_cursor_alongside_mock_opencode_claude_code_and_codex(self):
         self.initialize()
         listed = self.client.request("tools/list")
         schemas = {tool["name"]: tool["inputSchema"] for tool in listed["result"]["tools"]}
         self.assertEqual(
             set(schemas["delegate"]["properties"]["profile"]["enum"]),
-            {"mock", "opencode", "claude_code", "codex"},
+            {"mock", "opencode", "claude_code", "codex", "cursor"},
         )
 
 
@@ -407,6 +410,42 @@ class CodexMcpSelectionTests(unittest.TestCase):
         self.assertFalse(collected["result"]["isError"])
         self.assertEqual(collected_payload["data"]["state"], "succeeded")
         self.assertEqual(collected_payload["data"]["runtime_result"]["runtime"]["adapter"], "codex")
+        self.assertIn("42", collected_payload["data"]["runtime_result"]["summary"])
+
+
+class CursorMcpSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+        self.client = McpStdioClient(self.home, cursor_command=[sys.executable, str(FAKE_CURSOR)])
+        self.initialize()
+
+    def tearDown(self):
+        self.client.close()
+        self.tempdir.cleanup()
+
+    def initialize(self):
+        return self.client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+
+    def test_delegate_with_cursor_profile_runs_the_adapter_and_collects_a_result(self):
+        delegated = self.client.call_tool("delegate", {
+            "task": "what is the magic number",
+            "workspace": str(self.workspace),
+            "execution_mode": "read_only",
+            "profile": "cursor",
+        })
+        payload = json.loads(delegated["result"]["content"][0]["text"])
+        self.assertFalse(delegated["result"]["isError"])
+        task_id = payload["data"]["task_id"]
+        self.assertEqual(payload["data"]["profile"], "cursor")
+
+        collected = self.client.call_tool("collect", {"task_id": task_id})
+        collected_payload = json.loads(collected["result"]["content"][0]["text"])
+        self.assertFalse(collected["result"]["isError"])
+        self.assertEqual(collected_payload["data"]["state"], "succeeded")
+        self.assertEqual(collected_payload["data"]["runtime_result"]["runtime"]["adapter"], "cursor")
         self.assertIn("42", collected_payload["data"]["runtime_result"]["summary"])
 
 

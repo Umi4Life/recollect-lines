@@ -39,10 +39,10 @@ CLI as the preferred initial pair. Phase 6A implements the Claude Code CLI
 adapter, so this codebase now has two adapters — OpenCode and Claude Code,
 both marked experimental — meeting that "at least two" boundary. A
 post-Phase-5C roadmap decision sequenced Codex CLI (Phase 6B) and Cursor
-CLI (Phase 6B.5) as further adapters, plus a separately scheduled plural
-OpenAI-compatible provider fabric (Phase 6C) and capability
-discovery/routing/bounded model-council patterns (Phase 6D) — none of
-6B/6B.5/6C/6D implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
+CLI (Phase 6B.5) as further adapters — both now implemented — plus a
+separately scheduled plural OpenAI-compatible provider fabric (Phase 6C) and
+capability discovery/routing/bounded model-council patterns (Phase 6D) — 6C/6D
+not implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
 [`docs/RFC-001.md`](docs/RFC-001.md) §8/§10, and
 [`docs/PHASE-5.md`](docs/PHASE-5.md) for the full capability accounting
 and roadmap.

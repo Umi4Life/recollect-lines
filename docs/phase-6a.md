@@ -403,11 +403,9 @@ of the adapter's own smoke evidence and are not repeated by CI.
 - **401/403/429 → `error_category` classification is inferred, not
   spike-observed** (see above) — a real auth/quota failure was not
   deliberately triggered.
-- **Phase 6B (Codex CLI), 6B.5 (Cursor CLI), 6C (provider fabric), and 6D
-  (capability discovery/routing) remain planned, not implemented** — see
-  [PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10. Recollect
-  Lines now has two heterogeneous runtime adapters (OpenCode, Claude Code)
-  where the PRD's MVP boundary asks for at least two — see
-  [PRD.md](PRD.md) §9/§10 for the updated acceptance-checklist status.
+- **Phase 6B (Codex CLI) and 6B.5 (Cursor CLI) are now implemented** — see
+  [phase-6b.md](phase-6b.md) and [phase-6b5.md](phase-6b5.md). Phase 6C
+  (provider fabric) and 6D (capability discovery/routing) remain planned, not
+  implemented — see [PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
 - **Windows is still unsupported** — POSIX process groups only, unchanged
   from every prior phase.
