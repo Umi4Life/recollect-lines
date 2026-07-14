@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import os
+import signal
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 from recollect_lines.discovery import discover_runtimes
@@ -35,7 +39,31 @@ from recollect_lines.service import Broker
 ROOT = Path(__file__).resolve().parent.parent
 FAKE_COMPAT = Path(__file__).parent / "fixtures" / "fake_compat_cli.py"
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
+HANG_ON_VERSION = Path(__file__).parent / "fixtures" / "hang_on_version.py"
+HANG_ON_HELP = Path(__file__).parent / "fixtures" / "hang_on_help.py"
 FIXTURE_EVIDENCE = Path(__file__).parent / "fixtures" / "phase_7c1_compat_evidence.json"
+
+
+def kill_launch_pgid(broker: Broker, task_id: str) -> None:
+    launch = broker.store.get_launch(task_id)
+    if not launch:
+        return
+    try:
+        os.killpg(launch["pgid"], signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        os.waitpid(launch["pid"], 0)
+    except ChildProcessError:
+        pass
+
+
+def kill_and_reap_popen(popen, pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    popen.wait(timeout=5)
 
 
 def fake_opencode_adapter() -> OpenCodeAdapter:
@@ -157,6 +185,23 @@ class CompatibilityEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence.declared_recovery_level, "observe_and_cancel")
         self.assertIn("Install the runtime CLI", evidence.remediation[0])
 
+    def test_probe_version_timeout_reaps_child(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResourceWarning)
+            probe = probe_version_help_only((sys.executable, str(HANG_ON_VERSION)), timeout=0.3)
+        self.assertFalse(probe["executable_available"])
+        self.assertEqual(probe["reason"], "version_check_timed_out")
+        gc.collect()
+
+    def test_probe_help_timeout_reaps_child(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResourceWarning)
+            probe = probe_version_help_only((sys.executable, str(HANG_ON_HELP)), timeout=0.3)
+        self.assertTrue(probe["executable_available"])
+        self.assertEqual(probe["reason"], "version_help_only")
+        self.assertIsNone(probe["help_fingerprint"])
+        gc.collect()
+
     def test_redaction_no_path_or_secret_leakage(self):
         probe = {
             "executable_available": True,
@@ -224,11 +269,15 @@ class DiscoveryDoctorMcpVisibilityTests(unittest.TestCase):
         from recollect_lines.models import TaskRequest, TaskState
 
         broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
+        record_id = None
+        sleep_handle = None
         try:
             record = broker.create(TaskRequest(
                 task="SLEEP", workspace=str(self.home), profile="opencode", execution_mode="read_only",
             ))
+            record_id = record.id
             broker.start(record.id)
+            sleep_handle = broker._process_handles.pop(record.id, None)
             home = self.home
             broker.close()
             broker2 = Broker(home, opencode_adapter=fake_opencode_adapter())
@@ -237,13 +286,12 @@ class DiscoveryDoctorMcpVisibilityTests(unittest.TestCase):
                 self.assertIn(reconciled.state, {TaskState.RECOVERY_REQUIRED, TaskState.FAILED, TaskState.CANCELLED})
                 self.assertNotEqual(reconciled.state, TaskState.SUCCEEDED)
             finally:
+                if record_id is not None:
+                    kill_launch_pgid(broker2, record_id)
                 broker2.close()
         finally:
-            if broker.store is not None:
-                try:
-                    broker.close()
-                except Exception:
-                    pass
+            if sleep_handle is not None:
+                kill_and_reap_popen(sleep_handle.popen, sleep_handle.pgid)
 
 if __name__ == "__main__":
     unittest.main()

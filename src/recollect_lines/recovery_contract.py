@@ -163,6 +163,65 @@ def offline_probe_conclusions(*, help_keyword_hits_found: tuple[str, ...]) -> di
     return conclusions
 
 
+def _close_proc_streams(proc: subprocess.Popen[str]) -> None:
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def _terminate_then_reap(proc: subprocess.Popen[str], *, grace: float = 0.5) -> None:
+    """Bounded child cleanup: SIGTERM, wait, then SIGKILL and wait."""
+    if proc.poll() is not None:
+        _close_proc_streams(proc)
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass  # ponytail: best-effort reap; regression test asserts no survivors
+    _close_proc_streams(proc)
+
+
+def _run_bounded_probe(
+    command: list[str],
+    *,
+    timeout: float,
+) -> tuple[int | None, str, str]:
+    """Run a local probe subprocess with deterministic wait/terminate/reap lifecycle."""
+    proc = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    timed_out = False
+    stdout = ""
+    stderr = ""
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        if timed_out or proc.poll() is None:
+            _terminate_then_reap(proc)
+        else:
+            _close_proc_streams(proc)
+    if timed_out:
+        return None, "", ""
+    return proc.returncode, stdout, stderr
+
+
 def offline_probe_remediation(*, executable_available: bool, help_keyword_hits_found: tuple[str, ...]) -> tuple[str, ...]:
     steps: list[str] = []
     if not executable_available:
@@ -191,8 +250,8 @@ def probe_version_help_only(command_prefix: tuple[str, ...], *, timeout: float =
     help_fingerprint: str | None = None
     keyword_hits: tuple[str, ...] = ()
     try:
-        version_completed = subprocess.run(
-            [*command_prefix, "--version"], capture_output=True, text=True, timeout=timeout,
+        returncode, version_stdout, version_stderr = _run_bounded_probe(
+            [*command_prefix, "--version"], timeout=timeout,
         )
     except FileNotFoundError:
         return {
@@ -202,7 +261,7 @@ def probe_version_help_only(command_prefix: tuple[str, ...], *, timeout: float =
             "help_keyword_hits": [],
             "help_fingerprint": None,
         }
-    except subprocess.TimeoutExpired:
+    if returncode is None:
         return {
             "executable_available": False,
             "reason": "version_check_timed_out",
@@ -210,27 +269,28 @@ def probe_version_help_only(command_prefix: tuple[str, ...], *, timeout: float =
             "help_keyword_hits": [],
             "help_fingerprint": None,
         }
-    if version_completed.returncode != 0:
+    if returncode != 0:
         return {
             "executable_available": False,
             "reason": "version_check_failed",
             "version_fingerprint": _sanitize_fingerprint(
-                (version_completed.stderr or version_completed.stdout or "").strip(),
+                (version_stderr or version_stdout or "").strip(),
             ) or None,
             "help_keyword_hits": [],
             "help_fingerprint": None,
         }
     version_fingerprint = _sanitize_fingerprint(
-        (version_completed.stdout or version_completed.stderr or "").strip(),
+        (version_stdout or version_stderr or "").strip(),
     )
     try:
-        help_completed = subprocess.run(
-            [*command_prefix, "--help"], capture_output=True, text=True, timeout=timeout,
+        help_returncode, help_stdout, help_stderr = _run_bounded_probe(
+            [*command_prefix, "--help"], timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        help_completed = None
-    if help_completed is not None and help_completed.returncode == 0:
-        help_text = (help_completed.stdout or help_completed.stderr or "")
+    except FileNotFoundError:
+        help_returncode = None
+        help_stdout = help_stderr = ""
+    if help_returncode == 0:
+        help_text = (help_stdout or help_stderr or "")
         keyword_hits = help_keyword_hits(help_text)
         help_fingerprint = help_text_fingerprint(help_text)
     return {
