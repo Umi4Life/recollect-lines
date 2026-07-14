@@ -47,6 +47,14 @@ class CouncilValidationError(ValueError):
     pass
 
 
+class CouncilCostBudgetError(CouncilValidationError):
+    """Nonzero cost budget cannot be measured or would be exceeded pre-dispatch."""
+
+    def __init__(self, rejection: dict[str, Any]):
+        self.rejection = rejection
+        super().__init__(rejection["message"])
+
+
 def _parse_bounds(raw: Any) -> CouncilBounds:
     if not isinstance(raw, dict):
         raise CouncilValidationError("bounds must be an object")
@@ -192,6 +200,135 @@ def _topological_waves(stages: list[CouncilStage]) -> list[list[CouncilStage]]:
     return waves
 
 
+def _stage_cost_upper_bound(broker: object, stage: CouncilStage) -> float | None:
+    if stage.profile != DIRECT_API_PROFILE:
+        return None
+    runtime = broker.direct_api_runtime
+    if runtime is None or stage.provider is None:
+        return None
+    try:
+        config = runtime.get_provider(stage.provider)
+    except Exception:
+        return None
+    return config.estimated_cost_usd_upper_bound
+
+
+def _resolve_cost_budget_enforcement(
+    broker: object,
+    stages: list[CouncilStage],
+    bounds: CouncilBounds,
+) -> dict[str, Any]:
+    if bounds.cost_budget_usd is None:
+        return {
+            "cost_budget_usd": None,
+            "cost_enforcement": "not_configured",
+            "estimated_cost_usd_upper_bound_total": None,
+            "stage_cost_estimates": [],
+        }
+
+    stage_estimates: list[dict[str, Any]] = []
+    unmeasurable: list[dict[str, Any]] = []
+    total_upper = 0.0
+    for stage in stages:
+        upper = _stage_cost_upper_bound(broker, stage)
+        if upper is None:
+            unmeasurable.append({
+                "stage_id": stage.id,
+                "profile": stage.profile,
+                "provider": stage.provider,
+                "reason": "no_configured_cost_upper_bound",
+            })
+            continue
+        stage_estimates.append({
+            "stage_id": stage.id,
+            "profile": stage.profile,
+            "provider": stage.provider,
+            "estimated_cost_usd_upper_bound": upper,
+        })
+        total_upper += upper
+
+    if unmeasurable:
+        raise CouncilCostBudgetError({
+            "code": "cost_budget_unmeasurable",
+            "message": (
+                "bounds.cost_budget_usd requires a configured estimated_cost_usd_upper_bound "
+                "for every stage candidate; broker does not invent runtime costs"
+            ),
+            "cost_budget_usd": bounds.cost_budget_usd,
+            "cost_enforcement": "rejected_unmeasurable",
+            "unmeasurable_stages": unmeasurable,
+            "stage_cost_estimates": stage_estimates,
+        })
+
+    if total_upper > bounds.cost_budget_usd:
+        raise CouncilCostBudgetError({
+            "code": "cost_budget_exceeded_pre_dispatch",
+            "message": (
+                f"configured stage cost upper bounds total {total_upper} exceeds "
+                f"bounds.cost_budget_usd {bounds.cost_budget_usd}"
+            ),
+            "cost_budget_usd": bounds.cost_budget_usd,
+            "cost_enforcement": "rejected_exceeds_budget",
+            "estimated_cost_usd_upper_bound_total": total_upper,
+            "stage_cost_estimates": stage_estimates,
+        })
+
+    return {
+        "cost_budget_usd": bounds.cost_budget_usd,
+        "cost_enforcement": "pre_dispatch_upper_bound",
+        "estimated_cost_usd_upper_bound_total": total_upper,
+        "stage_cost_estimates": stage_estimates,
+    }
+
+
+def _bounds_payload(bounds: CouncilBounds, cost_meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "max_rounds": bounds.max_rounds,
+        "max_concurrency": bounds.max_concurrency,
+        "time_budget_seconds": bounds.time_budget_seconds,
+        **cost_meta,
+    }
+
+
+def _record_council_rejection(
+    broker: object,
+    header: dict[str, Any],
+    stages: list[CouncilStage],
+    bounds: CouncilBounds,
+    rejection: dict[str, Any],
+) -> dict[str, Any]:
+    cost_meta = {
+        "cost_budget_usd": bounds.cost_budget_usd,
+        "cost_enforcement": rejection["cost_enforcement"],
+        "estimated_cost_usd_upper_bound_total": rejection.get("estimated_cost_usd_upper_bound_total"),
+        "stage_cost_estimates": rejection.get("stage_cost_estimates", []),
+    }
+    result = {
+        **header,
+        "bounds": _bounds_payload(bounds, cost_meta),
+        "stage_count": len(stages),
+        "stages": [stage.id for stage in stages],
+        "valid": False,
+        "status": "rejected",
+        "rejection": {
+            "code": rejection["code"],
+            "message": rejection["message"],
+            "unmeasurable_stages": rejection.get("unmeasurable_stages", []),
+        },
+        "stage_outcomes": [],
+        "skipped_stages": [],
+        "note": "Council rejected before dispatch; no stage tasks were started.",
+    }
+    artifact_dir = broker.store.artifacts / header["council_id"]
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    broker.store.write_artifact(
+        header["council_id"],
+        "council_evidence.json",
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+    )
+    return result
+
+
 def _validate_stage_candidates(broker: object, header: dict[str, Any], stage: CouncilStage) -> None:
     select_candidates(
         profiles=broker.profiles,
@@ -205,16 +342,15 @@ def _validate_stage_candidates(broker: object, header: dict[str, Any], stage: Co
     )
 
 
-def _validation_payload(header: dict[str, Any], stages: list[CouncilStage], bounds: CouncilBounds) -> dict[str, Any]:
+def _validation_payload(
+    header: dict[str, Any],
+    stages: list[CouncilStage],
+    bounds: CouncilBounds,
+    cost_meta: dict[str, Any],
+) -> dict[str, Any]:
     return {
         **header,
-        "bounds": {
-            "max_rounds": bounds.max_rounds,
-            "max_concurrency": bounds.max_concurrency,
-            "time_budget_seconds": bounds.time_budget_seconds,
-            "cost_budget_usd": bounds.cost_budget_usd,
-            "cost_enforcement": "recorded_only" if bounds.cost_budget_usd else "not_configured",
-        },
+        "bounds": _bounds_payload(bounds, cost_meta),
         "stage_count": len(stages),
         "stages": [stage.id for stage in stages],
         "valid": True,
@@ -222,7 +358,7 @@ def _validation_payload(header: dict[str, Any], stages: list[CouncilStage], boun
             "no_autonomous_winner_selection",
             "no_recursive_council_scheduling",
             "no_durable_reattachment",
-            "cost_budget_not_enforced_for_cli_or_mock_runtimes",
+            "runtime_costs_not_measured_without_configured_upper_bounds",
         ],
     }
 
@@ -231,7 +367,8 @@ def validate_council_plan(broker: object, raw: dict[str, Any]) -> dict[str, Any]
     header, stages, bounds = parse_council_plan(raw)
     for stage in stages:
         _validate_stage_candidates(broker, header, stage)
-    return _validation_payload(header, stages, bounds)
+    cost_meta = _resolve_cost_budget_enforcement(broker, stages, bounds)
+    return _validation_payload(header, stages, bounds, cost_meta)
 
 
 def _collect_stage_evidence(broker: object, task_id: str) -> dict[str, Any]:
@@ -299,7 +436,11 @@ def execute_council(broker: object, raw: dict[str, Any]) -> dict[str, Any]:
     header, stages, bounds = parse_council_plan(raw)
     for stage in stages:
         _validate_stage_candidates(broker, header, stage)
-    validation = _validation_payload(header, stages, bounds)
+    try:
+        cost_meta = _resolve_cost_budget_enforcement(broker, stages, bounds)
+    except CouncilCostBudgetError as error:
+        return _record_council_rejection(broker, header, stages, bounds, error.rejection)
+    validation = _validation_payload(header, stages, bounds, cost_meta)
     started = time.monotonic()
     stage_outcomes: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -350,9 +491,10 @@ def execute_council(broker: object, raw: dict[str, Any]) -> dict[str, Any]:
             "time_budget_seconds": bounds.time_budget_seconds,
             "elapsed_seconds": elapsed_total,
             "time_budget_exhausted": budget_exhausted,
-            "cost_budget_usd": bounds.cost_budget_usd,
+            "cost_budget_usd": cost_meta["cost_budget_usd"],
             "cost_observed_usd": None,
-            "cost_enforcement": "recorded_only",
+            "cost_enforcement": cost_meta["cost_enforcement"],
+            "estimated_cost_usd_upper_bound_total": cost_meta["estimated_cost_usd_upper_bound_total"],
         },
         "stage_outcomes": stage_outcomes,
         "skipped_stages": skipped,

@@ -76,6 +76,7 @@ class ProviderConfig:
     allow_insecure_http: bool
     ca_bundle: str | None
     capabilities: ProviderCapabilities
+    estimated_cost_usd_upper_bound: float | None = None
 
     def chat_completions_url(self) -> str:
         return f"{self.base_url.rstrip('/')}/chat/completions"
@@ -149,6 +150,13 @@ def _parse_provider_entry(name: str, raw: Any) -> ProviderConfig:
         raise ProviderConfigError(f"Provider {name!r}: ca_bundle must be a non-empty string when set")
     _validate_base_url(base_url, allow_insecure_http=allow_insecure_http)
     capabilities = ProviderCapabilities.from_mapping(raw.get("capabilities"))
+    estimated_cost = raw.get("estimated_cost_usd_upper_bound")
+    if estimated_cost is not None:
+        if not isinstance(estimated_cost, (int, float)) or isinstance(estimated_cost, bool) or estimated_cost <= 0:
+            raise ProviderConfigError(
+                f"Provider {name!r}: estimated_cost_usd_upper_bound must be a positive number when set"
+            )
+        estimated_cost = float(estimated_cost)
     return ProviderConfig(
         name=name,
         kind=kind,
@@ -160,6 +168,7 @@ def _parse_provider_entry(name: str, raw: Any) -> ProviderConfig:
         allow_insecure_http=allow_insecure_http,
         ca_bundle=ca_bundle.strip() if isinstance(ca_bundle, str) else None,
         capabilities=capabilities,
+        estimated_cost_usd_upper_bound=estimated_cost,
     )
 
 

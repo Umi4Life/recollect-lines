@@ -83,6 +83,9 @@ Parents supply a JSON plan (CLI `recollect council validate|execute`, MCP
 Validation (fail closed):
 
 - positive `max_rounds`, `max_concurrency`, `time_budget_seconds` within caps;
+- when `cost_budget_usd` is set, every stage must have a configured
+  `estimated_cost_usd_upper_bound` on its provider (direct API only today) and
+  the summed upper bound must not exceed the budget;
 - acyclic `depends_on`; unique stage ids; no self-critique when
   `forbid_self_critique` (same profile **and** provider as upstream);
 - each stage candidate must pass `select_candidates` availability checks;
@@ -93,8 +96,19 @@ Execution:
 - topological waves; batches respect `max_concurrency`;
 - `time_budget_seconds` stops further dispatch with `time_budget_exhausted`
   skips;
-- `cost_budget_usd` is **recorded only** — not enforced for CLI/mock runtimes
-  (honest limitation);
+- `cost_budget_usd` is **enforced or rejected before dispatch** — never
+  recorded while allowing unmeasured execution:
+  - **unset** → `cost_enforcement: not_configured` (no cost gate);
+  - **set with configured estimates** → each stage's `openai_compatible`
+    provider may declare `estimated_cost_usd_upper_bound` in
+    `--providers-config`; the broker sums configured upper bounds and rejects
+    when the total exceeds `cost_budget_usd` (`pre_dispatch_upper_bound`);
+  - **set without estimates for every stage** → fail closed with
+    `rejected_unmeasurable` (CLI/mock/subprocess stages have no broker-known
+    cost unless explicitly configured on the provider entry). The broker does
+    **not** invent token counts, vendor pricing, or runtime-reported spend;
+- rejection is structured, redacted, and written to `council_evidence.json`
+  before any stage task is created;
 - stages use `create` → `start` → `complete` (mock) or `collect` (subprocess /
   direct API);
 - durable `council_evidence.json` under `artifacts/<council_id>/`;
@@ -123,7 +137,7 @@ Existing delegate/status/collect tools are unchanged.
 | Area | Module |
 |---|---|
 | Discovery, redaction, selection, fail-closed | `tests/test_phase_6d.py` |
-| Council validation (cycles, self-critique, bounds) | `tests/test_phase_6d.py` |
+| Council validation (cycles, self-critique, bounds, cost budget) | `tests/test_phase_6d.py` |
 | Council execution, time budget, evidence artifact | `tests/test_phase_6d.py` |
 | Subprocess lifecycle via fake opencode | `tests/test_phase_6d.py` |
 | MCP tool registration | `tests/test_phase_6d.py`, `tests/test_mcp_server.py` |

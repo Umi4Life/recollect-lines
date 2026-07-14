@@ -7,7 +7,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from recollect_lines.council import CouncilValidationError, execute_council, parse_council_plan, validate_council_plan
+from recollect_lines.council import (
+    CouncilCostBudgetError,
+    CouncilValidationError,
+    execute_council,
+    parse_council_plan,
+    validate_council_plan,
+)
 from recollect_lines.discovery import discover_providers, discover_runtimes, select_candidates
 from recollect_lines.models import DEFAULT_PROFILES, TaskRequest
 from recollect_lines.providers import validate_providers_document
@@ -155,7 +161,7 @@ class CouncilExecutionTests(unittest.TestCase):
             "workspace": "/repo",
             "execution_mode": "read_only",
             "acceptance_criteria": "Parent compares independent plans and decides.",
-            "bounds": {"max_rounds": 1, "max_concurrency": 2, "time_budget_seconds": 120, "cost_budget_usd": 1.0},
+            "bounds": {"max_rounds": 1, "max_concurrency": 2, "time_budget_seconds": 120},
             "stages": [
                 {"id": "plan_a", "role": "plan", "profile": "mock", "task": "Independent plan A"},
                 {"id": "plan_b", "role": "plan", "profile": "mock", "task": "Independent plan B"},
@@ -163,6 +169,69 @@ class CouncilExecutionTests(unittest.TestCase):
         }
         plan.update(overrides)
         return plan
+
+    def test_rejects_nonzero_cost_budget_without_configured_estimates(self):
+        plan = self._plan(bounds={"max_rounds": 1, "max_concurrency": 2, "time_budget_seconds": 120, "cost_budget_usd": 1.0})
+        with self.assertRaises(CouncilCostBudgetError) as ctx:
+            validate_council_plan(self.broker, plan)
+        self.assertEqual(ctx.exception.rejection["code"], "cost_budget_unmeasurable")
+        self.assertEqual(len(ctx.exception.rejection["unmeasurable_stages"]), 2)
+
+        result = execute_council(self.broker, plan)
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["rejection"]["code"], "cost_budget_unmeasurable")
+        self.assertEqual(result["stage_outcomes"], [])
+        self.assertEqual(list(self.broker.store.list()), [])
+        evidence_path = self.home / "artifacts" / result["council_id"] / "council_evidence.json"
+        self.assertTrue(evidence_path.is_file())
+        stored = json.loads(evidence_path.read_text())
+        self.assertEqual(stored["bounds"]["cost_enforcement"], "rejected_unmeasurable")
+
+    def test_accepts_unset_cost_budget(self):
+        validation = validate_council_plan(self.broker, self._plan())
+        self.assertEqual(validation["bounds"]["cost_enforcement"], "not_configured")
+        result = execute_council(self.broker, self._plan())
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["bounds"]["cost_enforcement"], "not_configured")
+
+    def test_enforces_cost_budget_with_configured_provider_estimates(self):
+        config_path = Path(self.tempdir.name) / "providers.json"
+        config_path.write_text(json.dumps({
+            "providers": {
+                "local": {
+                    "kind": "openai-compatible",
+                    "base_url": "http://127.0.0.1:8765/v1",
+                    "api_key_env": "LOCAL_KEY",
+                    "default_model": "m",
+                    "allow_insecure_http": True,
+                    "estimated_cost_usd_upper_bound": 0.25,
+                }
+            }
+        }) + "\n")
+        broker = Broker(self.home, providers_config=config_path, environ={"LOCAL_KEY": "secret"})
+        try:
+            plan = {
+                "workspace": "/repo",
+                "execution_mode": "read_only",
+                "acceptance_criteria": "Parent judges",
+                "bounds": {"max_rounds": 1, "max_concurrency": 2, "time_budget_seconds": 120, "cost_budget_usd": 1.0},
+                "stages": [
+                    {"id": "a", "role": "plan", "profile": "openai_compatible", "provider": "local", "task": "A"},
+                    {"id": "b", "role": "plan", "profile": "openai_compatible", "provider": "local", "task": "B"},
+                ],
+            }
+            validation = validate_council_plan(broker, plan)
+            self.assertEqual(validation["bounds"]["cost_enforcement"], "pre_dispatch_upper_bound")
+            self.assertEqual(validation["bounds"]["estimated_cost_usd_upper_bound_total"], 0.5)
+
+            over_budget = dict(plan)
+            over_budget["bounds"] = dict(plan["bounds"])
+            over_budget["bounds"]["cost_budget_usd"] = 0.4
+            with self.assertRaises(CouncilCostBudgetError) as ctx:
+                validate_council_plan(broker, over_budget)
+            self.assertEqual(ctx.exception.rejection["code"], "cost_budget_exceeded_pre_dispatch")
+        finally:
+            broker.close()
 
     def test_execute_records_stage_evidence_without_winner(self):
         result = execute_council(self.broker, self._plan())
