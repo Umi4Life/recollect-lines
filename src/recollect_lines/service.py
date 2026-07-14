@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
+from .recovery_contract import SYNTHETIC_RECOVERY_CONTROL
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
@@ -40,6 +41,7 @@ class MockAdapter:
         requires_subprocess=False,
         supports_process_group_cancellation=False,
         reports_broker_verified_tests=False,
+        recovery_control=SYNTHETIC_RECOVERY_CONTROL,
     )
 
     def start_metadata(self, record: TaskRecord, workspace: str) -> dict[str, str]:
@@ -863,62 +865,11 @@ class Broker:
 
     def discover_capabilities(self) -> dict:
         from .discovery import discover_providers, discover_runtimes
+        from .recovery_contract import RECOVERY_CONTRACT_SCHEMA_VERSION
 
         environ = self._environ if self._environ is not None else os.environ
         return {
-            "runtimes": discover_runtimes(
-                profiles=self.profiles,
-                subprocess_adapters=self.subprocess_adapters,
-                mock_adapter=self.adapter,
-                direct_api_runtime=self.direct_api_runtime,
-            ),
-            "providers": discover_providers(
-                direct_api_runtime=self.direct_api_runtime,
-                environ=environ,
-            ),
-        }
-
-    def select_candidates(
-        self,
-        *,
-        execution_mode: str,
-        required_runtime_capabilities: dict[str, bool] | None = None,
-        required_provider_capabilities: dict[str, bool] | None = None,
-        allowed_runtimes: list[str] | None = None,
-        allowed_providers: list[str] | None = None,
-        require_available: bool = True,
-    ) -> dict:
-        from .discovery import select_candidates as _select_candidates
-
-        environ = self._environ if self._environ is not None else os.environ
-        return _select_candidates(
-            profiles=self.profiles,
-            subprocess_adapters=self.subprocess_adapters,
-            direct_api_runtime=self.direct_api_runtime,
-            environ=environ,
-            execution_mode=execution_mode,
-            required_runtime_capabilities=required_runtime_capabilities,
-            required_provider_capabilities=required_provider_capabilities,
-            allowed_runtimes=allowed_runtimes,
-            allowed_providers=allowed_providers,
-            require_available=require_available,
-        )
-
-    def validate_council(self, plan: dict) -> dict:
-        from .council import validate_council_plan
-
-        return validate_council_plan(self, plan)
-
-    def execute_council(self, plan: dict) -> dict:
-        from .council import execute_council as _execute_council
-
-        return _execute_council(self, plan)
-
-    def discover_capabilities(self) -> dict:
-        from .discovery import discover_providers, discover_runtimes
-
-        environ = self._environ if self._environ is not None else os.environ
-        return {
+            "recovery_contract_schema_version": RECOVERY_CONTRACT_SCHEMA_VERSION,
             "runtimes": discover_runtimes(
                 profiles=self.profiles,
                 subprocess_adapters=self.subprocess_adapters,

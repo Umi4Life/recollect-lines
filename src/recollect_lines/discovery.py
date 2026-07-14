@@ -16,6 +16,13 @@ from .adapters import AdapterCapabilities
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .models import DEFAULT_PROFILES, ProfilePolicy
 from .providers import MissingCredentialReference, ProviderCapabilities, resolve_api_key
+from .recovery_contract import (
+    DIRECT_API_RECOVERY_CONTROL,
+    SYNTHETIC_RECOVERY_CONTROL,
+    build_compatibility_evidence,
+    probe_version_help_only,
+    recovery_control_discovery_payload,
+)
 
 MOCK_PROFILE = "mock"
 SUBPROCESS_LIMITATIONS = (
@@ -100,6 +107,36 @@ def _provider_declared_capabilities(caps: ProviderCapabilities) -> dict[str, boo
     }
 
 
+def _recovery_control_for_runtime(
+    *,
+    contract,
+    adapter: object | None,
+    profile_name: str,
+    runtime_kind: str,
+    include_compatibility_evidence: bool,
+) -> dict[str, Any]:
+    observed_local: dict[str, Any] | None = None
+    compatibility_evidence = None
+    if adapter is not None:
+        observed_local = _observed_adapter_availability(adapter)
+        command_prefix = getattr(adapter, "command_prefix", None)
+        if include_compatibility_evidence and isinstance(command_prefix, tuple):
+            probe = probe_version_help_only(command_prefix)
+            if observed_local.get("available") is True and probe.get("version_fingerprint") is None:
+                probe["version_fingerprint"] = observed_local.get("version")
+            compatibility_evidence = build_compatibility_evidence(
+                adapter_id=getattr(adapter, "name", profile_name),
+                runtime_kind=runtime_kind,
+                contract=contract,
+                probe=probe,
+            )
+    return recovery_control_discovery_payload(
+        contract,
+        observed_local=observed_local,
+        compatibility_evidence=compatibility_evidence,
+    )
+
+
 def _observed_adapter_availability(adapter: object) -> dict[str, Any]:
     probe = getattr(adapter, "check_availability", None)
     if callable(probe):
@@ -130,6 +167,7 @@ def discover_runtimes(
     subprocess_adapters: dict[str, object],
     mock_adapter: object,
     direct_api_runtime: OpenAiCompatibleDirectRuntime | None,
+    include_compatibility_evidence: bool = True,
 ) -> list[dict[str, Any]]:
     """Machine-readable inventory of registered runtime profiles."""
     entries: list[dict[str, Any]] = []
@@ -142,6 +180,7 @@ def discover_runtimes(
                 "execution_modes": sorted(policy.allowed_modes),
                 "declared_capabilities": _mock_declared_capabilities(policy),
                 "observed_availability": {"available": True, "reason": "synthetic_fixture"},
+                "recovery_control": recovery_control_discovery_payload(SYNTHETIC_RECOVERY_CONTROL),
                 "policy": {
                     "max_timeout_seconds": policy.max_timeout_seconds,
                     "max_concurrency": policy.max_concurrency,
@@ -150,7 +189,10 @@ def discover_runtimes(
             })
             continue
         if profile_name == DIRECT_API_PROFILE:
-            caps = direct_api_runtime.capabilities if direct_api_runtime else AdapterCapabilities(False, False, False)
+            caps = direct_api_runtime.capabilities if direct_api_runtime else AdapterCapabilities(
+                False, False, False, DIRECT_API_RECOVERY_CONTROL,
+            )
+            contract = caps.recovery_control
             entries.append({
                 "name": profile_name,
                 "kind": "direct_api",
@@ -160,6 +202,13 @@ def discover_runtimes(
                     "available": direct_api_runtime is not None,
                     "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
                 },
+                "recovery_control": recovery_control_discovery_payload(
+                    contract,
+                    observed_local={
+                        "available": direct_api_runtime is not None,
+                        "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
+                    },
+                ),
                 "policy": {
                     "max_timeout_seconds": policy.max_timeout_seconds,
                     "max_concurrency": policy.max_concurrency,
@@ -179,6 +228,13 @@ def discover_runtimes(
             "execution_modes": sorted(policy.allowed_modes),
             "declared_capabilities": _subprocess_declared_capabilities(policy, adapter.capabilities),
             "observed_availability": _observed_adapter_availability(adapter),
+            "recovery_control": _recovery_control_for_runtime(
+                contract=adapter.capabilities.recovery_control,
+                adapter=adapter,
+                profile_name=profile_name,
+                runtime_kind="subprocess_cli",
+                include_compatibility_evidence=include_compatibility_evidence,
+            ),
             "policy": {
                 "max_timeout_seconds": policy.max_timeout_seconds,
                 "max_concurrency": policy.max_concurrency,
@@ -207,6 +263,7 @@ def discover_providers(
             "endpoint_summary": _endpoint_summary(config.base_url),
             "declared_capabilities": _provider_declared_capabilities(config.capabilities),
             "observed_availability": _observed_provider_availability(direct_api_runtime, name, environ),
+            "recovery_control": recovery_control_discovery_payload(DIRECT_API_RECOVERY_CONTROL),
             "request_timeout_seconds": config.request_timeout_seconds,
             "limitations": list(DIRECT_API_LIMITATIONS),
         })

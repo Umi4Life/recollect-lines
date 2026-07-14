@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .adapters import AdapterCapabilities
 from .models import TaskRecord
+from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 
 DEFAULT_COMMAND_PREFIX = ("npx", "--yes", "opencode-ai@1.17.18")
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
@@ -127,6 +128,7 @@ class OpenCodeAdapter:
         requires_subprocess=True,
         supports_process_group_cancellation=True,
         reports_broker_verified_tests=False,
+        recovery_control=SUBPROCESS_CLI_RECOVERY_CONTROL,
     )
 
     def __init__(self, command_prefix=DEFAULT_COMMAND_PREFIX, grace_period_seconds: float = DEFAULT_GRACE_PERIOD_SECONDS):

@@ -24,6 +24,7 @@ from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntim
 from .models import DEFAULT_PROFILES
 from .opencode_adapter import OpenCodeAdapter
 from .providers import MissingCredentialReference, ProviderConfigError, load_providers_config, resolve_api_key
+from .recovery_contract import ControlAction, RecoveryLevel
 from .service import Broker
 
 _ADAPTER_COMMAND_FLAGS = {
@@ -315,6 +316,7 @@ def _check_inventory_consistency(broker: Broker, environ: dict[str, str]) -> lis
         subprocess_adapters=broker.subprocess_adapters,
         mock_adapter=broker.adapter,
         direct_api_runtime=broker.direct_api_runtime,
+        include_compatibility_evidence=False,
     )
     providers = discover_providers(
         direct_api_runtime=broker.direct_api_runtime,
@@ -344,6 +346,80 @@ def _check_inventory_consistency(broker: Broker, environ: dict[str, str]) -> lis
                 remediation="Report as a packaging bug; DEFAULT_PROFILES and discovery are out of sync.",
                 details={"profile": expected},
             ))
+    for entry in runtimes:
+        recovery = entry.get("recovery_control")
+        if not isinstance(recovery, dict) or "declared" not in recovery:
+            findings.append(_finding(
+                "RECOVERY_CONTRACT_MISSING",
+                severity="error",
+                status="error",
+                message=f"Runtime {entry['name']!r} is missing recovery_control contract",
+                remediation="Report as a packaging bug; discovery must expose declared recovery/control.",
+                details={"profile": entry["name"]},
+            ))
+            continue
+        declared = recovery["declared"]
+        level = declared.get("recovery_level")
+        if level not in {item.value for item in RecoveryLevel}:
+            findings.append(_finding(
+                "RECOVERY_CONTRACT_INVALID",
+                severity="error",
+                status="error",
+                message=f"Runtime {entry['name']!r} has invalid recovery_level {level!r}",
+                details={"profile": entry["name"], "recovery_level": level},
+            ))
+        if ControlAction.MESSAGE.value not in declared.get("unsupported_control_actions", []):
+            findings.append(_finding(
+                "RECOVERY_CONTRACT_MESSAGE_NOT_EXCLUDED",
+                severity="error",
+                status="error",
+                message=f"Runtime {entry['name']!r} must declare message control unsupported",
+                details={"profile": entry["name"]},
+            ))
+        if recovery.get("provider_native_session_resume") != "unproven":
+            findings.append(_finding(
+                "RECOVERY_CONTRACT_OVERCLAIM",
+                severity="error",
+                status="error",
+                message=f"Runtime {entry['name']!r} must not claim provider-native session resume without proof",
+                details={"profile": entry["name"]},
+            ))
+        availability = entry.get("observed_availability", {})
+        if availability.get("available") is False:
+            findings.append(_finding(
+                "RECOVERY_OBSERVED_LOCAL_UNAVAILABLE",
+                severity="warning",
+                status="warning",
+                message=(
+                    f"Runtime {entry['name']!r} CLI is not available on this host "
+                    f"({availability.get('reason', 'unavailable')}) — local observation only"
+                ),
+                remediation=(
+                    "Install the CLI on PATH or override the adapter command flag. "
+                    "This is not a global capability verdict."
+                ),
+                details={
+                    "profile": entry["name"],
+                    "observed_reason": availability.get("reason"),
+                    "declared_recovery_level": level,
+                },
+            ))
+    findings.append(_finding(
+        "RECOVERY_CONTRACT_INVENTORY",
+        severity="info",
+        status="ok",
+        message="Declared recovery/control contracts surfaced for all runtimes",
+        details={
+            "runtime_contracts": {
+                entry["name"]: entry.get("recovery_control", {}).get("declared")
+                for entry in runtimes
+            },
+            "note": (
+                "Declared recovery/control differs from observed local executable availability "
+                "and from unproven provider-native resume behavior."
+            ),
+        },
+    ))
     return findings
 
 

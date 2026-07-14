@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from .recovery_contract import RecoveryControlContract
+
 
 @dataclass(frozen=True)
 class AdapterCapabilities:
     requires_subprocess: bool
     supports_process_group_cancellation: bool
     reports_broker_verified_tests: bool
+    recovery_control: RecoveryControlContract
 
 
 @runtime_checkable

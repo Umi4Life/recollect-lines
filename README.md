@@ -19,6 +19,7 @@ dependency.
 - [`docs/phase-6d.md`](docs/phase-6d.md) — capability discovery, routing, bounded councils.
 - [`docs/phase-7a.md`](docs/phase-7a.md) — field readiness, doctor, examples, clean-install proof.
 - [`docs/phase-7b.md`](docs/phase-7b.md) — explicit integration-certification harness (dry-run default).
+- [`docs/phase-7c-rfc.md`](docs/phase-7c-rfc.md) — recovery/control contract and compatibility evidence (Phase 7C.1).
 - [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
 - `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
 
@@ -92,6 +93,17 @@ recollect-lines --home ~/.recollect \
 ```
 
 See [`docs/phase-7b.md`](docs/phase-7b.md) for live opt-in warnings, fixture certification, and evidence semantics.
+
+## Recovery/control contract (Phase 7C.1)
+
+Declared recovery levels and control actions are exposed via discovery, doctor, and MCP `discover_capabilities`. Help-text `resume` keywords are recorded as compatibility evidence only — never as `session_resume` capability.
+
+```bash
+recollect-lines --home ~/.recollect discover --json | jq '.runtimes[] | {name, recovery_control}'
+recollect-lines --home ~/.recollect doctor --json | jq '.findings[] | select(.code|startswith("RECOVERY_"))'
+```
+
+See [`docs/phase-7c-rfc.md`](docs/phase-7c-rfc.md) for vocabulary, safety proof requirements, and the compatibility matrix.
 
 See [`docs/phase-7a.md`](docs/phase-7a.md) for migration from `recollect` → `recollect-lines`, example configs, and release checklist.
 
