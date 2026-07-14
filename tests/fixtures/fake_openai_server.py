@@ -24,6 +24,7 @@ def _chat_response(content: str, model: str = "fake-model") -> dict:
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "FakeOpenAI/1.0"
+    protocol_version = "HTTP/1.0"
     _DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError)
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
@@ -126,6 +127,7 @@ class FakeOpenAiServer:
     def stop(self) -> None:
         self._httpd.shutdown()
         self._thread.join(timeout=5)
+        self._httpd.server_close()
 
 
 def provider_document(base_url: str, name: str = "local", api_key_env: str = "TEST_OPENAI_API_KEY", **overrides) -> dict:

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -119,6 +120,23 @@ class ProviderConfigTests(unittest.TestCase):
         redacted = redact_provider_error(message, secret)
         self.assertNotIn(secret, redacted)
         self.assertIn("***REDACTED***", redacted)
+
+
+class FakeOpenAiServerLifecycleTests(unittest.TestCase):
+    def test_stop_closes_listening_socket_without_resource_warning(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            server = FakeOpenAiServer()
+            server.start()
+            server.stop()
+        socket_leaks = [
+            warning
+            for warning in caught
+            if issubclass(warning.category, ResourceWarning)
+            and "unclosed" in str(warning.message).lower()
+            and "socket" in str(warning.message).lower()
+        ]
+        self.assertEqual(socket_leaks, [])
 
 
 class DirectApiBrokerTests(unittest.TestCase):
