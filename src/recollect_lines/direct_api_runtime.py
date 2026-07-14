@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import AdapterCapabilities
+from .recovery_contract import DIRECT_API_RECOVERY_CONTROL
 from .models import TaskRecord
 from .providers import (
     MissingCredentialReference,
@@ -52,6 +53,7 @@ class OpenAiCompatibleDirectRuntime:
         requires_subprocess=False,
         supports_process_group_cancellation=False,
         reports_broker_verified_tests=False,
+        recovery_control=DIRECT_API_RECOVERY_CONTROL,
     )
 
     def __init__(self, providers: dict[str, ProviderConfig], environ: dict[str, str] | None = None):

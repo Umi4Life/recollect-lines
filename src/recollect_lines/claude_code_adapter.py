@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
+from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
 
@@ -125,6 +126,7 @@ class ClaudeCodeAdapter:
         # No in-flight steering channel exists (see mcp_server.handle_message);
         # live `message` steering is unimplemented and unclaimed.
         reports_broker_verified_tests=False,
+        recovery_control=SUBPROCESS_CLI_RECOVERY_CONTROL,
     )
 
     def __init__(
