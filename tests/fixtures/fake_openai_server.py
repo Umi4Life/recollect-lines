@@ -24,15 +24,29 @@ def _chat_response(content: str, model: str = "fake-model") -> dict:
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "FakeOpenAI/1.0"
+    _DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError)
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
+
+    def _safe_write(self, data: bytes) -> bool:
+        try:
+            self.wfile.write(data)
+            return True
+        except self._DISCONNECT_ERRORS:
+            return False
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except self._DISCONNECT_ERRORS:
+            pass
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path not in ("/v1/chat/completions", "/chat/completions"):
             self.send_response(404)
             self.end_headers()
-            self.wfile.write(b'{"error":{"message":"not found"}}')
+            self._safe_write(b'{"error":{"message":"not found"}}')
             return
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length)
@@ -41,7 +55,7 @@ class _Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.send_response(400)
             self.end_headers()
-            self.wfile.write(b"not json")
+            self._safe_write(b"not json")
             return
         messages = payload.get("messages") or []
         prompt = ""
@@ -52,47 +66,47 @@ class _Handler(BaseHTTPRequestHandler):
         if "MISSING_AUTH" in prompt:
             self.send_response(401)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": {"message": "invalid api key"}}).encode())
+            self._safe_write(json.dumps({"error": {"message": "invalid api key"}}).encode())
             return
         if not auth.startswith("Bearer "):
             self.send_response(401)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": {"message": "missing bearer token"}}).encode())
+            self._safe_write(json.dumps({"error": {"message": "missing bearer token"}}).encode())
             return
 
         if "RATE_LIMIT" in prompt:
             self.send_response(429)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": {"message": "rate limit exceeded"}}).encode())
+            self._safe_write(json.dumps({"error": {"message": "rate limit exceeded"}}).encode())
             return
         if "SERVER_ERROR" in prompt:
             self.send_response(500)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": {"message": "internal server error"}}).encode())
+            self._safe_write(json.dumps({"error": {"message": "internal server error"}}).encode())
             return
         if "MALFORMED_BODY" in prompt:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"{not valid completion json")
+            self._safe_write(b"{not valid completion json")
             return
         if "SLOW" in prompt:
             time.sleep(3)
             body = json.dumps(_chat_response("slow but done")).encode()
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(body)
             return
         if "SECRET_LEAK" in prompt:
             body = json.dumps(_chat_response("token sk-testsecret1234567890 leaked")).encode()
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(body)
             return
 
         body = json.dumps(_chat_response(f"answer for: {prompt}")).encode()
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(body)
+        self._safe_write(body)
 
 
 class FakeOpenAiServer:

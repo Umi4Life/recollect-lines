@@ -1,9 +1,12 @@
 import json
 import importlib.util
+import io
 import os
+import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from recollect_lines.models import TaskRequest, TaskState
@@ -23,6 +26,17 @@ _fake = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_fake)
 FakeOpenAiServer = _fake.FakeOpenAiServer
 provider_document = _fake.provider_document
+
+
+@contextmanager
+def _capture_stderr():
+    prior = sys.stderr
+    buf = io.StringIO()
+    sys.stderr = buf
+    try:
+        yield buf
+    finally:
+        sys.stderr = prior
 
 
 class ProviderConfigTests(unittest.TestCase):
@@ -192,6 +206,24 @@ class DirectApiBrokerTests(unittest.TestCase):
             time.sleep(0.05)
             cancelled = broker.cancel(record.id, "stop")
             self.assertIn(cancelled.state, {TaskState.CANCELLED, TaskState.FAILED})
+        finally:
+            broker.close()
+
+    def test_cancel_slow_request_does_not_emit_server_traceback(self):
+        doc = provider_document(self.server.base_url, request_timeout_seconds=30)
+        path = Path(self.tempdir.name) / "cancel-stderr-providers.json"
+        path.write_text(json.dumps(doc) + "\n")
+        broker = Broker(self.home / "cancel-stderr", providers_config=path, environ=self.env)
+        try:
+            with _capture_stderr() as captured:
+                record = broker.create(TaskRequest("SLOW cancel me", "/repo", profile="openai_compatible", provider="local"))
+                broker.start(record.id)
+                time.sleep(0.05)
+                broker.cancel(record.id, "stop")
+                time.sleep(3.2)
+            noise = captured.getvalue()
+            self.assertNotIn("Traceback", noise)
+            self.assertNotIn("BrokenPipeError", noise)
         finally:
             broker.close()
 
