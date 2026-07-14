@@ -5,8 +5,8 @@
 Phase 6C adds a **plural, configuration-driven provider layer** and a
 **deliberately capability-limited direct HTTP runtime** for OpenAI-compatible
 chat-completions endpoints. It does not change subprocess adapter semantics
-(OpenCode, Claude Code, Codex, Cursor) and does not implement Phase 6D routing,
-capability discovery, or model-council patterns.
+(OpenCode, Claude Code, Codex, Cursor). Phase 6D (discovery, routing, bounded
+councils) is documented separately in [phase-6d.md](phase-6d.md).
 
 Provider configuration entries describe model endpoints. They are **not**
 runtime adapters: they never grant agent tools, worktree access, process-group
@@ -110,10 +110,10 @@ No real provider smoke was run in CI — no preconfigured non-secret remote
 endpoint was available in this environment. Deterministic local fixture evidence
 is the acceptance standard for this phase.
 
-## Non-goals (unchanged)
+## Non-goals (at Phase 6C delivery time)
 
 - Phase 6D routing, capability discovery, policy-aware provider selection, or
-  bounded council orchestration.
+  bounded council orchestration (since delivered in [phase-6d.md](phase-6d.md)).
 - Vendor-specific branching (DeepSeek/Qwen/OpenAI/etc.) in source — only named
   configuration entries.
 - Claiming CLI-runtime capabilities (worktrees, tools, streaming events) for a

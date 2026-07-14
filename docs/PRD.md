@@ -262,8 +262,9 @@ scoped, not oversights:
   `cursor-agent --print` CLI) — see [phase-6b5.md](phase-6b5.md). Phase 6C
   implemented the plural OpenAI-compatible provider configuration layer and a
   capability-limited direct HTTP runtime (`openai_compatible` profile) —
-  see [phase-6c.md](phase-6c.md). Phase 6D remains unimplemented — see
-  [RFC-001](RFC-001.md) §10.
+  see [phase-6c.md](phase-6c.md). Phase 6D implemented capability discovery,
+  parent-directed selection, and bounded council graphs — see
+  [phase-6d.md](phase-6d.md) and [RFC-001](RFC-001.md) §10.5.
 - **Plural model-provider support is a distinct, separately scheduled
   gap**: today nothing in this codebase talks to a model provider
   directly — adapters supervise a CLI, which itself owns provider/auth
@@ -273,8 +274,8 @@ scoped, not oversights:
   policy-aware routing, and bounded parent-directed model-council usage
   patterns (§3.1) scheduled as Phase 6D — see [RFC-001](RFC-001.md) §10.
   Phase 6C implemented named provider configuration and the direct
-  `openai_compatible` runtime ([phase-6c.md](phase-6c.md)). Phase 6D is not
-  implemented yet.
+  `openai_compatible` runtime ([phase-6c.md](phase-6c.md)). Phase 6D implemented
+  discovery, policy-aware routing, and bounded councils ([phase-6d.md](phase-6d.md)).
 
 ## 10. Acceptance checklist
 
