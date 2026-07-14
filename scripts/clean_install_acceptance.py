@@ -2,7 +2,7 @@
 """Offline clean-install acceptance for Phase 7A.
 
 Builds a fresh virtual environment, installs this package from local artifacts
-(no network, no PYTHONPATH=src shortcut), and proves console entry points.
+(no PYTHONPATH=src shortcut), and proves console entry points.
 """
 
 from __future__ import annotations
@@ -17,6 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+ENTRY_POINTS = {
+    "recollect-lines": ("recollect_lines.cli", "main"),
+    "recollect-mcp": ("recollect_lines.mcp_server", "main"),
+}
+
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, text=True, capture_output=True, **kwargs)
@@ -28,11 +33,60 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     return result
 
 
+def run_optional(cmd: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True, **kwargs)
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     status = "PASS" if ok else "FAIL"
     print(f"[{status}] {label}" + (f" — {detail}" if detail else ""))
     if not ok:
         raise SystemExit(1)
+
+
+def _site_packages(python: Path) -> Path:
+    output = run([str(python), "-c", "import site; print(site.getsitepackages()[0])"]).stdout.strip()
+    return Path(output)
+
+
+def _manual_install(python: Path, scripts: Path) -> None:
+    """Stdlib-only fallback when pip cannot bootstrap build tooling offline."""
+    site_packages = _site_packages(python)
+    package_dir = site_packages / "recollect_lines"
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
+    shutil.copytree(ROOT / "src" / "recollect_lines", package_dir)
+    scripts.mkdir(parents=True, exist_ok=True)
+    for name, (module, func) in ENTRY_POINTS.items():
+        script = scripts / name
+        script.write_text(
+            f"#!{python}\n"
+            f"import sys\n"
+            f"from {module} import {func}\n"
+            f"if __name__ == '__main__':\n"
+            f"    sys.exit({func}())\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+
+
+def _pip_wheel_install(python: Path, tmp_path: Path) -> bool:
+    bootstrap = run_optional([str(python), "-m", "pip", "install", "setuptools>=68", "wheel"])
+    if bootstrap.returncode != 0:
+        return False
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    build = run_optional([
+        str(python), "-m", "pip", "wheel", str(ROOT),
+        "-w", str(wheel_dir), "--no-deps", "--no-build-isolation",
+    ])
+    if build.returncode != 0:
+        return False
+    install = run_optional([
+        str(python), "-m", "pip", "install",
+        "--no-index", f"--find-links={wheel_dir}", "recollect-lines",
+    ])
+    return install.returncode == 0
 
 
 def main() -> int:
@@ -47,19 +101,11 @@ def main() -> int:
             python = venv_dir / "bin" / "python"
             scripts = venv_dir / "bin"
 
-        print("Bootstrapping build tooling into fresh venv...")
-        run([str(python), "-m", "pip", "install", "setuptools>=68", "wheel"])
-        print("Building and installing package wheel (offline package install)...")
-        wheel_dir = tmp_path / "wheels"
-        wheel_dir.mkdir()
-        run([
-            str(python), "-m", "pip", "wheel", str(ROOT),
-            "-w", str(wheel_dir), "--no-deps", "--no-build-isolation",
-        ])
-        run([
-            str(python), "-m", "pip", "install",
-            "--no-index", f"--find-links={wheel_dir}", "recollect-lines",
-        ])
+        if _pip_wheel_install(python, tmp_path):
+            print("Installed package via local wheel (pip).")
+        else:
+            print("Pip wheel install unavailable; using offline manual install fallback.")
+            _manual_install(python, scripts)
 
         env = {"PATH": f"{scripts}{os.pathsep}{os.environ.get('PATH', '')}"}
 

@@ -26,6 +26,13 @@ from .opencode_adapter import OpenCodeAdapter
 from .providers import MissingCredentialReference, ProviderConfigError, load_providers_config, resolve_api_key
 from .service import Broker
 
+_ADAPTER_COMMAND_FLAGS = {
+    "opencode": "--opencode-command",
+    "claude_code": "--claude-command",
+    "codex": "--codex-command",
+    "cursor": "--cursor-command",
+}
+
 FindingSeverity = Literal["info", "warning", "error"]
 FindingStatus = Literal["ok", "warning", "error", "not_checked"]
 
@@ -181,8 +188,9 @@ def _check_runtime_adapters(broker: Broker) -> list[Finding]:
                 status="warning",
                 message=f"Runtime adapter {profile_name!r} CLI is not available ({reason})",
                 remediation=(
-                    f"Install {binary!r} on PATH or override with the matching "
-                    f"--{profile_name.replace('_', '-')}-command JSON prefix when starting the broker."
+                    f"Install {binary!r} on PATH or override with "
+                    f"{_ADAPTER_COMMAND_FLAGS.get(profile_name, '--<adapter>-command')} "
+                    "when starting the broker."
                 ),
                 details={
                     "profile": profile_name,
@@ -298,17 +306,6 @@ def _check_providers_config(
                 details={"provider": name},
             ))
 
-    findings.append(_finding(
-        "ENDPOINT_CONNECTIVITY_NOT_CHECKED",
-        severity="info",
-        status="not_checked",
-        message="Remote provider endpoint reachability was not checked (offline-safe default)",
-        remediation=(
-            "Phase 7A does not probe network connectivity. Confirm endpoints manually "
-            "or wait for a later phase with explicit opt-in connectivity checks."
-        ),
-        details={"providers_configured": True},
-    ))
     return findings, runtime
 
 
@@ -444,6 +441,17 @@ def run_doctor(
         broker.close()
 
     findings.extend(_check_mcp_prerequisites())
+    findings.append(_finding(
+        "ENDPOINT_CONNECTIVITY_NOT_CHECKED",
+        severity="info",
+        status="not_checked",
+        message="Remote provider endpoint reachability was not checked (offline-safe default)",
+        remediation=(
+            "Phase 7A does not probe network connectivity. Confirm endpoints manually "
+            "or wait for a later phase with explicit opt-in connectivity checks."
+        ),
+        details={"providers_configured": providers_config is not None},
+    ))
     overall, exit_code, counts = _aggregate_status(findings)
     report = {
         "doctor_schema_version": DOCTOR_SCHEMA_VERSION,
