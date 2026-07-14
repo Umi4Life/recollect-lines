@@ -9,11 +9,12 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
 from .opencode_adapter import OpenCodeAdapter
+from .doctor import format_human_report, run_doctor
 from .service import Broker
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="recollect")
+    p = argparse.ArgumentParser(prog="recollect-lines")
     p.add_argument("--home", type=Path, default=Path(".recollect"))
     p.add_argument(
         "--opencode-command", default=None,
@@ -98,6 +99,9 @@ def parser() -> argparse.ArgumentParser:
     council_validate.add_argument("--plan", required=True, help="JSON council plan")
     council_execute = council_sub.add_parser("execute")
     council_execute.add_argument("--plan", required=True, help="JSON council plan")
+    doctor = sub.add_parser("doctor", help="Offline-safe operational diagnostics")
+    doctor.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    doctor.add_argument("--workspace", type=Path, default=None, help="Optional workspace path to validate")
     return p
 
 
@@ -119,6 +123,21 @@ def main(argv: list[str] | None = None) -> int:
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
     cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
+    if args.command == "doctor":
+        report, exit_code = run_doctor(
+            home=args.home,
+            workspace=args.workspace,
+            providers_config=args.providers_config,
+            opencode_adapter=opencode_adapter,
+            claude_code_adapter=claude_code_adapter,
+            codex_adapter=codex_adapter,
+            cursor_adapter=cursor_adapter,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_human_report(report))
+        return exit_code
     broker = Broker(
         args.home,
         opencode_adapter=opencode_adapter,

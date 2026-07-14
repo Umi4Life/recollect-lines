@@ -111,7 +111,7 @@ bare, unverified pgid — only after `_process_group_status` reports "alive".
 
 1. Construct a `Broker` against the existing `--home` directory as usual —
    this alone changes nothing; it does not automatically reconcile anything.
-2. Run `recollect reconcile-all` (or the MCP `reconcile` tool with no
+2. Run `recollect-lines reconcile-all` (or the MCP `reconcile` tool with no
    `task_id`) once, before resuming normal `collect`/`cancel` traffic. Every
    `opencode` task left `running` is reconciled: dead ones become `failed`
    with artifacts intact; still-alive ones become `recovery_required`.

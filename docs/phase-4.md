@@ -24,7 +24,7 @@ front door onto the existing broker — nothing more.
 console script installed by this package) runs a stdio MCP server:
 newline-delimited JSON-RPC 2.0 messages on stdin/stdout, one complete message
 per line, exactly as the MCP stdio transport expects. `--home` matches the
-existing `recollect --home` flag — point both at the same directory to
+existing `recollect-lines --home` flag — point both at the same directory to
 operate on the same durable broker state.
 
 **All protocol output is JSON-RPC on stdout. Nothing else is ever written
