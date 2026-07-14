@@ -260,7 +260,10 @@ scoped, not oversights:
   design constraints. Phase 6B implemented `CodexAdapter` (supervising the real
   `codex exec` CLI); Phase 6B.5 implemented `CursorAdapter` (supervising the real
   `cursor-agent --print` CLI) — see [phase-6b5.md](phase-6b5.md). Phase 6C
-  (provider fabric) and 6D remain unimplemented — see [RFC-001](RFC-001.md) §10.
+  implemented the plural OpenAI-compatible provider configuration layer and a
+  capability-limited direct HTTP runtime (`openai_compatible` profile) —
+  see [phase-6c.md](phase-6c.md). Phase 6D remains unimplemented — see
+  [RFC-001](RFC-001.md) §10.
 - **Plural model-provider support is a distinct, separately scheduled
   gap**: today nothing in this codebase talks to a model provider
   directly — adapters supervise a CLI, which itself owns provider/auth
@@ -269,9 +272,9 @@ scoped, not oversights:
   endpoint) is scheduled as Phase 6C, with capability discovery,
   policy-aware routing, and bounded parent-directed model-council usage
   patterns (§3.1) scheduled as Phase 6D — see [RFC-001](RFC-001.md) §10.
-  A provider configuration entry is not a runtime adapter: it never grants
-  agent tools, worktree access, cancellation, or streaming on its own (see
-  §11's adapter/provider distinction). Neither phase is implemented yet.
+  Phase 6C implemented named provider configuration and the direct
+  `openai_compatible` runtime ([phase-6c.md](phase-6c.md)). Phase 6D is not
+  implemented yet.
 
 ## 10. Acceptance checklist
 

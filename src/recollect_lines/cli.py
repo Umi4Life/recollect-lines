@@ -47,12 +47,20 @@ def parser() -> argparse.ArgumentParser:
             "Defaults to the built-in `cursor-agent` CLI invocation."
         ),
     )
+    p.add_argument(
+        "--providers-config", type=Path, default=None,
+        help="Path to a JSON provider configuration file (required for openai_compatible profile tasks).",
+    )
     sub = p.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--task", required=True)
     create.add_argument("--workspace", required=True)
     create.add_argument("--mode", default="read_only")
     create.add_argument("--profile", default="mock")
+    create.add_argument(
+        "--provider", default=None,
+        help="Named provider from --providers-config (required when --profile openai_compatible).",
+    )
     create.add_argument("--timeout", type=int, default=1800)
     create.add_argument("--verification-policy", default="none", choices=VERIFICATION_POLICIES)
     create.add_argument(
@@ -83,10 +91,17 @@ def main(argv: list[str] | None = None) -> int:
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
     cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
-    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter, codex_adapter=codex_adapter, cursor_adapter=cursor_adapter)
+    broker = Broker(
+        args.home,
+        opencode_adapter=opencode_adapter,
+        claude_code_adapter=claude_code_adapter,
+        codex_adapter=codex_adapter,
+        cursor_adapter=cursor_adapter,
+        providers_config=args.providers_config,
+    )
     try:
         if args.command == "create":
-            request = TaskRequest(args.task, args.workspace, args.mode, args.profile, args.timeout, args.verification_policy)
+            request = TaskRequest(args.task, args.workspace, args.mode, args.profile, args.provider, args.timeout, args.verification_policy)
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             output = broker.create(request, verify_commands=verify_commands).json()
         elif args.command == "start":
