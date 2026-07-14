@@ -255,6 +255,61 @@ def handle_message(broker: Broker, args: dict) -> dict:
     }
 
 
+def handle_discover_capabilities(broker: Broker, args: dict) -> dict:
+    return broker.discover_capabilities()
+
+
+def _parse_capability_object(raw: Any, field_name: str) -> dict[str, bool] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_name} must be an object")
+    parsed: dict[str, bool] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, bool):
+            raise ValueError(f"{field_name} values must be boolean")
+        parsed[key] = value
+    return parsed
+
+
+def handle_select_candidates(broker: Broker, args: dict) -> dict:
+    execution_mode = args.get("execution_mode")
+    if not isinstance(execution_mode, str) or not execution_mode.strip():
+        raise ValueError("'execution_mode' must be a non-empty string")
+    allowed_runtimes = args.get("allowed_runtimes")
+    allowed_providers = args.get("allowed_providers")
+    if allowed_runtimes is not None and (not isinstance(allowed_runtimes, list) or not all(isinstance(item, str) for item in allowed_runtimes)):
+        raise ValueError("'allowed_runtimes' must be an array of strings when provided")
+    if allowed_providers is not None and (not isinstance(allowed_providers, list) or not all(isinstance(item, str) for item in allowed_providers)):
+        raise ValueError("'allowed_providers' must be an array of strings when provided")
+    require_available = args.get("require_available", True)
+    if not isinstance(require_available, bool):
+        raise ValueError("'require_available' must be a boolean")
+    return broker.select_candidates(
+        execution_mode=execution_mode,
+        required_runtime_capabilities=_parse_capability_object(args.get("required_runtime_capabilities"), "required_runtime_capabilities"),
+        required_provider_capabilities=_parse_capability_object(args.get("required_provider_capabilities"), "required_provider_capabilities"),
+        allowed_runtimes=allowed_runtimes,
+        allowed_providers=allowed_providers,
+        require_available=require_available,
+    )
+
+
+def _require_council_plan(args: dict) -> dict:
+    plan = args.get("plan")
+    if not isinstance(plan, dict):
+        raise ValueError("'plan' must be an object")
+    return plan
+
+
+def handle_council_validate(broker: Broker, args: dict) -> dict:
+    return broker.validate_council(_require_council_plan(args))
+
+
+def handle_council_execute(broker: Broker, args: dict) -> dict:
+    return broker.execute_council(_require_council_plan(args))
+
+
 # --- tool schemas and registry ----------------------------------------------
 
 DELEGATE_INPUT_SCHEMA = {
@@ -356,6 +411,29 @@ RECONCILE_INPUT_SCHEMA = {
         },
     },
 }
+DISCOVER_CAPABILITIES_INPUT_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
+SELECT_CANDIDATES_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "execution_mode": {"type": "string", "enum": list(EXECUTION_MODES)},
+        "allowed_runtimes": {"type": "array", "items": {"type": "string"}},
+        "allowed_providers": {"type": "array", "items": {"type": "string"}},
+        "required_runtime_capabilities": {"type": "object", "additionalProperties": {"type": "boolean"}},
+        "required_provider_capabilities": {"type": "object", "additionalProperties": {"type": "boolean"}},
+        "require_available": {"type": "boolean", "default": True},
+    },
+    "required": ["execution_mode"],
+}
+COUNCIL_PLAN_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "plan": {
+            "type": "object",
+            "description": "Parent-directed bounded council plan with stages, bounds, and acceptance_criteria.",
+        },
+    },
+    "required": ["plan"],
+}
 
 TOOLS = {
     "delegate": {
@@ -402,6 +480,26 @@ TOOLS = {
         ),
         "inputSchema": RECONCILE_INPUT_SCHEMA,
         "handler": handle_reconcile,
+    },
+    "discover_capabilities": {
+        "description": "Return a machine-readable inventory of registered runtime profiles and named provider configurations with declared/observed capabilities and availability (no credentials or raw endpoints).",
+        "inputSchema": DISCOVER_CAPABILITIES_INPUT_SCHEMA,
+        "handler": handle_discover_capabilities,
+    },
+    "select_candidates": {
+        "description": "Parent-directed capability filtering: return eligible runtimes/providers plus exclusion evidence. Does not choose a winner.",
+        "inputSchema": SELECT_CANDIDATES_INPUT_SCHEMA,
+        "handler": handle_select_candidates,
+    },
+    "council_validate": {
+        "description": "Validate a parent-specified bounded council plan (graph, bounds, candidate availability) without executing it.",
+        "inputSchema": COUNCIL_PLAN_INPUT_SCHEMA,
+        "handler": handle_council_validate,
+    },
+    "council_execute": {
+        "description": "Execute a validated bounded council plan through broker lifecycle primitives and record stage evidence for parent synthesis (no autonomous winner).",
+        "inputSchema": COUNCIL_PLAN_INPUT_SCHEMA,
+        "handler": handle_council_execute,
     },
 }
 

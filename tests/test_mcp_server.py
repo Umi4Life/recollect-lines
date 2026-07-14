@@ -111,7 +111,13 @@ class McpServerTests(unittest.TestCase):
 
         listed = self.client.request("tools/list")
         names = {tool["name"] for tool in listed["result"]["tools"]}
-        self.assertEqual(names, {"delegate", "delegate_batch", "status", "collect", "cancel", "message", "reconcile"})
+        self.assertEqual(
+            names,
+            {
+                "delegate", "delegate_batch", "status", "collect", "cancel", "message", "reconcile",
+                "discover_capabilities", "select_candidates", "council_validate", "council_execute",
+            },
+        )
 
         delegated = self.delegate()
         payload = json.loads(delegated["result"]["content"][0]["text"])

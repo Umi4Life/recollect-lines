@@ -82,7 +82,35 @@ def parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("list")
     sub.add_parser("reconcile-all")
+    sub.add_parser("discover")
+    select = sub.add_parser("select")
+    select.add_argument("--mode", dest="execution_mode", required=True)
+    select.add_argument("--allowed-runtime", dest="allowed_runtimes", action="append", default=None)
+    select.add_argument("--allowed-provider", dest="allowed_providers", action="append", default=None)
+    select.add_argument("--require-runtime-capability", dest="runtime_capabilities", action="append", default=None,
+                        help='JSON object fragment like \'{"isolated_worktree": true}\' (repeatable, merged)')
+    select.add_argument("--require-provider-capability", dest="provider_capabilities", action="append", default=None,
+                        help='JSON object fragment like \'{"chat_completions": true}\' (repeatable, merged)')
+    select.add_argument("--include-unavailable", action="store_true", help="Do not exclude unavailable candidates")
+    council = sub.add_parser("council")
+    council_sub = council.add_subparsers(dest="council_command", required=True)
+    council_validate = council_sub.add_parser("validate")
+    council_validate.add_argument("--plan", required=True, help="JSON council plan")
+    council_execute = council_sub.add_parser("execute")
+    council_execute.add_argument("--plan", required=True, help="JSON council plan")
     return p
+
+
+def _merge_capability_flags(fragments: list[str] | None) -> dict[str, bool] | None:
+    if not fragments:
+        return None
+    merged: dict[str, bool] = {}
+    for fragment in fragments:
+        parsed = json.loads(fragment)
+        if not isinstance(parsed, dict):
+            raise ValueError("capability requirements must be JSON objects")
+        merged.update(parsed)
+    return merged
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -122,6 +150,23 @@ def main(argv: list[str] | None = None) -> int:
             output = broker.reconcile(args.task_id).json()
         elif args.command == "reconcile-all":
             output = [record.json() for record in broker.reconcile_pending()]
+        elif args.command == "discover":
+            output = broker.discover_capabilities()
+        elif args.command == "select":
+            output = broker.select_candidates(
+                execution_mode=args.execution_mode,
+                required_runtime_capabilities=_merge_capability_flags(args.runtime_capabilities),
+                required_provider_capabilities=_merge_capability_flags(args.provider_capabilities),
+                allowed_runtimes=args.allowed_runtimes,
+                allowed_providers=args.allowed_providers,
+                require_available=not args.include_unavailable,
+            )
+        elif args.command == "council":
+            plan = json.loads(args.plan)
+            if args.council_command == "validate":
+                output = broker.validate_council(plan)
+            else:
+                output = broker.execute_council(plan)
         else:
             output = [record.json() for record in broker.store.list()]
         print(json.dumps(output, indent=2, sort_keys=True))

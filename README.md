@@ -16,6 +16,7 @@ dependency.
 - [`docs/RFC-001.md`](docs/RFC-001.md) — current implementation RFC (architecture, evidence, known limitations).
 - [`docs/PHASE-5.md`](docs/PHASE-5.md) — roadmap for the next planned work.
 - [`docs/phase-6c.md`](docs/phase-6c.md) — OpenAI-compatible provider fabric and direct HTTP runtime.
+- [`docs/phase-6d.md`](docs/phase-6d.md) — capability discovery, routing, bounded councils.
 - [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
 - `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
 
@@ -42,8 +43,8 @@ post-Phase-5C roadmap decision sequenced Codex CLI (Phase 6B) and Cursor
 CLI (Phase 6B.5) as further adapters — both now implemented — plus a
 separately scheduled plural OpenAI-compatible provider fabric (Phase 6C,
 now implemented — see [`docs/phase-6c.md`](docs/phase-6c.md)) and
-capability discovery/routing/bounded model-council patterns (Phase 6D) —
-6D not implemented yet. See [`docs/PRD.md`](docs/PRD.md) §9,
+capability discovery/routing/bounded model-council patterns (Phase 6D,
+now implemented — see [`docs/phase-6d.md`](docs/phase-6d.md)). See [`docs/PRD.md`](docs/PRD.md) §9,
 [`docs/RFC-001.md`](docs/RFC-001.md) §8/§10, and
 [`docs/PHASE-5.md`](docs/PHASE-5.md) for the full capability accounting
 and roadmap.
