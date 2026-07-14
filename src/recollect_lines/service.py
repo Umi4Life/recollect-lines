@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .adapters import AdapterCapabilities
 from .claude_code_adapter import ClaudeCodeAdapter
+from .codex_adapter import CodexAdapter
 from .models import (
     DEFAULT_PROFILES,
     TERMINAL_STATES,
@@ -49,11 +50,13 @@ class Broker:
         profiles: dict[str, ProfilePolicy] | None = None,
         opencode_adapter: OpenCodeAdapter | None = None,
         claude_code_adapter: ClaudeCodeAdapter | None = None,
+        codex_adapter: CodexAdapter | None = None,
     ):
         self.store = TaskStore(home)
         self.adapter = MockAdapter()
         self.opencode_adapter = opencode_adapter or OpenCodeAdapter()
         self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter()
+        self.codex_adapter = codex_adapter or CodexAdapter()
         # Every subprocess-backed adapter, keyed by the profile name that selects
         # it — the one place profile-to-adapter dispatch lives, so start()/
         # collect()/cancel()/timeout()/reconcile() never hard-code a specific
@@ -61,6 +64,7 @@ class Broker:
         self.subprocess_adapters = {
             self.opencode_adapter.name: self.opencode_adapter,
             self.claude_code_adapter.name: self.claude_code_adapter,
+            self.codex_adapter.name: self.codex_adapter,
         }
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)

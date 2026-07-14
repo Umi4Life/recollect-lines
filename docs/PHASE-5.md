@@ -91,7 +91,7 @@ capability accounting — that gap remained open and unscheduled at the end
 of this PR's original scope; see Phase 6 below for the roadmap decision
 made after.
 
-## Phase 6 — Adapter and provider expansion (6A implemented, 6B/6B.5/6C/6D planned)
+## Phase 6 — Adapter and provider expansion (6A/6B implemented, 6B.5/6C/6D planned)
 
 A post-Phase-5C roadmap decision sequenced the next phases:
 
@@ -101,7 +101,7 @@ A post-Phase-5C roadmap decision sequenced the next phases:
   and test evidence. `service.py`'s adapter dispatch was generalized to a
   profile-keyed `subprocess_adapters` lookup so this required no
   Claude-specific branching in broker core.
-- **Phase 6B** — Codex CLI adapter. Not implemented.
+- **Phase 6B** — Codex CLI adapter. **Implemented** — see [phase-6b.md](phase-6b.md).
 - **Phase 6B.5** — Cursor CLI adapter (a real runtime adapter, not an
   OpenAI-compatible-provider alias). Not implemented.
 - **Phase 6C** — configurable, plural OpenAI-compatible provider fabric

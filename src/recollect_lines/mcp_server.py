@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_code_adapter import ClaudeCodeAdapter
+from .codex_adapter import CodexAdapter
 from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
 from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
@@ -43,7 +44,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-PROFILES = ("mock", "opencode", "claude_code")
+PROFILES = ("mock", "opencode", "claude_code", "codex")
 
 
 class ProtocolError(Exception):
@@ -271,7 +272,8 @@ DELEGATE_INPUT_SCHEMA = {
             "default": "mock",
             "description": (
                 "mock is a deterministic no-op adapter for testing; opencode runs the real OpenCode CLI as a "
-                "supervised subprocess; claude_code runs the real Claude Code CLI (`claude -p`) as a supervised subprocess."
+                "supervised subprocess; claude_code runs the real Claude Code CLI (`claude -p`) as a supervised "
+                "subprocess; codex runs the real Codex CLI (`codex exec`) as a supervised subprocess."
             ),
         },
         "timeout_seconds": {
@@ -340,7 +342,7 @@ RECONCILE_INPUT_SCHEMA = {
     "properties": {
         "task_id": {
             "type": "string",
-            "description": "Reconcile only this task. Omit to reconcile every running/recovery_required subprocess-backed (opencode or claude_code) task this broker instance can see without an in-memory process handle (e.g. right after a restart).",
+            "description": "Reconcile only this task. Omit to reconcile every running/recovery_required subprocess-backed (opencode, claude_code, or codex) task this broker instance can see without an in-memory process handle (e.g. right after a restart).",
         },
     },
 }
@@ -383,7 +385,7 @@ TOOLS = {
     },
     "reconcile": {
         "description": (
-            "Reconcile one (or, if task_id is omitted, every) subprocess-backed (opencode or claude_code) task's durable runtime-launch record "
+            "Reconcile one (or, if task_id is omitted, every) subprocess-backed (opencode, claude_code, or codex) task's durable runtime-launch record "
             "against its actual process-group liveness. Use this after a broker restart, before collect/cancel, "
             "to safely discover whether an in-flight task's process is confirmed dead (moves to failed) or still "
             "alive (moves to recovery_required — never a fabricated success, never an unsafe workspace deletion)."
@@ -517,6 +519,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Defaults to the built-in `claude` CLI invocation."
         ),
     )
+    parser.add_argument(
+        "--codex-command", default=None,
+        help=(
+            "Advanced: override the Codex adapter's command prefix as a JSON array "
+            "(e.g. to point at a deterministic stand-in binary for testing/acceptance). "
+            "Defaults to the built-in `codex` CLI invocation."
+        ),
+    )
     return parser
 
 
@@ -524,7 +534,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     opencode_adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
-    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter)
+    codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
+    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter, codex_adapter=codex_adapter)
     try:
         serve(broker, sys.stdin, sys.stdout)
     finally:
