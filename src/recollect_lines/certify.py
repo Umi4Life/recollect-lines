@@ -676,4 +676,3 @@ def format_human_report(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"duration_ms: {report['duration_ms']}")
     return "\n".join(lines)
-
