@@ -13,10 +13,12 @@ lifecycle against a disposable local Git fixture repository, including
 Phase 5C's verification-gate and timeout/cancellation-liveness behavior.
 To stay fully local, offline, and deterministic, it points the broker's
 opencode and claude_code adapters at this repo's own deterministic stand-in
-CLIs (tests/fixtures/fake_opencode.py, tests/fixtures/fake_claude.py) via
-`--opencode-command`/`--claude-command` — the same override mechanism each
-adapter documents as intended for "testing/acceptance" — instead of the
-real network-dependent opencode-ai package or an authenticated `claude` CLI.
+CLIs (tests/fixtures/fake_opencode.py, tests/fixtures/fake_claude.py,
+tests/fixtures/fake_codex.py) via `--opencode-command`/`--claude-command`/
+`--codex-command` — the same override mechanism each adapter documents as
+intended for "testing/acceptance" — instead of the real network-dependent
+opencode-ai package, an authenticated `claude` CLI, or an authenticated
+`codex` CLI.
 
 Usage:
     python3 scripts/mcp_acceptance.py
@@ -37,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 FAKE_OPENCODE = ROOT / "tests" / "fixtures" / "fake_opencode.py"
 FAKE_CLAUDE = ROOT / "tests" / "fixtures" / "fake_claude.py"
+FAKE_CODEX = ROOT / "tests" / "fixtures" / "fake_codex.py"
 
 TERMINAL_STATES = {"succeeded", "succeeded_with_warnings", "failed", "timed_out", "cancelled"}
 
@@ -58,7 +61,7 @@ class McpStdioClient:
     without importing the test package, exactly as an external host would.
     """
 
-    def __init__(self, home: Path, opencode_command: list[str], claude_command: list[str]):
+    def __init__(self, home: Path, opencode_command: list[str], claude_command: list[str], codex_command: list[str]):
         env = dict(os.environ)
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{SRC}{os.pathsep}{existing}" if existing else str(SRC)
@@ -68,6 +71,7 @@ class McpStdioClient:
                 "--home", str(home),
                 "--opencode-command", json.dumps(opencode_command),
                 "--claude-command", json.dumps(claude_command),
+                "--codex-command", json.dumps(codex_command),
             ],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
@@ -148,7 +152,12 @@ def main() -> int:
         source = init_fixture_repo(tmp_path / "source")
         head_before = run_git(["rev-parse", "HEAD"], cwd=source).stdout.strip()
 
-        client = McpStdioClient(home, [sys.executable, str(FAKE_OPENCODE)], [sys.executable, str(FAKE_CLAUDE)])
+        client = McpStdioClient(
+            home,
+            [sys.executable, str(FAKE_OPENCODE)],
+            [sys.executable, str(FAKE_CLAUDE)],
+            [sys.executable, str(FAKE_CODEX)],
+        )
         try:
             init = client.request(
                 "initialize",
@@ -232,6 +241,25 @@ def main() -> int:
                 "claude_code runtime result honestly reports the claude_code adapter, not a generic/other runtime",
                 (claude_collected.get("runtime_result") or {}).get("runtime", {}).get("adapter") == "claude_code",
                 str(claude_collected),
+            )
+
+            # --- delegate + collect: the codex profile through the same generic dispatch ---
+            is_error, codex_delegated = client.call_tool("delegate", {
+                "task": "Inspect the fixture repository",
+                "workspace": str(source),
+                "execution_mode": "read_only",
+                "profile": "codex",
+            })
+            check("delegate accepts a read-only codex task", not is_error, str(codex_delegated))
+            codex_task_id = codex_delegated.get("task_id", "")
+
+            is_error, codex_collected = client.call_tool("collect", {"task_id": codex_task_id})
+            check("collect succeeds for a codex task without a protocol error", not is_error, str(codex_collected))
+            check("codex task reaches succeeded", codex_collected.get("state") == "succeeded", str(codex_collected))
+            check(
+                "codex runtime result honestly reports the codex adapter, not a generic/other runtime",
+                (codex_collected.get("runtime_result") or {}).get("runtime", {}).get("adapter") == "codex",
+                str(codex_collected),
             )
 
             # --- workspace safety: the source fixture is never mutated by delegated work ---

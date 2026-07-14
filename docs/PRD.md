@@ -257,7 +257,9 @@ scoped, not oversights:
   against upstream CLI releases. A post-Phase-5C roadmap decision sequenced
   the remaining gap as Phase 6B (Codex CLI adapter) and Phase 6B.5 (Cursor
   CLI adapter) — see [RFC-001](RFC-001.md) §10 for the full sequence and
-  design constraints. Neither 6B nor 6B.5 is implemented yet.
+  design constraints. Phase 6B implemented `CodexAdapter` (supervising the real
+  `codex exec` CLI); Phase 6B.5 (Cursor CLI adapter) remains unimplemented —
+  see [RFC-001](RFC-001.md) §10 and [phase-6b.md](phase-6b.md).
 - **Plural model-provider support is a distinct, separately scheduled
   gap**: today nothing in this codebase talks to a model provider
   directly — adapters supervise a CLI, which itself owns provider/auth
@@ -285,11 +287,11 @@ scoped, not oversights:
       steps, for at least the durable (non-in-memory) parts of task state.
 - [ ] No required external network service exists for the core lifecycle.
 - [x] At least two heterogeneous runtime adapters exist and can run
-      concurrently under the same broker (**met** as of Phase 6A — OpenCode
-      and Claude Code, both marked experimental, are implemented and
-      dispatch through the same generic broker lifecycle; Codex CLI and
-      Cursor CLI remain sequenced as Phase 6B/6B.5 but not yet implemented;
-      see §9 and [phase-6a.md](phase-6a.md)).
+      concurrently under the same broker (**met** — OpenCode, Claude Code, and
+      Codex are implemented and dispatch through the same generic broker
+      lifecycle; all remain marked experimental; Cursor CLI remains sequenced
+      as Phase 6B.5; see §9, [phase-6a.md](phase-6a.md), and
+      [phase-6b.md](phase-6b.md)).
 
 ## 11. Terminology
 
@@ -299,8 +301,8 @@ scoped, not oversights:
 - **Adapter** (runtime adapter): the component translating the broker's
   generic "run this task" into a specific runtime's invocation, including
   its process/session lifecycle, output parsing, and cancellation
-  semantics — e.g. OpenCode or Claude Code (both implemented), or the
-  Codex and Cursor CLIs sequenced in [RFC-001](RFC-001.md) §10. An adapter
+  semantics — e.g. OpenCode, Claude Code, or Codex (all implemented), or the
+  Cursor CLI sequenced in [RFC-001](RFC-001.md) §10. An adapter
   is what actually supervises a coding-agent runtime.
 - **Provider configuration**: a named, configured description of a model
   endpoint — base URL, credentials reference, model aliases, and declared
