@@ -78,6 +78,38 @@ def group_dead_within(pgid: int, timeout: float, interval: float = 0.05) -> bool
     return True
 
 
+def cancel_process_group(popen: subprocess.Popen, pgid: int, grace_period_seconds: float) -> dict:
+    """Shared SIGTERM-then-SIGKILL process-group cancellation.
+
+    Used by every subprocess-backed adapter (OpenCodeAdapter, ClaudeCodeAdapter)
+    so the broker's process-group cancellation contract has exactly one
+    implementation, never a per-adapter reinvention.
+    """
+    signals_sent = []
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        signals_sent.append("SIGTERM")
+    except ProcessLookupError:
+        pass
+    try:
+        popen.wait(timeout=grace_period_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    group_terminated = group_dead_within(pgid, timeout=1.0)
+    if not group_terminated:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+            signals_sent.append("SIGKILL")
+        except ProcessLookupError:
+            pass
+        try:
+            popen.wait(timeout=grace_period_seconds)
+        except subprocess.TimeoutExpired:
+            pass
+        group_terminated = group_dead_within(pgid, timeout=2.0)
+    return {"signals_sent": signals_sent, "group_terminated": group_terminated, "exit_code": popen.returncode}
+
+
 @dataclass
 class ProcessHandle:
     task_id: str
@@ -138,33 +170,7 @@ class OpenCodeAdapter:
         return metadata, handle
 
     def cancel(self, handle: ProcessHandle) -> dict:
-        signals_sent = []
-        try:
-            os.killpg(handle.pgid, signal.SIGTERM)
-            signals_sent.append("SIGTERM")
-        except ProcessLookupError:
-            pass
-        try:
-            handle.popen.wait(timeout=self.grace_period_seconds)
-        except subprocess.TimeoutExpired:
-            pass
-        group_terminated = group_dead_within(handle.pgid, timeout=1.0)
-        if not group_terminated:
-            try:
-                os.killpg(handle.pgid, signal.SIGKILL)
-                signals_sent.append("SIGKILL")
-            except ProcessLookupError:
-                pass
-            try:
-                handle.popen.wait(timeout=self.grace_period_seconds)
-            except subprocess.TimeoutExpired:
-                pass
-            group_terminated = group_dead_within(handle.pgid, timeout=2.0)
-        return {
-            "signals_sent": signals_sent,
-            "group_terminated": group_terminated,
-            "exit_code": handle.popen.returncode,
-        }
+        return cancel_process_group(handle.popen, handle.pgid, self.grace_period_seconds)
 
     def collect(self, handle: ProcessHandle) -> dict:
         exit_code = handle.popen.wait()

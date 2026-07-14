@@ -25,6 +25,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from .claude_code_adapter import ClaudeCodeAdapter
 from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
 from .opencode_adapter import OpenCodeAdapter
 from .service import Broker
@@ -42,7 +43,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-PROFILES = ("mock", "opencode")
+PROFILES = ("mock", "opencode", "claude_code")
 
 
 class ProtocolError(Exception):
@@ -238,9 +239,10 @@ def handle_message(broker: Broker, args: dict) -> dict:
         "task_id": task_id,
         "status": "unsupported",
         "reason": (
-            "Recollect Lines has no in-flight steering channel for any adapter: mock and "
-            "OpenCode tasks both run to completion (or are cancelled outright). OpenCode "
-            "itself does not support injecting a message into an already-running task."
+            "Recollect Lines has no in-flight steering channel for any adapter: mock, "
+            "OpenCode, and Claude Code tasks all run to completion (or are cancelled "
+            "outright). Neither OpenCode nor Claude Code supports injecting a message "
+            "into an already-running task."
         ),
         "profile": record.profile,
         "state": record.state.value,
@@ -267,7 +269,10 @@ DELEGATE_INPUT_SCHEMA = {
             "type": "string",
             "enum": list(PROFILES),
             "default": "mock",
-            "description": "mock is a deterministic no-op adapter for testing; opencode runs the real OpenCode CLI as a supervised subprocess.",
+            "description": (
+                "mock is a deterministic no-op adapter for testing; opencode runs the real OpenCode CLI as a "
+                "supervised subprocess; claude_code runs the real Claude Code CLI (`claude -p`) as a supervised subprocess."
+            ),
         },
         "timeout_seconds": {
             "type": "integer",
@@ -335,7 +340,7 @@ RECONCILE_INPUT_SCHEMA = {
     "properties": {
         "task_id": {
             "type": "string",
-            "description": "Reconcile only this task. Omit to reconcile every running/recovery_required opencode task this broker instance can see without an in-memory process handle (e.g. right after a restart).",
+            "description": "Reconcile only this task. Omit to reconcile every running/recovery_required subprocess-backed (opencode or claude_code) task this broker instance can see without an in-memory process handle (e.g. right after a restart).",
         },
     },
 }
@@ -378,7 +383,7 @@ TOOLS = {
     },
     "reconcile": {
         "description": (
-            "Reconcile one (or, if task_id is omitted, every) opencode task's durable runtime-launch record "
+            "Reconcile one (or, if task_id is omitted, every) subprocess-backed (opencode or claude_code) task's durable runtime-launch record "
             "against its actual process-group liveness. Use this after a broker restart, before collect/cancel, "
             "to safely discover whether an in-flight task's process is confirmed dead (moves to failed) or still "
             "alive (moves to recovery_required — never a fabricated success, never an unsafe workspace deletion)."
@@ -504,13 +509,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "stand-in binary for testing/acceptance). Defaults to the built-in npx opencode-ai invocation."
         ),
     )
+    parser.add_argument(
+        "--claude-command", default=None,
+        help=(
+            "Advanced: override the Claude Code adapter's command prefix as a JSON array "
+            "(e.g. to point at a deterministic stand-in binary for testing/acceptance). "
+            "Defaults to the built-in `claude` CLI invocation."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
-    broker = Broker(args.home, opencode_adapter=adapter)
+    opencode_adapter = OpenCodeAdapter(command_prefix=tuple(json.loads(args.opencode_command))) if args.opencode_command else None
+    claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
+    broker = Broker(args.home, opencode_adapter=opencode_adapter, claude_code_adapter=claude_code_adapter)
     try:
         serve(broker, sys.stdin, sys.stdout)
     finally:

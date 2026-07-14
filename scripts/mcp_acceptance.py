@@ -12,10 +12,11 @@ It exercises the documented delegate -> observe -> collect -> cancel
 lifecycle against a disposable local Git fixture repository, including
 Phase 5C's verification-gate and timeout/cancellation-liveness behavior.
 To stay fully local, offline, and deterministic, it points the broker's
-opencode adapter at the repo's own deterministic stand-in CLI
-(tests/fixtures/fake_opencode.py) via `--opencode-command` — the same
-override mechanism the adapter documents as intended for "testing/
-acceptance" — instead of the real network-dependent opencode-ai package.
+opencode and claude_code adapters at this repo's own deterministic stand-in
+CLIs (tests/fixtures/fake_opencode.py, tests/fixtures/fake_claude.py) via
+`--opencode-command`/`--claude-command` — the same override mechanism each
+adapter documents as intended for "testing/acceptance" — instead of the
+real network-dependent opencode-ai package or an authenticated `claude` CLI.
 
 Usage:
     python3 scripts/mcp_acceptance.py
@@ -35,6 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 FAKE_OPENCODE = ROOT / "tests" / "fixtures" / "fake_opencode.py"
+FAKE_CLAUDE = ROOT / "tests" / "fixtures" / "fake_claude.py"
 
 TERMINAL_STATES = {"succeeded", "succeeded_with_warnings", "failed", "timed_out", "cancelled"}
 
@@ -56,7 +58,7 @@ class McpStdioClient:
     without importing the test package, exactly as an external host would.
     """
 
-    def __init__(self, home: Path, opencode_command: list[str]):
+    def __init__(self, home: Path, opencode_command: list[str], claude_command: list[str]):
         env = dict(os.environ)
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = f"{SRC}{os.pathsep}{existing}" if existing else str(SRC)
@@ -65,6 +67,7 @@ class McpStdioClient:
                 sys.executable, "-m", "recollect_lines.mcp_server",
                 "--home", str(home),
                 "--opencode-command", json.dumps(opencode_command),
+                "--claude-command", json.dumps(claude_command),
             ],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, env=env,
@@ -145,7 +148,7 @@ def main() -> int:
         source = init_fixture_repo(tmp_path / "source")
         head_before = run_git(["rev-parse", "HEAD"], cwd=source).stdout.strip()
 
-        client = McpStdioClient(home, [sys.executable, str(FAKE_OPENCODE)])
+        client = McpStdioClient(home, [sys.executable, str(FAKE_OPENCODE)], [sys.executable, str(FAKE_CLAUDE)])
         try:
             init = client.request(
                 "initialize",
@@ -209,10 +212,32 @@ def main() -> int:
                 str(cancelled),
             )
 
+            # --- delegate + collect: the claude_code profile through the exact same generic
+            # dispatch, read_only mode — the execution mode this phase's reconciliation fixed
+            # (see docs/phase-6a.md "Reconciliation addendum") to structurally exclude Bash via
+            # --tools rather than relying on --disallowedTools alone ---
+            is_error, claude_delegated = client.call_tool("delegate", {
+                "task": "Inspect the fixture repository",
+                "workspace": str(source),
+                "execution_mode": "read_only",
+                "profile": "claude_code",
+            })
+            check("delegate accepts a read-only claude_code task", not is_error, str(claude_delegated))
+            claude_task_id = claude_delegated.get("task_id", "")
+
+            is_error, claude_collected = client.call_tool("collect", {"task_id": claude_task_id})
+            check("collect succeeds for a claude_code task without a protocol error", not is_error, str(claude_collected))
+            check("claude_code task reaches succeeded", claude_collected.get("state") == "succeeded", str(claude_collected))
+            check(
+                "claude_code runtime result honestly reports the claude_code adapter, not a generic/other runtime",
+                (claude_collected.get("runtime_result") or {}).get("runtime", {}).get("adapter") == "claude_code",
+                str(claude_collected),
+            )
+
             # --- workspace safety: the source fixture is never mutated by delegated work ---
             head_after = run_git(["rev-parse", "HEAD"], cwd=source).stdout.strip()
             porcelain = run_git(["status", "--porcelain"], cwd=source).stdout
-            check("source workspace HEAD is unchanged after both tasks", head_before == head_after)
+            check("source workspace HEAD is unchanged after all tasks", head_before == head_after)
             check("source workspace has no uncommitted mutation", porcelain.strip() == "", porcelain)
 
             # --- reconcile: documented no-op against a clean, already-terminal broker state ---

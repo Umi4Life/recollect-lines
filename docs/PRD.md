@@ -244,22 +244,20 @@ scoped, not oversights:
   workspace-writable task through `required` — that remains a caller/host
   policy decision, not a broker-enforced default. See
   [phase-5c.md](phase-5c.md).
-- **Heterogeneous adapter coverage is the largest remaining MVP gap**: the
-  product's MVP boundary calls for at least two heterogeneous runtime
-  adapters, with Claude Code CLI and Codex CLI named as the preferred
-  initial pair. Only one adapter — OpenCode, marked experimental — is
-  implemented today (RFC-001 §2, §8). Truthful-verification and
-  cancellation evidence has been exercised thoroughly against that one
-  real runtime; confidence in these product requirements generalizing to a
-  second, differently-shaped runtime (a different CLI output format,
-  different cancellation semantics, a different auth model) is not yet
-  established. This gap is not closed by Phase 5C. A post-Phase-5C roadmap
-  decision has since sequenced it as Phase 6A (Claude Code CLI adapter),
-  Phase 6B (Codex CLI adapter), and Phase 6B.5 (Cursor CLI adapter), each a
-  real runtime adapter under §11's definition below — see
-  [RFC-001](RFC-001.md) §10 for the full sequence and design constraints.
-  None of Phase 6 is implemented yet; this is a scheduling decision, not
-  new capability.
+- **Heterogeneous adapter coverage was the largest MVP gap; Phase 6A closes
+  it to "at least two"**: the product's MVP boundary calls for at least two
+  heterogeneous runtime adapters, with Claude Code CLI and Codex CLI named
+  as the preferred initial pair. Phase 6A implemented `ClaudeCodeAdapter`
+  (supervising the real `claude` CLI in `-p` mode), so this codebase now has
+  two adapters — OpenCode and Claude Code, both still marked experimental
+  (RFC-001 §2, §8, [phase-6a.md](phase-6a.md)). Truthful-verification and
+  cancellation evidence has been exercised against both real runtimes;
+  confidence generalizing further (a third, differently-shaped runtime) is
+  still not established, and neither adapter has continuous re-verification
+  against upstream CLI releases. A post-Phase-5C roadmap decision sequenced
+  the remaining gap as Phase 6B (Codex CLI adapter) and Phase 6B.5 (Cursor
+  CLI adapter) — see [RFC-001](RFC-001.md) §10 for the full sequence and
+  design constraints. Neither 6B nor 6B.5 is implemented yet.
 - **Plural model-provider support is a distinct, separately scheduled
   gap**: today nothing in this codebase talks to a model provider
   directly — adapters supervise a CLI, which itself owns provider/auth
@@ -286,11 +284,12 @@ scoped, not oversights:
 - [ ] All of the above hold after a restart of the broker process between
       steps, for at least the durable (non-in-memory) parts of task state.
 - [ ] No required external network service exists for the core lifecycle.
-- [ ] At least two heterogeneous runtime adapters exist and can run
-      concurrently under the same broker (currently **unmet** — one
-      experimental adapter, OpenCode, is implemented; Claude Code CLI,
-      Codex CLI, and Cursor CLI are sequenced as Phase 6A/6B/6B.5 but not
-      yet implemented; see §9).
+- [x] At least two heterogeneous runtime adapters exist and can run
+      concurrently under the same broker (**met** as of Phase 6A — OpenCode
+      and Claude Code, both marked experimental, are implemented and
+      dispatch through the same generic broker lifecycle; Codex CLI and
+      Cursor CLI remain sequenced as Phase 6B/6B.5 but not yet implemented;
+      see §9 and [phase-6a.md](phase-6a.md)).
 
 ## 11. Terminology
 
@@ -300,9 +299,9 @@ scoped, not oversights:
 - **Adapter** (runtime adapter): the component translating the broker's
   generic "run this task" into a specific runtime's invocation, including
   its process/session lifecycle, output parsing, and cancellation
-  semantics (e.g. a specific CLI such as OpenCode, or the Claude Code,
-  Codex, and Cursor CLIs sequenced in [RFC-001](RFC-001.md) §10). An
-  adapter is what actually supervises a coding-agent runtime.
+  semantics — e.g. OpenCode or Claude Code (both implemented), or the
+  Codex and Cursor CLIs sequenced in [RFC-001](RFC-001.md) §10. An adapter
+  is what actually supervises a coding-agent runtime.
 - **Provider configuration**: a named, configured description of a model
   endpoint — base URL, credentials reference, model aliases, and declared
   API capabilities — as distinct from an adapter. A provider configuration

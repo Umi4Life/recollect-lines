@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
+from .claude_code_adapter import ClaudeCodeAdapter
 from .models import (
     DEFAULT_PROFILES,
     TERMINAL_STATES,
@@ -42,10 +43,25 @@ class MockAdapter:
 
 
 class Broker:
-    def __init__(self, home: Path, profiles: dict[str, ProfilePolicy] | None = None, opencode_adapter: OpenCodeAdapter | None = None):
+    def __init__(
+        self,
+        home: Path,
+        profiles: dict[str, ProfilePolicy] | None = None,
+        opencode_adapter: OpenCodeAdapter | None = None,
+        claude_code_adapter: ClaudeCodeAdapter | None = None,
+    ):
         self.store = TaskStore(home)
         self.adapter = MockAdapter()
         self.opencode_adapter = opencode_adapter or OpenCodeAdapter()
+        self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter()
+        # Every subprocess-backed adapter, keyed by the profile name that selects
+        # it — the one place profile-to-adapter dispatch lives, so start()/
+        # collect()/cancel()/timeout()/reconcile() never hard-code a specific
+        # adapter's name to decide whether a task has a supervised process.
+        self.subprocess_adapters = {
+            self.opencode_adapter.name: self.opencode_adapter,
+            self.claude_code_adapter.name: self.claude_code_adapter,
+        }
         self.profiles = profiles or DEFAULT_PROFILES
         self.workspaces = WorkspaceManager(self.store.home)
         # In-memory only, one broker process per running task; a restart loses
@@ -124,9 +140,10 @@ class Broker:
                     {"reason": "workspace_allocation_failed", "error": str(error)},
                 )
             effective_workspace = worktree_path
-        if record.profile == "opencode":
+        adapter = self.subprocess_adapters.get(record.profile)
+        if adapter is not None:
             try:
-                metadata, handle = self.opencode_adapter.start(record, self.store.artifacts / record.id, workspace=effective_workspace)
+                metadata, handle = adapter.start(record, self.store.artifacts / record.id, workspace=effective_workspace)
             except Exception:
                 # A losing writer never allocates, but a *successful* allocation
                 # whose adapter then fails to launch must still give up its lease —
@@ -142,8 +159,8 @@ class Broker:
             # on the very next line.
             self.store.record_launch(
                 record.id,
-                adapter=self.opencode_adapter.name,
-                adapter_label=self.opencode_adapter.runtime_label,
+                adapter=adapter.name,
+                adapter_label=adapter.runtime_label,
                 pid=handle.pid,
                 pgid=handle.pgid,
                 command=redact_command(metadata["command"]),
@@ -152,7 +169,7 @@ class Broker:
                 stderr_artifact=metadata["stderr_artifact"],
             )
             self.store.refresh_manifest(record.id)
-            return self.store.transition(record.id, TaskState.RUNNING, "OpenCode adapter started", metadata)
+            return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", metadata)
         return self.store.transition(record.id, TaskState.RUNNING, "Mock adapter started", self.adapter.start_metadata(record, effective_workspace))
 
     def complete(self, task_id: str, summary: str) -> TaskRecord:
@@ -181,27 +198,28 @@ class Broker:
             return record
         if task_id in self._process_handles:
             handle = self._process_handles.pop(task_id)
-            record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting OpenCode result", {})
-            collected = self.opencode_adapter.collect(handle)
+            adapter = self.subprocess_adapters[record.profile]
+            record = self.store.transition(task_id, TaskState.COLLECTING, f"Collecting {adapter.name} result", {})
+            collected = adapter.collect(handle)
             self.store.refresh_manifest(record.id)
-            runtime = {"adapter": "opencode", **collected}
+            runtime = {"adapter": adapter.name, **collected}
             if collected["exit_code"] != 0:
-                result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or "OpenCode exited with a non-zero status", "runtime": runtime}
+                result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or f"{adapter.name} exited with a non-zero status", "runtime": runtime}
                 self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
                 _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
                 self._write_gate_artifact(record.id, gate)
                 self._finalize_workspace(record.id)
-                return self.store.transition(record.id, TaskState.FAILED, "OpenCode task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
+                return self.store.transition(record.id, TaskState.FAILED, f"{adapter.name} task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
             state = TaskState.SUCCEEDED if collected["summary"] else TaskState.SUCCEEDED_WITH_WARNINGS
-            result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or "OpenCode run produced no text result", "runtime": runtime}
+            result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or f"{adapter.name} run produced no text result", "runtime": runtime}
             validate_result(result, record.id)
             self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
             final_state, gate = self._apply_verification_gate(record.id, record, state)
             self._write_gate_artifact(record.id, gate)
             self._finalize_workspace(record.id)
-            message = "OpenCode task completed" if final_state is state else f"OpenCode task blocked by verification gate ({gate['outcome']})"
+            message = f"{adapter.name} task completed" if final_state is state else f"{adapter.name} task blocked by verification gate ({gate['outcome']})"
             return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
-        if record.profile != "opencode":
+        if record.profile not in self.subprocess_adapters:
             # No subprocess was ever involved for this profile (mock tasks are
             # collected via complete(), not collect()); this is a caller/protocol
             # error, not a restart, and there is nothing to reconcile. Any
@@ -214,7 +232,7 @@ class Broker:
             return self.store.transition(
                 task_id,
                 TaskState.FAILED,
-                "No running OpenCode process handle for task (broker restart or already collected)",
+                "No running process handle for task (broker restart or already collected)",
                 {"reason": "missing_process_handle", "verification_gate": gate},
             )
         reconciled = self.reconcile(task_id)
@@ -268,8 +286,9 @@ class Broker:
             return record
         if record.state not in self._RECONCILABLE_STATES:
             return record
-        if record.profile != "opencode":
+        if record.profile not in self.subprocess_adapters:
             return record  # mock tasks never hold a subprocess; nothing to reconcile
+        adapter_name = self.subprocess_adapters[record.profile].name
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
         if launch is not None:
@@ -281,9 +300,9 @@ class Broker:
             target = TaskState.CANCELLED if was_cancelling else TaskState.FAILED
             if status == "dead":
                 message = (
-                    "OpenCode process group is no longer present after a broker restart; the in-progress "
+                    f"{adapter_name} process group is no longer present after a broker restart; the in-progress "
                     "cancellation is confirmed complete" if was_cancelling else
-                    "OpenCode process group is no longer present after a broker restart; the runtime outcome "
+                    f"{adapter_name} process group is no longer present after a broker restart; the runtime outcome "
                     "could not be observed and is recorded as failed"
                 )
             else:
@@ -302,16 +321,17 @@ class Broker:
         return record
 
     def reconcile_pending(self) -> list[TaskRecord]:
-        """Reconcile every opencode task this Broker instance can see is in a
-        reconcilable non-terminal state without an in-memory handle — the
-        operation a freshly started broker uses to inspect durable active
-        runtime records after a restart, without waiting for a caller to
-        happen to call collect()/cancel() on each task individually.
+        """Reconcile every subprocess-backed task (any profile in `subprocess_adapters`)
+        this Broker instance can see is in a reconcilable non-terminal state
+        without an in-memory handle — the operation a freshly started broker
+        uses to inspect durable active runtime records after a restart,
+        without waiting for a caller to happen to call collect()/cancel() on
+        each task individually.
         """
         return [
             self.reconcile(record.id)
             for record in self.store.list()
-            if record.profile == "opencode"
+            if record.profile in self.subprocess_adapters
             and record.state in self._RECONCILABLE_STATES
             and record.id not in self._process_handles
         ]
@@ -368,7 +388,7 @@ class Broker:
         handle = self._process_handles.get(task_id)
         if handle is not None:
             self._process_handles.pop(task_id, None)
-            cancellation = self.opencode_adapter.cancel(handle)
+            cancellation = self.subprocess_adapters[record.profile].cancel(handle)
             if cancellation["group_terminated"]:
                 self._finalize_workspace(task_id)
                 return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason, "cancellation": cancellation})
@@ -378,7 +398,7 @@ class Broker:
                 {"reason": reason, "cancellation": cancellation},
             )
 
-        if record.profile != "opencode":
+        if record.profile not in self.subprocess_adapters:
             # Mock tasks never hold a subprocess; nothing to protect.
             self._finalize_workspace(task_id)
             return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
@@ -397,7 +417,7 @@ class Broker:
             )
 
         if status == "alive":
-            cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.opencode_adapter.grace_period_seconds)
+            cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.profile].grace_period_seconds)
             if cancellation["group_terminated"]:
                 self._finalize_workspace(task_id)
                 return self.store.transition(
@@ -422,13 +442,14 @@ class Broker:
 
         Idempotent for an already-terminal task. When an in-memory process
         handle exists this is the original same-process cancellation path. When
-        it doesn't (mock task, or an opencode task whose handle was lost to a
-        broker restart), this consults the durable launch record: a mock task
-        (or an opencode task with no launch record at all — an anomaly with
-        nothing to protect) is cancelled immediately; an opencode task with a
-        confirmed-alive persisted process group is signalled via its pgid
-        directly (never blindly declared cancelled); anything the broker can't
-        confirm is dead is never assumed safe to clean up.
+        it doesn't (mock task, or a subprocess-backed task whose handle was lost
+        to a broker restart), this consults the durable launch record: a mock
+        task (or a subprocess-backed task with no launch record at all — an
+        anomaly with nothing to protect) is cancelled immediately; a
+        subprocess-backed task with a confirmed-alive persisted process group is
+        signalled via its pgid directly (never blindly declared cancelled);
+        anything the broker can't confirm is dead is never assumed safe to
+        clean up.
         """
         record = self.store.get(task_id)
         if record.state in TERMINAL_STATES:
@@ -438,29 +459,31 @@ class Broker:
             return self.store.transition(task_id, TaskState.CANCELLED, reason, {"reason": reason})
         handle = self._process_handles.get(task_id)
         if handle is not None:
+            adapter_name = self.subprocess_adapters[record.profile].name
             record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             self._process_handles.pop(record.id, None)
-            cancellation = self.opencode_adapter.cancel(handle)
+            cancellation = self.subprocess_adapters[record.profile].cancel(handle)
             target = TaskState.CANCELLED if cancellation["group_terminated"] else TaskState.FAILED
-            message = "OpenCode process group terminated" if cancellation["group_terminated"] else "OpenCode process group termination unconfirmed"
+            message = f"{adapter_name} process group terminated" if cancellation["group_terminated"] else f"{adapter_name} process group termination unconfirmed"
             if cancellation["group_terminated"]:
                 self._finalize_workspace(record.id)
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
 
-        if record.profile != "opencode":
+        if record.profile not in self.subprocess_adapters:
             self._finalize_workspace(task_id)
             if record.state is not TaskState.CANCELLING:
                 self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             return self.store.transition(task_id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
 
+        adapter_name = self.subprocess_adapters[record.profile].name
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
         if launch is not None:
             self.store.mark_launch_reconciled(task_id)
 
         if status == "no_launch":
-            # Anomalous for an opencode task (start() always records a launch
-            # before RUNNING) — nothing durable to signal or protect either way.
+            # Anomalous for a subprocess-backed task (start() always records a
+            # launch before RUNNING) — nothing durable to signal or protect either way.
             self._finalize_workspace(task_id)
             if record.state is not TaskState.CANCELLING:
                 self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
@@ -487,15 +510,15 @@ class Broker:
         if status == "dead":
             self._finalize_workspace(task_id)
             return self.store.transition(
-                task_id, TaskState.CANCELLED, "OpenCode process group already terminated",
+                task_id, TaskState.CANCELLED, f"{adapter_name} process group already terminated",
                 {"reason": reason, "cancellation": {"signals_sent": [], "group_terminated": True, "note": "confirmed dead via persisted pgid before any signal was sent"}},
             )
 
-        cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.opencode_adapter.grace_period_seconds)
+        cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.profile].grace_period_seconds)
         if cancellation["group_terminated"]:
             self._finalize_workspace(task_id)
             return self.store.transition(
-                task_id, TaskState.CANCELLED, "OpenCode process group terminated via persisted pgid after broker restart",
+                task_id, TaskState.CANCELLED, f"{adapter_name} process group terminated via persisted pgid after broker restart",
                 {"reason": reason, "cancellation": cancellation},
             )
         return self.store.transition(
