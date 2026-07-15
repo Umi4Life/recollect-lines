@@ -160,6 +160,17 @@ what changed (a diff/status artifact) without the isolated copy being
 merged back automatically. Concurrent writable tasks against the same
 source are serialized or rejected, never silently interleaved.
 
+### 5.6 Parent-directed side agents and bounded trees
+
+Beyond single tasks, a parent host may construct a **bounded task tree** at runtime:
+
+- Delegate arbitrary bounded work to one or more side agents, optionally grouped by `external_root_id` for host-side audit (without inventing a fake broker parent for grouping alone).
+- Choose **runtime**, **model**, and **behavioral agent profile** independently per child; request a **result schema** for normalized collection.
+- Continue host-side work while children run; poll durable **completion events** by cursor; collect concise provenance-aware results while raw evidence remains separately inspectable.
+- When in-flight steering is unsupported, create an explicit **`continues`** follow-up task rather than resuming a session.
+
+The broker enforces isolation, evidence, timeouts, and concurrency — not workflow topology. Fixture proof: [../demos/side-agent-fixture-evidence.json](../demos/side-agent-fixture-evidence.json). Opt-in live two-runtime dogfood: [../demos/live-two-runtime-dogfood-runbook.md](../demos/live-two-runtime-dogfood-runbook.md).
+
 ## 6. Functional requirements
 
 - **Durable tasks and events**: every task has a stable identifier, a

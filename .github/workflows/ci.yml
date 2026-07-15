@@ -28,6 +28,9 @@ jobs:
       - name: Run generic MCP-host acceptance harness
         run: python3 scripts/mcp_acceptance.py
 
+      - name: Run integrated side-agent fixture acceptance (MR 8.8)
+        run: PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
+
       - name: Run clean-install acceptance (Phase 7A)
         if: matrix.python-version == '3.11'
         run: python3 scripts/clean_install_acceptance.py

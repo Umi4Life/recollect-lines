@@ -42,6 +42,12 @@ def main():
         time.sleep(30)
         return 0
 
+    if "SLEEP_BRIEF" in prompt:
+        print("started", file=sys.stderr, flush=True)
+        time.sleep(0.4)
+        result("brief sleep complete")
+        return 0
+
     if "SLEEP" in prompt:
         print("started", file=sys.stderr, flush=True)
         time.sleep(30)
@@ -74,6 +80,11 @@ def main():
         return 1
 
     if "EMPTY_OUTPUT" in prompt:
+        return 0
+
+    if prompt.startswith("SCHEMA_"):
+        payload = prompt.split(" ", 1)[1] if " " in prompt else prompt
+        result(payload)
         return 0
 
     result(f"42 (from {prompt})")

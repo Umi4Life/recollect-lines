@@ -46,8 +46,10 @@ Operator / parent agent
 - Durable SQLite storage, artifact directories, optional verification gate
 - Post-restart reconciliation (truthful `failed` / `recovery_required`, not fabricated success)
 - Capability discovery, routing, bounded councils; `doctor` and `certify` harnesses
+- Parent-directed bounded task trees: `external_root_id`, lineage, `task_tree`, heterogeneous `runtime` / `agent_profile` / `model` / `result_schema` per child
+- Durable completion-event cursor polling and provenance-aware normalized results (raw evidence artifacts kept separate)
 
-**Honest limits:** no in-flight steering; no session resume after broker restart; subprocess `collect` needs the same long-lived broker instance that started the task (use MCP or a script for real runtimes). Details in [docs/user-flows.md](docs/user-flows.md).
+**Honest limits:** no in-flight steering (use `relationship=continues` for follow-up work); no session resume after broker restart; subprocess `collect` needs the same long-lived broker instance that started the task (use MCP or a script for real runtimes). Details in [docs/user-flows.md](docs/user-flows.md).
 
 ## Fastest way to try it
 
@@ -63,6 +65,12 @@ recollect-mcp --help
 ```
 
 **Offline mock (no provider):** [docs/getting-started.md](docs/getting-started.md#five-minute-quick-start-mock-no-provider)
+
+**Integrated side-agent fixture proof (no provider):** [docs/demos/side-agent-fixture-evidence.json](docs/demos/side-agent-fixture-evidence.json) — reproduce with:
+
+```bash
+PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
+```
 
 **Recorded live Codex demo:** [docs/demos/codex-marker-evidence.json](docs/demos/codex-marker-evidence.json) — reproduce with:
 
@@ -117,6 +125,7 @@ Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 scripts/mcp_acceptance.py
+python3 scripts/side_agent_fixture_acceptance.py
 python3 scripts/clean_install_acceptance.py
 python3 -m compileall -q src tests scripts
 ```

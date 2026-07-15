@@ -46,6 +46,13 @@ def main():
         emit({"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}})
         return 0
 
+    if "SLEEP_BRIEF" in prompt:
+        print("started", file=sys.stderr, flush=True)
+        time.sleep(0.4)
+        agent_message("brief sleep complete")
+        emit({"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}})
+        return 0
+
     if "SLEEP" in prompt:
         print("started", file=sys.stderr, flush=True)
         time.sleep(30)
