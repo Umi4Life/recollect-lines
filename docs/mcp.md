@@ -53,7 +53,7 @@ Optional:
 | `profile` | — | **Deprecated.** Legacy alias for `runtime`; accepted only for known runtime identifiers |
 | `model` | — | Optional requested model identifier (persisted only in this release) |
 | `agent_profile` | — | Optional behavioral role identifier (persisted only in this release) |
-| `result_schema` | — | Optional normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`); unknown values rejected at delegate |
+| `result_schema` | — | Optional normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`); unknown values rejected at delegate. Structured schemas append a versioned prompt-level output contract at launch (not provider-native structured output). |
 | `provider` | — | Required when `runtime` is `openai_compatible` |
 | `timeout_seconds` | `1800` | positive integer |
 | `verification_policy` | `none` | `none`, `advisory`, `required` |

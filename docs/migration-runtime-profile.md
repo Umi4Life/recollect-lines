@@ -138,6 +138,8 @@ On collect/complete the broker writes:
 - `broker_observed.artifact_manifest_ref` points at `manifest.json`; embedded `artifact_refs` list sibling artifacts only (never `normalized_result.json` itself, since a file cannot embed a stable hash of its own final bytes)
 - raw runtime output remains in the adapter events artifact or `runtime_raw_output.txt` (mock path); parser references rather than duplicating it
 
+At launch, when a structured `result_schema` is selected (profile default or explicit task override), the broker appends a versioned, provider-neutral output contract to the composed launch prompt (`composed_prompt.json`). These contracts guide CLI runtime output shape; they are prompt-level instructions only and do not enable provider-native structured-output enforcement.
+
 Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.
 
 ## Integrated fixture proof (MR 8.8)
