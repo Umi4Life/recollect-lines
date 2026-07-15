@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -205,6 +205,7 @@ class TaskRequest:
     agent_profile: str | None = None
     result_schema: str | None = None
     compatibility: dict[str, Any] | None = None
+    explicit_fields: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

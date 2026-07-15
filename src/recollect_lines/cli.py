@@ -54,21 +54,25 @@ def parser() -> argparse.ArgumentParser:
         "--providers-config", type=Path, default=None,
         help="Path to a JSON provider configuration file (required for openai_compatible profile tasks).",
     )
+    p.add_argument(
+        "--agent-profiles-config", type=Path, default=None,
+        help="Path to a JSON agent profile configuration file (extends built-in profiles).",
+    )
     sub = p.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--task", required=True)
     create.add_argument("--workspace", required=True)
-    create.add_argument("--mode", default="read_only")
+    create.add_argument("--mode", default=None, help="Execution mode (defaults to read_only or agent profile default).")
     create.add_argument("--runtime", default=None, help="Execution backend identifier (preferred over --profile).")
     create.add_argument("--profile", default=None, help="Deprecated alias for --runtime.")
     create.add_argument("--model", default=None, help="Optional per-task model override (capability-gated by runtime).")
-    create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral role identifier (persisted only).")
-    create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier (persisted only).")
+    create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral agent profile name.")
+    create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier.")
     create.add_argument(
         "--provider", default=None,
         help="Named provider from --providers-config (required when --runtime openai_compatible).",
     )
-    create.add_argument("--timeout", type=int, default=1800)
+    create.add_argument("--timeout", type=int, default=None)
     create.add_argument("--verification-policy", default="none", choices=VERIFICATION_POLICIES)
     create.add_argument(
         "--verify-command", dest="verify_commands", action="append", default=None,
@@ -107,6 +111,7 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("list")
     sub.add_parser("reconcile-all")
     sub.add_parser("discover")
+    sub.add_parser("list-agent-profiles", help="List built-in and configured behavioral agent profiles")
     select = sub.add_parser("select")
     select.add_argument("--mode", dest="execution_mode", required=True)
     select.add_argument("--allowed-runtime", dest="allowed_runtimes", action="append", default=None)
@@ -202,9 +207,23 @@ def main(argv: list[str] | None = None) -> int:
         codex_adapter=codex_adapter,
         cursor_adapter=cursor_adapter,
         providers_config=args.providers_config,
+        agent_profiles_config=args.agent_profiles_config,
     )
     try:
         if args.command == "create":
+            explicit_fields: set[str] = set()
+            execution_mode = args.mode if args.mode is not None else "read_only"
+            if args.mode is not None:
+                explicit_fields.add("execution_mode")
+            timeout_seconds = args.timeout if args.timeout is not None else 1800
+            if args.timeout is not None:
+                explicit_fields.add("timeout_seconds")
+            if args.model is not None:
+                explicit_fields.add("model")
+            if args.agent_profile is not None:
+                explicit_fields.add("agent_profile")
+            if args.result_schema is not None:
+                explicit_fields.add("result_schema")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -215,16 +234,17 @@ def main(argv: list[str] | None = None) -> int:
             request = TaskRequest(
                 args.task,
                 args.workspace,
-                args.mode,
+                execution_mode,
                 runtime,
                 args.provider,
-                args.timeout,
+                timeout_seconds,
                 args.verification_policy,
                 runtime=runtime,
                 model=model,
                 agent_profile=agent_profile,
                 result_schema=result_schema,
                 compatibility=compatibility,
+                explicit_fields=frozenset(explicit_fields),
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)
@@ -262,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
             ]
         elif args.command == "discover":
             output = broker.discover_capabilities()
+        elif args.command == "list-agent-profiles":
+            output = broker.list_agent_profiles()
         elif args.command == "select":
             output = broker.select_candidates(
                 execution_mode=args.execution_mode,

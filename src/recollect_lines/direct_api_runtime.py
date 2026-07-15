@@ -145,13 +145,7 @@ class OpenAiCompatibleDirectRuntime:
             )
         ) from last_error
 
-    def _worker(self, handle: DirectApiHandle, record: TaskRecord, config: ProviderConfig, api_key: str) -> None:
-        effective_model = record.effective_model or config.default_model
-        payload = {
-            "model": effective_model,
-            "messages": [{"role": "user", "content": record.task}],
-        }
-        handle.request_artifact.write_text(json.dumps({"provider": config.name, "url": config.chat_completions_url(), "payload": payload}, indent=2) + "\n")
+    def _worker(self, handle: DirectApiHandle, record: TaskRecord, config: ProviderConfig, api_key: str, *, payload: dict) -> None:
         try:
             status, body, headers = self._post_chat_completions(config, api_key, payload, handle.cancel_event)
             response_doc = {"status": status, "headers": headers, "body": body}
@@ -170,6 +164,7 @@ class OpenAiCompatibleDirectRuntime:
             if summary is None:
                 handle.result = self._error_result(config, api_key, "malformed_response", body, status)
                 return
+            effective_model = payload["model"]
             handle.result = {
                 "exit_code": 0,
                 "summary": summary,
@@ -216,7 +211,7 @@ class OpenAiCompatibleDirectRuntime:
             "verification": {"tests_broker_verified": False, "source": "runtime_reported"},
         }
 
-    def start(self, record: TaskRecord, artifacts_dir: Path) -> tuple[dict, DirectApiHandle]:
+    def start(self, record: TaskRecord, artifacts_dir: Path, *, prompt: str | None = None) -> tuple[dict, DirectApiHandle]:
         if record.provider is None:
             raise ProviderConfigError(f"Profile {DIRECT_API_PROFILE!r} requires a named provider")
         config = self.get_provider(record.provider)
@@ -236,10 +231,19 @@ class OpenAiCompatibleDirectRuntime:
             request_artifact=artifacts_dir / "request_payload.json",
             response_artifact=artifacts_dir / "response.json",
         )
+        effective_model = record.effective_model or config.default_model
+        launch_prompt = prompt or record.task
+        payload = {
+            "model": effective_model,
+            "messages": [{"role": "user", "content": launch_prompt}],
+        }
+        handle.request_artifact.write_text(
+            json.dumps({"provider": config.name, "url": config.chat_completions_url(), "payload": payload}, indent=2) + "\n",
+        )
         api_key = resolve_api_key(config, self.environ)
 
         def run() -> None:
-            self._worker(handle, record, config, api_key)
+            self._worker(handle, record, config, api_key, payload=payload)
 
         thread = threading.Thread(target=run, name=f"direct-api-{record.id}", daemon=True)
         handle.thread = thread

@@ -8,7 +8,7 @@ Recollect Lines previously overloaded `profile` as the execution-backend selecto
 | Field | Meaning |
 |-------|---------|
 | `runtime` | Execution backend identifier |
-| `agent_profile` | Optional behavioral role identifier (persisted; not yet composed into prompts) |
+| `agent_profile` | Optional behavioral agent profile name (resolves prompt prefix and defaults at create; composed at launch) |
 | `model` | Optional requested model identifier (passed to adapters when the runtime's `model_selection` supports it) |
 | `effective_model` | Model resolved at launch (adapter/provider default or task override); persisted after `start()` |
 | `result_schema` | Optional requested result-contract identifier (persisted; not yet normalized) |
@@ -89,6 +89,31 @@ code or interface constants.
 Additive migration on the existing `tasks` table:
 
 - `runtime` — backfilled from historical `profile`
-- `model`, `agent_profile`, `result_schema` — nullable, inert until later increments
+- `model`, `agent_profile`, `result_schema` — nullable; `agent_profile` resolves through built-in or configured profiles (see below)
+
+## Behavioral agent profiles (Phase 8.4)
+
+Built-in profiles (`repository-investigator`, `architecture-reviewer`, `implementation-worker`, `test-planner`) declare:
+
+| Field | Meaning |
+|-------|---------|
+| `prompt_prefix` | Instructions prepended to task text at launch (deterministic composition) |
+| `default_result_schema` | Default result-contract identifier when the task omits one |
+| `default_execution_mode` | Default mode when the task omits `execution_mode` |
+| `default_timeout_seconds` | Default timeout when the task omits `timeout_seconds` |
+| `recommended_runtime` | Advisory hint only — never overrides an explicit `runtime` |
+
+Resolution precedence:
+
+```text
+broker safety ceiling (policy max timeout, allowed modes)
+> explicit permitted task value
+> profile default
+> runtime default
+```
+
+At create time the broker persists `agent_profile_resolution.json` (name, content hash, resolved fields, sources, task overrides). At launch it writes `composed_prompt.json` from that snapshot — changing profile configuration later cannot alter historic records.
+
+Optional JSON configuration extends built-ins (`--agent-profiles-config` / broker constructor). List profiles via `discover` / `discover_capabilities` or `list-agent-profiles`.
 
 No destructive schema replacement. Re-running migration is idempotent.

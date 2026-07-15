@@ -28,6 +28,15 @@ from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
+from .agent_profiles import (
+    compose_task_prompt,
+    get_agent_profile,
+    list_agent_profiles,
+    load_agent_profiles_config,
+    merge_agent_profile_registries,
+    resolution_artifact_payload,
+    resolve_agent_profile,
+)
 from .model_selection import (
     ModelSelectionRefusedError,
     model_selection_metadata,
@@ -83,6 +92,8 @@ class Broker:
         cursor_adapter: CursorAdapter | None = None,
         fixture_durable_adapter: FixtureDurableAdapter | None = None,
         providers_config: Path | None = None,
+        agent_profiles_config: Path | None = None,
+        agent_profiles: dict | None = None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
         environ: dict[str, str] | None = None,
     ):
@@ -133,6 +144,12 @@ class Broker:
             self.direct_api_runtime = OpenAiCompatibleDirectRuntime(load_providers_config(providers_config), environ=environ)
         else:
             self.direct_api_runtime = None
+        custom_profiles = {}
+        if agent_profiles is not None:
+            custom_profiles = agent_profiles
+        elif agent_profiles_config is not None:
+            custom_profiles = load_agent_profiles_config(agent_profiles_config)
+        self.agent_profiles = merge_agent_profile_registries(custom_profiles)
         # In-memory only, one broker process per running task; a restart loses
         # this dict. That's fine: `store.runtime_launches` is the durable record
         # a fresh Broker reconciles against (see reconcile()/reconcile_pending()
@@ -186,7 +203,7 @@ class Broker:
             record = self.store.set_effective_model(record.id, effective_model)
         return record, evidence
 
-    def _validate_request(self, request: TaskRequest) -> ProfilePolicy:
+    def _validate_request(self, request: TaskRequest, *, policy: ProfilePolicy | None = None) -> ProfilePolicy:
         if not request.task.strip():
             raise ValueError("Task must not be empty")
         if not request.workspace.strip():
@@ -196,11 +213,13 @@ class Broker:
         runtime = effective_runtime(request)
         if runtime not in self.profiles:
             raise ValueError(f"Unknown runtime: {runtime}")
-        policy = self.profiles[runtime]
-        if request.execution_mode not in policy.allowed_modes:
-            raise ValueError(f"Profile {policy.name} does not permit mode {request.execution_mode}")
-        if request.timeout_seconds > policy.max_timeout_seconds:
-            raise ValueError(f"Profile {policy.name} maximum timeout is {policy.max_timeout_seconds} seconds")
+        resolved_policy = policy or self.profiles[runtime]
+        if request.execution_mode not in resolved_policy.allowed_modes:
+            raise ValueError(f"Profile {resolved_policy.name} does not permit mode {request.execution_mode}")
+        if request.timeout_seconds > resolved_policy.max_timeout_seconds:
+            raise ValueError(
+                f"Profile {resolved_policy.name} maximum timeout is {resolved_policy.max_timeout_seconds} seconds"
+            )
         if request.verification_policy not in VERIFICATION_POLICIES:
             raise ValueError(f"Unknown verification_policy: {request.verification_policy}")
         if runtime == DIRECT_API_PROFILE:
@@ -213,21 +232,77 @@ class Broker:
             self.direct_api_runtime.get_provider(request.provider)
         elif request.provider is not None:
             raise ValueError(f"provider is only valid with profile {DIRECT_API_PROFILE!r}")
-        if self.store.active_count(runtime) >= policy.max_concurrency:
-            raise ValueError(f"Profile {policy.name} concurrency limit reached")
+        if self.store.active_count(runtime) >= resolved_policy.max_concurrency:
+            raise ValueError(f"Profile {resolved_policy.name} concurrency limit reached")
         validate_requested_model(self.runtime_registry.get(runtime), request.model)
-        return policy
+        return resolved_policy
+
+    def _resolve_agent_profile_request(
+        self, request: TaskRequest,
+    ) -> tuple[TaskRequest, object | None]:
+        if request.agent_profile is None:
+            return request, None
+        runtime = effective_runtime(request)
+        policy = self.profiles[runtime]
+        profile = get_agent_profile(request.agent_profile, self.agent_profiles)
+        resolved = resolve_agent_profile(
+            profile=profile,
+            explicit_fields=request.explicit_fields,
+            execution_mode=request.execution_mode,
+            timeout_seconds=request.timeout_seconds,
+            result_schema=request.result_schema,
+            allowed_modes=policy.allowed_modes,
+            max_timeout_seconds=policy.max_timeout_seconds,
+        )
+        effective = TaskRequest(
+            request.task,
+            request.workspace,
+            resolved.execution_mode,
+            request.profile,
+            request.provider,
+            resolved.timeout_seconds,
+            request.verification_policy,
+            runtime=request.runtime,
+            model=request.model,
+            agent_profile=request.agent_profile,
+            result_schema=resolved.result_schema,
+            compatibility=request.compatibility,
+            explicit_fields=request.explicit_fields,
+        )
+        return effective, resolved
+
+    def _composed_launch_prompt(self, task_id: str, record: TaskRecord) -> tuple[str, dict[str, object] | None]:
+        path = self.store.artifacts / task_id / "agent_profile_resolution.json"
+        if not path.is_file():
+            return record.task, None
+        resolution = json.loads(path.read_text())
+        composed = compose_task_prompt(resolution["prompt_prefix"], record.task)
+        evidence = {
+            "profile_name": resolution["name"],
+            "profile_content_hash": resolution["content_hash"],
+            "task_text": record.task,
+            "prompt_prefix": resolution["prompt_prefix"],
+            "composed_prompt": composed,
+        }
+        return composed, evidence
 
     def create(self, request: TaskRequest, verify_commands: list[list[str]] | None = None) -> TaskRecord:
         """Create a task, optionally declaring the broker-verified commands its
         verification_policy will gate on. Shared by the CLI and MCP surfaces so
         neither duplicates this policy check (PRD §6).
         """
-        self._validate_request(request)
+        effective_request, resolved_profile = self._resolve_agent_profile_request(request)
+        self._validate_request(effective_request)
         if verify_commands is not None:
             validate_verify_commands(verify_commands)
-        record = self.store.create(TaskRecord.new(request))
+        record = self.store.create(TaskRecord.new(effective_request))
         self.store.write_artifact(record.id, "request.json", json.dumps(request_artifact_payload(request), indent=2) + "\n")
+        if resolved_profile is not None:
+            self.store.write_artifact(
+                record.id,
+                "agent_profile_resolution.json",
+                json.dumps(resolution_artifact_payload(resolved_profile), indent=2, sort_keys=True) + "\n",
+            )
         if verify_commands is not None:
             self.store.write_artifact(record.id, "verify_commands.json", json.dumps(verify_commands, indent=2) + "\n")
         return self.store.transition(record.id, TaskState.QUEUED, "Task queued", {})
@@ -235,6 +310,13 @@ class Broker:
     def start(self, task_id: str) -> TaskRecord:
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
         record, model_evidence = self._resolve_launch_model(record)
+        launch_prompt, prompt_evidence = self._composed_launch_prompt(task_id, record)
+        if prompt_evidence is not None:
+            self.store.write_artifact(
+                task_id,
+                "composed_prompt.json",
+                json.dumps(prompt_evidence, indent=2, sort_keys=True) + "\n",
+            )
         effective_workspace = record.workspace
         if record.execution_mode == ISOLATED_WORKTREE:
             try:
@@ -270,7 +352,7 @@ class Broker:
             runtime = self.direct_api_runtime
             assert runtime is not None
             try:
-                metadata, handle = runtime.start(record, self.store.artifacts / record.id)
+                metadata, handle = runtime.start(record, self.store.artifacts / record.id, prompt=launch_prompt)
             except Exception as error:
                 if record.execution_mode == ISOLATED_WORKTREE:
                     lease = self.store.get_lease(record.id)
@@ -295,11 +377,15 @@ class Broker:
             )
             self.store.refresh_manifest(record.id)
             metadata = {**metadata, "model_selection": model_evidence}
+            if prompt_evidence is not None:
+                metadata = {**metadata, "agent_profile_prompt": prompt_evidence}
             return self.store.transition(record.id, TaskState.RUNNING, f"{runtime.name} direct API request started", metadata)
         adapter = self.subprocess_adapters.get(record.runtime)
         if adapter is not None:
             try:
-                metadata, handle = adapter.start(record, self.store.artifacts / record.id, workspace=effective_workspace)
+                metadata, handle = adapter.start(
+                    record, self.store.artifacts / record.id, workspace=effective_workspace, prompt=launch_prompt,
+                )
             except Exception:
                 # A losing writer never allocates, but a *successful* allocation
                 # whose adapter then fails to launch must still give up its lease —
@@ -336,10 +422,15 @@ class Broker:
             if metadata.get("launch_kind") == LAUNCH_KIND_DURABLE:
                 event_metadata = {**metadata, "command": stored_command}
             event_metadata = {**event_metadata, "model_selection": model_evidence}
+            if prompt_evidence is not None:
+                event_metadata = {**event_metadata, "agent_profile_prompt": prompt_evidence}
             return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", event_metadata)
+        mock_metadata = {**self.adapter.start_metadata(record, effective_workspace), "model_selection": model_evidence}
+        if prompt_evidence is not None:
+            mock_metadata = {**mock_metadata, "agent_profile_prompt": prompt_evidence}
         return self.store.transition(
             record.id, TaskState.RUNNING, "Mock adapter started",
-            {**self.adapter.start_metadata(record, effective_workspace), "model_selection": model_evidence},
+            mock_metadata,
         )
 
     def complete(self, task_id: str, summary: str) -> TaskRecord:
@@ -1196,7 +1287,11 @@ class Broker:
                 direct_api_runtime=self.direct_api_runtime,
                 environ=environ,
             ),
+            "agent_profiles": list_agent_profiles(self.agent_profiles),
         }
+
+    def list_agent_profiles(self) -> list[dict]:
+        return list_agent_profiles(self.agent_profiles)
 
     def select_candidates(
         self,
