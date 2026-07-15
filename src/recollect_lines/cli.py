@@ -78,6 +78,11 @@ def parser() -> argparse.ArgumentParser:
         "--verify-command", dest="verify_commands", action="append", default=None,
         help="JSON-encoded argv array run as broker-verified evidence when this task is collected; may be repeated",
     )
+    create.add_argument("--parent-task-id", dest="parent_task_id", default=None, help="Optional broker parent task id.")
+    create.add_argument("--external-root-id", dest="external_root_id", default=None, help="Audit-only host grouping id.")
+    create.add_argument("--relationship", default=None, choices=("delegates", "continues"), help="Child relationship when parent is set.")
+    create.add_argument("--origin-kind", dest="origin_kind", default=None, choices=("host", "side_agent"))
+    create.add_argument("--origin-ref", dest="origin_ref", default=None, help="Audit-only caller reference.")
     for name in ("start", "status", "complete", "collect", "cancel", "timeout", "reconcile"):
         cmd = sub.add_parser(name)
         cmd.add_argument("task_id")
@@ -109,6 +114,10 @@ def parser() -> argparse.ArgumentParser:
         help="JSON-encoded argv array, e.g. '[\"pytest\", \"-q\"]'; may be repeated",
     )
     sub.add_parser("list")
+    children = sub.add_parser("children", help="List direct child task summaries for a parent task")
+    children.add_argument("task_id")
+    task_tree = sub.add_parser("task-tree", help="Show bounded task tree for a root task id")
+    task_tree.add_argument("root_task_id")
     sub.add_parser("reconcile-all")
     sub.add_parser("discover")
     sub.add_parser("list-agent-profiles", help="List built-in and configured behavioral agent profiles")
@@ -245,6 +254,11 @@ def main(argv: list[str] | None = None) -> int:
                 result_schema=result_schema,
                 compatibility=compatibility,
                 explicit_fields=frozenset(explicit_fields),
+                parent_task_id=args.parent_task_id,
+                external_root_id=args.external_root_id,
+                relationship=args.relationship,
+                origin_kind=args.origin_kind,
+                origin_ref=args.origin_ref,
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)
@@ -293,6 +307,10 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_providers=args.allowed_providers,
                 require_available=not args.include_unavailable,
             )
+        elif args.command == "children":
+            output = {"parent_task_id": args.task_id, "children": broker.children(args.task_id)}
+        elif args.command == "task-tree":
+            output = broker.task_tree(args.root_task_id)
         elif args.command == "council":
             plan = json.loads(args.plan)
             if args.council_command == "validate":

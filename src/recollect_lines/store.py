@@ -106,6 +106,25 @@ class TaskStore:
         for column, column_type in side_agent_columns.items():
             if column not in existing_columns:
                 self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {column_type}")
+        lineage_columns = {
+            "parent_task_id": "TEXT",
+            "root_task_id": "TEXT",
+            "external_root_id": "TEXT",
+            "delegation_depth": "INTEGER NOT NULL DEFAULT 0",
+            "relationship": "TEXT",
+            "origin_kind": "TEXT",
+            "origin_ref": "TEXT",
+        }
+        for column, column_type in lineage_columns.items():
+            if column not in existing_columns:
+                self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {column_type}")
+        self.connection.execute("UPDATE tasks SET root_task_id = id WHERE root_task_id IS NULL")
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS tasks_parent_task_id ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS tasks_root_task_id ON tasks(root_task_id) WHERE root_task_id IS NOT NULL"
+        )
         self.connection.execute("UPDATE tasks SET runtime = profile WHERE runtime IS NULL")
         self.connection.executescript(
             """
@@ -128,14 +147,20 @@ class TaskStore:
         data["runtime"] = runtime
         data["profile"] = runtime
         data["state"] = TaskState(data["state"])
+        if data.get("root_task_id") is None:
+            data["root_task_id"] = data["id"]
+        if data.get("delegation_depth") is None:
+            data["delegation_depth"] = 0
         return TaskRecord(**data)
 
     def create(self, record: TaskRecord) -> TaskRecord:
         with self.connection:
             self.connection.execute(
                 "INSERT INTO tasks (id, task, workspace, execution_mode, runtime, profile, provider, "
-                "timeout_seconds, verification_policy, state, created_at, updated_at, model, agent_profile, result_schema, effective_model) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "timeout_seconds, verification_policy, state, created_at, updated_at, model, agent_profile, "
+                "result_schema, effective_model, parent_task_id, root_task_id, external_root_id, delegation_depth, "
+                "relationship, origin_kind, origin_ref) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.task,
@@ -153,6 +178,13 @@ class TaskStore:
                     record.agent_profile,
                     record.result_schema,
                     record.effective_model,
+                    record.parent_task_id,
+                    record.root_task_id or record.id,
+                    record.external_root_id,
+                    record.delegation_depth,
+                    record.relationship,
+                    record.origin_kind,
+                    record.origin_ref,
                 ),
             )
             self.event(record.id, "task.created", None, record.state, "Task accepted", {})
@@ -175,6 +207,43 @@ class TaskStore:
             f"SELECT COUNT(*) FROM tasks WHERE runtime = ? AND state IN ({','.join('?' for _ in active)})",
             (runtime, *active),
         ).fetchone()[0]
+
+    def total_active_count(self) -> int:
+        active = tuple(
+            state.value
+            for state in (
+                TaskState.QUEUED,
+                TaskState.PREPARING,
+                TaskState.RUNNING,
+                TaskState.COLLECTING,
+                TaskState.CANCELLING,
+                TaskState.RECOVERY_REQUIRED,
+            )
+        )
+        return self.connection.execute(
+            f"SELECT COUNT(*) FROM tasks WHERE state IN ({','.join('?' for _ in active)})",
+            active,
+        ).fetchone()[0]
+
+    def child_count(self, parent_task_id: str) -> int:
+        return self.connection.execute(
+            "SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?",
+            (parent_task_id,),
+        ).fetchone()[0]
+
+    def list_children(self, parent_task_id: str) -> list[TaskRecord]:
+        rows = self.connection.execute(
+            "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at, id",
+            (parent_task_id,),
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def list_tree_tasks(self, root_task_id: str, *, limit: int) -> list[TaskRecord]:
+        rows = self.connection.execute(
+            "SELECT * FROM tasks WHERE root_task_id = ? ORDER BY delegation_depth, created_at, id LIMIT ?",
+            (root_task_id, limit),
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
 
     def set_effective_model(self, task_id: str, effective_model: str | None) -> TaskRecord:
         with self.connection:

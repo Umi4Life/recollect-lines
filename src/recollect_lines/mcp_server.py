@@ -35,6 +35,7 @@ from .models import (
     validate_verify_commands,
     verification_gate_label,
 )
+from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
@@ -93,6 +94,7 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     """
     if not isinstance(item, dict):
         raise ValueError("Each delegate item must be an object")
+    reject_forbidden_lineage_keys(item)
     task = item.get("task")
     workspace = item.get("workspace")
     if not isinstance(task, str) or not task.strip():
@@ -134,6 +136,14 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
         validate_verify_commands(verify_commands)
+    parent_task_id = item.get("parent_task_id")
+    external_root_id = item.get("external_root_id")
+    relationship = item.get("relationship")
+    origin_kind = item.get("origin_kind")
+    origin_ref = item.get("origin_ref")
+    for key in ("parent_task_id", "external_root_id", "relationship", "origin_kind", "origin_ref"):
+        if key in item and item[key] is not None and not isinstance(item[key], str):
+            raise ValueError(f"'{key}' must be a string when provided")
     return TaskRequest(
         task,
         workspace,
@@ -148,6 +158,11 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         result_schema=result_schema,
         compatibility=compatibility,
         explicit_fields=frozenset(explicit_fields),
+        parent_task_id=parent_task_id,
+        external_root_id=external_root_id,
+        relationship=relationship,
+        origin_kind=origin_kind,
+        origin_ref=origin_ref,
     ), verify_commands
 
 
@@ -159,24 +174,7 @@ def _require_task_id(args: dict) -> str:
 
 
 def _task_summary(record, broker: Broker | None = None) -> dict:
-    summary = {
-        "task_id": record.id,
-        "state": record.state.value,
-        "workspace": record.workspace,
-        "execution_mode": record.execution_mode,
-        "runtime": record.runtime,
-        "profile": record.profile,
-        "provider": record.provider,
-        "verification_policy": record.verification_policy,
-    }
-    if record.model is not None:
-        summary["model"] = record.model
-    if record.effective_model is not None:
-        summary["effective_model"] = record.effective_model
-    if record.agent_profile is not None:
-        summary["agent_profile"] = record.agent_profile
-    if record.result_schema is not None:
-        summary["result_schema"] = record.result_schema
+    summary = concise_task_summary(record)
     if broker is not None:
         compatibility = _read_json_artifact(broker, record.id, "request.json")
         if isinstance(compatibility, dict) and "compatibility" in compatibility:
@@ -387,6 +385,18 @@ def handle_council_execute(broker: Broker, args: dict) -> dict:
     return broker.execute_council(_require_council_plan(args))
 
 
+def handle_task_children(broker: Broker, args: dict) -> dict:
+    task_id = _require_task_id(args)
+    return {"parent_task_id": task_id, "children": broker.children(task_id)}
+
+
+def handle_task_tree(broker: Broker, args: dict) -> dict:
+    root_task_id = args.get("root_task_id")
+    if not isinstance(root_task_id, str) or not root_task_id.strip():
+        raise ValueError("'root_task_id' must be a non-empty string")
+    return broker.task_tree(root_task_id.strip())
+
+
 # --- tool schemas and registry ----------------------------------------------
 
 DELEGATE_INPUT_SCHEMA = {
@@ -466,6 +476,28 @@ DELEGATE_INPUT_SCHEMA = {
                 "blocks it. 'required' blocks a runtime success into failed if any declared command fails, "
                 "or if verification_policy is 'required' but no verify_commands were declared at all."
             ),
+        },
+        "parent_task_id": {
+            "type": "string",
+            "description": "Optional existing broker task parent for parent-directed side-agent composition.",
+        },
+        "external_root_id": {
+            "type": "string",
+            "description": "Audit-only host/conversation/operation grouping. Does not require a broker parent.",
+        },
+        "relationship": {
+            "type": "string",
+            "enum": list(VALID_RELATIONSHIPS),
+            "description": "Descriptive child relationship when parent_task_id is set. continues marks a follow-up new task, not session resume.",
+        },
+        "origin_kind": {
+            "type": "string",
+            "enum": list(VALID_ORIGIN_KINDS),
+            "description": "Audit-only provenance class (not used for authorization).",
+        },
+        "origin_ref": {
+            "type": "string",
+            "description": "Audit-only caller/reference string.",
         },
     },
     "required": ["task", "workspace"],
@@ -557,6 +589,17 @@ COUNCIL_PLAN_INPUT_SCHEMA = {
     },
     "required": ["plan"],
 }
+TASK_CHILDREN_INPUT_SCHEMA = {"type": "object", "properties": dict(_TASK_ID_PROPERTY), "required": ["task_id"]}
+TASK_TREE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "root_task_id": {
+            "type": "string",
+            "description": "Broker-tree root task id (must match the task's persisted root_task_id).",
+        },
+    },
+    "required": ["root_task_id"],
+}
 
 TOOLS = {
     "delegate": {
@@ -633,6 +676,16 @@ TOOLS = {
         "description": "Execute a validated bounded council plan through broker lifecycle primitives and record stage evidence for parent synthesis (no autonomous winner).",
         "inputSchema": COUNCIL_PLAN_INPUT_SCHEMA,
         "handler": handle_council_execute,
+    },
+    "task_children": {
+        "description": "List concise summaries of direct child tasks for a parent task id.",
+        "inputSchema": TASK_CHILDREN_INPUT_SCHEMA,
+        "handler": handle_task_children,
+    },
+    "task_tree": {
+        "description": "Return a deterministic bounded task tree for a broker root_task_id (concise summaries only).",
+        "inputSchema": TASK_TREE_INPUT_SCHEMA,
+        "handler": handle_task_tree,
     },
 }
 

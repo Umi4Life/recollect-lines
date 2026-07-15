@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import signal
@@ -62,6 +63,14 @@ from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, r
 from .providers import ProviderConfigError, load_providers_config
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
 from .store import TaskStore
+from .task_lineage import (
+    DEFAULT_LINEAGE_POLICY,
+    MAX_TREE_NODES,
+    LineagePolicy,
+    concise_task_summary,
+    reject_forbidden_lineage_keys,
+    resolve_lineage,
+)
 from .workspace import WorkspaceError, WorkspaceManager, canonical_source, capture_head
 
 ISOLATED_WORKTREE = "isolated_worktree"
@@ -95,6 +104,7 @@ class Broker:
         agent_profiles_config: Path | None = None,
         agent_profiles: dict | None = None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
+        lineage_policy: LineagePolicy | None = None,
         environ: dict[str, str] | None = None,
     ):
         self.store = TaskStore(home)
@@ -150,6 +160,7 @@ class Broker:
         elif agent_profiles_config is not None:
             custom_profiles = load_agent_profiles_config(agent_profiles_config)
         self.agent_profiles = merge_agent_profile_registries(custom_profiles)
+        self.lineage_policy = lineage_policy or DEFAULT_LINEAGE_POLICY
         # In-memory only, one broker process per running task; a restart loses
         # this dict. That's fine: `store.runtime_launches` is the durable record
         # a fresh Broker reconciles against (see reconcile()/reconcile_pending()
@@ -286,6 +297,49 @@ class Broker:
         }
         return composed, evidence
 
+    def _apply_resolved_lineage(self, record: TaskRecord, resolved) -> TaskRecord:
+        return dataclasses.replace(
+            record,
+            parent_task_id=resolved.parent_task_id,
+            root_task_id=resolved.root_task_id,
+            external_root_id=resolved.external_root_id,
+            delegation_depth=resolved.delegation_depth,
+            relationship=resolved.relationship,
+            origin_kind=resolved.origin_kind,
+            origin_ref=resolved.origin_ref,
+        )
+
+    def _resolve_record_lineage(self, record: TaskRecord, request: TaskRequest) -> TaskRecord:
+        resolved = resolve_lineage(
+            task_id=record.id,
+            parent_task_id=request.parent_task_id,
+            external_root_id=request.external_root_id,
+            relationship=request.relationship,
+            origin_kind=request.origin_kind,
+            origin_ref=request.origin_ref,
+            get_parent=self.store.get,
+            child_count=self.store.child_count,
+            active_agent_count=self.store.total_active_count,
+            policy=self.lineage_policy,
+        )
+        return self._apply_resolved_lineage(record, resolved)
+
+    def children(self, task_id: str) -> list[dict]:
+        self.store.get(task_id)
+        return [concise_task_summary(child) for child in self.store.list_children(task_id)]
+
+    def task_tree(self, root_task_id: str) -> dict:
+        root = self.store.get(root_task_id)
+        if root.root_task_id != root_task_id:
+            raise ValueError(f"Task {root_task_id!r} is not a tree root (root_task_id={root.root_task_id!r})")
+        tasks = self.store.list_tree_tasks(root_task_id, limit=MAX_TREE_NODES)
+        truncated = len(tasks) >= MAX_TREE_NODES
+        return {
+            "root_task_id": root_task_id,
+            "truncated": truncated,
+            "tasks": [concise_task_summary(task) for task in tasks],
+        }
+
     def create(self, request: TaskRequest, verify_commands: list[list[str]] | None = None) -> TaskRecord:
         """Create a task, optionally declaring the broker-verified commands its
         verification_policy will gate on. Shared by the CLI and MCP surfaces so
@@ -295,8 +349,15 @@ class Broker:
         self._validate_request(effective_request)
         if verify_commands is not None:
             validate_verify_commands(verify_commands)
-        record = self.store.create(TaskRecord.new(effective_request))
-        self.store.write_artifact(record.id, "request.json", json.dumps(request_artifact_payload(request), indent=2) + "\n")
+        record = TaskRecord.new(effective_request)
+        record = self._resolve_record_lineage(record, effective_request)
+        self.store.create(record)
+        request_payload = request_artifact_payload(effective_request)
+        request_payload["root_task_id"] = record.root_task_id
+        request_payload["delegation_depth"] = record.delegation_depth
+        if record.origin_kind is not None:
+            request_payload["origin_kind"] = record.origin_kind
+        self.store.write_artifact(record.id, "request.json", json.dumps(request_payload, indent=2) + "\n")
         if resolved_profile is not None:
             self.store.write_artifact(
                 record.id,

@@ -206,6 +206,11 @@ class TaskRequest:
     result_schema: str | None = None
     compatibility: dict[str, Any] | None = None
     explicit_fields: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    parent_task_id: str | None = None
+    external_root_id: str | None = None
+    relationship: str | None = None
+    origin_kind: str | None = None
+    origin_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,6 +231,13 @@ class TaskRecord:
     agent_profile: str | None = None
     result_schema: str | None = None
     effective_model: str | None = None
+    parent_task_id: str | None = None
+    root_task_id: str | None = None
+    external_root_id: str | None = None
+    delegation_depth: int = 0
+    relationship: str | None = None
+    origin_kind: str | None = None
+    origin_ref: str | None = None
 
     @classmethod
     def new(cls, request: TaskRequest) -> "TaskRecord":
@@ -247,6 +259,11 @@ class TaskRecord:
             model=request.model,
             agent_profile=request.agent_profile,
             result_schema=request.result_schema,
+            parent_task_id=request.parent_task_id,
+            external_root_id=request.external_root_id,
+            relationship=request.relationship,
+            origin_kind=request.origin_kind,
+            origin_ref=request.origin_ref,
         )
 
     def json(self) -> dict[str, Any]:
@@ -276,6 +293,16 @@ def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
         payload["result_schema"] = request.result_schema
     if request.compatibility is not None:
         payload["compatibility"] = request.compatibility
+    if request.parent_task_id is not None:
+        payload["parent_task_id"] = request.parent_task_id
+    if request.external_root_id is not None:
+        payload["external_root_id"] = request.external_root_id
+    if request.relationship is not None:
+        payload["relationship"] = request.relationship
+    if request.origin_kind is not None:
+        payload["origin_kind"] = request.origin_kind
+    if request.origin_ref is not None:
+        payload["origin_ref"] = request.origin_ref
     return payload
 
 
