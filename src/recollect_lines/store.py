@@ -96,6 +96,16 @@ class TaskStore:
             self.connection.execute(
                 "ALTER TABLE runtime_launches ADD COLUMN launch_kind TEXT NOT NULL DEFAULT 'legacy_subprocess'"
             )
+        side_agent_columns = {
+            "runtime": "TEXT",
+            "model": "TEXT",
+            "agent_profile": "TEXT",
+            "result_schema": "TEXT",
+        }
+        for column, column_type in side_agent_columns.items():
+            if column not in existing_columns:
+                self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {column_type}")
+        self.connection.execute("UPDATE tasks SET runtime = profile WHERE runtime IS NULL")
         self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS durable_recovery_leases (
@@ -110,16 +120,27 @@ class TaskStore:
         )
         self.connection.commit()
 
+    @staticmethod
+    def _row_to_record(row: sqlite3.Row) -> TaskRecord:
+        data = dict(row)
+        runtime = data.get("runtime") or data["profile"]
+        data["runtime"] = runtime
+        data["profile"] = runtime
+        data["state"] = TaskState(data["state"])
+        return TaskRecord(**data)
+
     def create(self, record: TaskRecord) -> TaskRecord:
         with self.connection:
             self.connection.execute(
-                "INSERT INTO tasks (id, task, workspace, execution_mode, profile, provider, timeout_seconds, verification_policy, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tasks (id, task, workspace, execution_mode, runtime, profile, provider, "
+                "timeout_seconds, verification_policy, state, created_at, updated_at, model, agent_profile, result_schema) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.task,
                     record.workspace,
                     record.execution_mode,
+                    record.runtime,
                     record.profile,
                     record.provider,
                     record.timeout_seconds,
@@ -127,6 +148,9 @@ class TaskStore:
                     record.state.value,
                     record.created_at,
                     record.updated_at,
+                    record.model,
+                    record.agent_profile,
+                    record.result_schema,
                 ),
             )
             self.event(record.id, "task.created", None, record.state, "Task accepted", {})
@@ -137,17 +161,17 @@ class TaskStore:
         row = self.connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
             raise KeyError(f"Unknown task: {task_id}")
-        return TaskRecord(**{**dict(row), "state": TaskState(row["state"])})
+        return self._row_to_record(row)
 
     def list(self) -> list[TaskRecord]:
         rows = self.connection.execute("SELECT * FROM tasks ORDER BY created_at").fetchall()
-        return [TaskRecord(**{**dict(row), "state": TaskState(row["state"])}) for row in rows]
+        return [self._row_to_record(row) for row in rows]
 
-    def active_count(self, profile: str) -> int:
+    def active_count(self, runtime: str) -> int:
         active = tuple(state.value for state in (TaskState.QUEUED, TaskState.PREPARING, TaskState.RUNNING, TaskState.COLLECTING, TaskState.CANCELLING))
         return self.connection.execute(
-            f"SELECT COUNT(*) FROM tasks WHERE profile = ? AND state IN ({','.join('?' for _ in active)})",
-            (profile, *active),
+            f"SELECT COUNT(*) FROM tasks WHERE runtime = ? AND state IN ({','.join('?' for _ in active)})",
+            (runtime, *active),
         ).fetchone()[0]
 
     def transition(self, task_id: str, target: TaskState, message: str, metadata: dict[str, Any] | None = None) -> TaskRecord:

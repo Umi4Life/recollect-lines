@@ -79,6 +79,9 @@ DEFAULT_PROFILES = {
     "openai_compatible": ProfilePolicy("openai_compatible", frozenset({"read_only"}), 3600, 2),
 }
 
+# Execution-backend identifiers accepted from legacy `profile=` at API boundaries.
+KNOWN_RUNTIME_IDENTIFIERS = frozenset(DEFAULT_PROFILES)
+
 # Verification-gate policy (Phase 5C): distinguishes evidence-only from
 # gating verification without inventing a new terminal state per outcome —
 # see Broker._apply_verification_gate and docs/history/phases/phase-5c.md.
@@ -98,15 +101,104 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def legacy_profile_compatibility_metadata() -> dict[str, Any]:
+    return {"legacy_profile_translated": True, "deprecated_fields": ["profile"]}
+
+
+class LegacyProfileConflictError(ValueError):
+    """Raised when legacy `profile` and `runtime` disagree on the execution backend."""
+
+    def __init__(self, runtime: str, profile: str):
+        self.runtime = runtime
+        self.profile = profile
+        super().__init__(
+            f"runtime and legacy profile conflict: runtime={runtime!r}, profile={profile!r}"
+        )
+
+
+def _optional_non_empty_string(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"'{field}' must be a non-empty string when provided")
+    return value
+
+
+def translate_delegate_fields(
+    *,
+    runtime: str | None = None,
+    profile: str | None = None,
+    model: str | None = None,
+    agent_profile: str | None = None,
+    result_schema: str | None = None,
+) -> tuple[str, str | None, str | None, str | None, dict[str, Any] | None]:
+    """Centralized runtime/profile translation for CLI and MCP delegate inputs.
+
+    Returns the effective execution-backend identifier, optional persisted side-agent
+    fields, and optional compatibility metadata when legacy `profile` was translated.
+    """
+    model = _optional_non_empty_string(model, "model")
+    agent_profile = _optional_non_empty_string(agent_profile, "agent_profile")
+    result_schema = _optional_non_empty_string(result_schema, "result_schema")
+    has_runtime = runtime is not None
+    has_profile = profile is not None
+    if has_runtime:
+        runtime = _optional_non_empty_string(runtime, "runtime")
+        assert runtime is not None
+        if runtime not in KNOWN_RUNTIME_IDENTIFIERS:
+            raise ValueError(
+                f"runtime must be one of {sorted(KNOWN_RUNTIME_IDENTIFIERS)}, got {runtime!r}"
+            )
+    if has_profile:
+        profile = _optional_non_empty_string(profile, "profile")
+        assert profile is not None
+    if has_runtime and has_profile:
+        assert runtime is not None and profile is not None
+        if runtime != profile:
+            raise LegacyProfileConflictError(runtime, profile)
+        return runtime, model, agent_profile, result_schema, legacy_profile_compatibility_metadata()
+    if has_runtime:
+        assert runtime is not None
+        return runtime, model, agent_profile, result_schema, None
+    if has_profile:
+        assert profile is not None
+        if profile not in KNOWN_RUNTIME_IDENTIFIERS:
+            raise ValueError(
+                f"Unknown profile {profile!r}: legacy profile is only accepted for known "
+                f"runtime identifiers ({sorted(KNOWN_RUNTIME_IDENTIFIERS)}). "
+                f"For behavioral roles use agent_profile={profile!r} with an explicit runtime=..."
+            )
+        return profile, model, agent_profile, result_schema, legacy_profile_compatibility_metadata()
+    return "mock", model, agent_profile, result_schema, None
+
+
+def effective_runtime(request: "TaskRequest") -> str:
+    """Resolve the execution backend for broker policy and adapter dispatch."""
+    if request.runtime is not None and request.profile is not None:
+        if request.runtime != request.profile:
+            raise LegacyProfileConflictError(request.runtime, request.profile)
+        return request.runtime
+    if request.runtime is not None:
+        return request.runtime
+    if request.profile is not None:
+        return request.profile
+    return "mock"
+
+
 @dataclass(frozen=True)
 class TaskRequest:
     task: str
     workspace: str
     execution_mode: str = "read_only"
-    profile: str = "mock"
+    profile: str | None = None
     provider: str | None = None
     timeout_seconds: int = 1800
     verification_policy: str = "none"
+    runtime: str | None = None
+    model: str | None = None
+    agent_profile: str | None = None
+    result_schema: str | None = None
+    compatibility: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +207,7 @@ class TaskRecord:
     task: str
     workspace: str
     execution_mode: str
+    runtime: str
     profile: str
     provider: str | None
     timeout_seconds: int
@@ -122,28 +215,60 @@ class TaskRecord:
     state: TaskState
     created_at: str
     updated_at: str
+    model: str | None = None
+    agent_profile: str | None = None
+    result_schema: str | None = None
 
     @classmethod
     def new(cls, request: TaskRequest) -> "TaskRecord":
         timestamp = now()
+        runtime = effective_runtime(request)
         return cls(
             id=f"tsk_{uuid4().hex}",
             task=request.task,
             workspace=request.workspace,
             execution_mode=request.execution_mode,
-            profile=request.profile,
+            runtime=runtime,
+            profile=runtime,
             provider=request.provider,
             timeout_seconds=request.timeout_seconds,
             verification_policy=request.verification_policy,
             state=TaskState.CREATED,
             created_at=timestamp,
             updated_at=timestamp,
+            model=request.model,
+            agent_profile=request.agent_profile,
+            result_schema=request.result_schema,
         )
 
     def json(self) -> dict[str, Any]:
         data = asdict(self)
         data["state"] = self.state.value
         return data
+
+
+def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
+    """Secret-safe persisted request view including optional compatibility metadata."""
+    runtime = effective_runtime(request)
+    payload: dict[str, Any] = {
+        "task": request.task,
+        "workspace": request.workspace,
+        "execution_mode": request.execution_mode,
+        "runtime": runtime,
+        "profile": runtime,
+        "provider": request.provider,
+        "timeout_seconds": request.timeout_seconds,
+        "verification_policy": request.verification_policy,
+    }
+    if request.model is not None:
+        payload["model"] = request.model
+    if request.agent_profile is not None:
+        payload["agent_profile"] = request.agent_profile
+    if request.result_schema is not None:
+        payload["result_schema"] = request.result_schema
+    if request.compatibility is not None:
+        payload["compatibility"] = request.compatibility
+    return payload
 
 
 class InvalidTransition(ValueError):

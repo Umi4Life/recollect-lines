@@ -76,7 +76,7 @@ def _adapter_for_profile(broker: Any, profile: str) -> Any:
 
 
 def _recovery_level(broker: Any, record: TaskRecord) -> str:
-    adapter = _adapter_for_profile(broker, record.profile)
+    adapter = _adapter_for_profile(broker, record.runtime)
     if adapter is None:
         return "none"
     contract = getattr(getattr(adapter, "capabilities", None), "recovery_control", None)

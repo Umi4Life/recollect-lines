@@ -28,7 +28,14 @@ from typing import Any
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
-from .models import VERIFICATION_POLICIES, TaskRequest, validate_verify_commands, verification_gate_label
+from .models import (
+    KNOWN_RUNTIME_IDENTIFIERS,
+    VERIFICATION_POLICIES,
+    TaskRequest,
+    translate_delegate_fields,
+    validate_verify_commands,
+    verification_gate_label,
+)
 from .opencode_adapter import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
 from .service import Broker
@@ -46,7 +53,8 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-PROFILES = ("mock", "opencode", "claude_code", "codex", "cursor", "openai_compatible")
+RUNTIMES = tuple(sorted(KNOWN_RUNTIME_IDENTIFIERS))
+PROFILES = RUNTIMES  # deprecated alias for schema/documentation continuity
 
 
 class ProtocolError(Exception):
@@ -94,9 +102,15 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     execution_mode = item.get("execution_mode", "read_only")
     if execution_mode not in EXECUTION_MODES:
         raise ValueError(f"execution_mode must be one of {EXECUTION_MODES}, got {execution_mode!r}")
-    profile = item.get("profile", "mock")
-    if profile not in PROFILES:
-        raise ValueError(f"profile must be one of {PROFILES}, got {profile!r}")
+    runtime = item.get("runtime")
+    profile = item.get("profile") if "profile" in item else None
+    effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
+        runtime=runtime,
+        profile=profile,
+        model=item.get("model"),
+        agent_profile=item.get("agent_profile"),
+        result_schema=item.get("result_schema"),
+    )
     timeout_seconds = item.get("timeout_seconds", 1800)
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds < 1:
         raise ValueError("timeout_seconds must be a positive integer")
@@ -109,7 +123,20 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
         validate_verify_commands(verify_commands)
-    return TaskRequest(task, workspace, execution_mode, profile, provider, timeout_seconds, verification_policy), verify_commands
+    return TaskRequest(
+        task,
+        workspace,
+        execution_mode,
+        effective_runtime,
+        provider,
+        timeout_seconds,
+        verification_policy,
+        runtime=effective_runtime,
+        model=model,
+        agent_profile=agent_profile,
+        result_schema=result_schema,
+        compatibility=compatibility,
+    ), verify_commands
 
 
 def _require_task_id(args: dict) -> str:
@@ -125,11 +152,21 @@ def _task_summary(record, broker: Broker | None = None) -> dict:
         "state": record.state.value,
         "workspace": record.workspace,
         "execution_mode": record.execution_mode,
+        "runtime": record.runtime,
         "profile": record.profile,
         "provider": record.provider,
         "verification_policy": record.verification_policy,
     }
+    if record.model is not None:
+        summary["model"] = record.model
+    if record.agent_profile is not None:
+        summary["agent_profile"] = record.agent_profile
+    if record.result_schema is not None:
+        summary["result_schema"] = record.result_schema
     if broker is not None:
+        compatibility = _read_json_artifact(broker, record.id, "request.json")
+        if isinstance(compatibility, dict) and "compatibility" in compatibility:
+            summary["compatibility"] = compatibility["compatibility"]
         detail = broker.reconcile_detail(record.id)
         if detail is not None:
             summary["reconciliation"] = detail
@@ -168,7 +205,7 @@ def handle_delegate(broker: Broker, args: dict) -> dict:
     record, start_error = _create_and_start(broker, args)
     if start_error is not None:
         raise ValueError(f"Task {record.id} was created but start() raised unexpectedly: {start_error}")
-    return _task_summary(record)
+    return _task_summary(record, broker)
 
 
 def handle_delegate_batch(broker: Broker, args: dict) -> dict:
@@ -194,7 +231,7 @@ def handle_delegate_batch(broker: Broker, args: dict) -> dict:
                 "error": {"code": type(start_error).__name__, "message": f"Task was created but start() raised unexpectedly: {start_error}"},
             })
         else:
-            outcomes.append({"index": index, "accepted": True, **_task_summary(record)})
+            outcomes.append({"index": index, "accepted": True, **_task_summary(record, broker)})
     return {"outcomes": outcomes}
 
 
@@ -352,20 +389,42 @@ DELEGATE_INPUT_SCHEMA = {
             "default": "read_only",
             "description": "read_only runs directly against workspace; isolated_worktree runs in a broker-owned Git worktree branched from workspace's current HEAD.",
         },
+        "runtime": {
+            "type": "string",
+            "enum": list(RUNTIMES),
+            "default": "mock",
+            "description": (
+                "Execution backend identifier. mock is a deterministic no-op adapter for testing; "
+                "opencode runs the real OpenCode CLI; claude_code runs Claude Code (`claude -p`); "
+                "codex runs Codex (`codex exec`); cursor runs Cursor Agent; "
+                "openai_compatible sends a chat-completions request through a named provider."
+            ),
+        },
         "profile": {
             "type": "string",
             "enum": list(PROFILES),
-            "default": "mock",
+            "deprecated": True,
             "description": (
-                "mock is a deterministic no-op adapter for testing; opencode runs the real OpenCode CLI as a "
-                "supervised subprocess; claude_code runs the real Claude Code CLI (`claude -p`) as a supervised "
-                "subprocess; codex runs the real Codex CLI (`codex exec`) as a supervised subprocess; "
-                "openai_compatible sends a chat-completions request through a named provider from --providers-config."
+                "Deprecated alias for runtime. Accepted only when its value is a known runtime "
+                "identifier; use runtime instead. Unknown values that look like behavioral roles "
+                "must be passed as agent_profile with an explicit runtime."
             ),
+        },
+        "model": {
+            "type": "string",
+            "description": "Optional requested model identifier (persisted; adapter wiring is future work).",
+        },
+        "agent_profile": {
+            "type": "string",
+            "description": "Optional behavioral role identifier (persisted; prompt composition is future work).",
+        },
+        "result_schema": {
+            "type": "string",
+            "description": "Optional requested result-contract identifier (persisted; normalization is future work).",
         },
         "provider": {
             "type": "string",
-            "description": "Named provider entry (required when profile is openai_compatible).",
+            "description": "Named provider entry (required when runtime is openai_compatible).",
         },
         "timeout_seconds": {
             "type": "integer",

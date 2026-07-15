@@ -46,13 +46,19 @@ Optional:
 | Field | Default | Values |
 |-------|---------|--------|
 | `execution_mode` | `read_only` | `read_only`, `isolated_worktree` |
-| `profile` | `mock` | `mock`, `opencode`, `claude_code`, `codex`, `cursor`, `openai_compatible` |
-| `provider` | — | Required when `profile` is `openai_compatible` |
+| `runtime` | `mock` | `mock`, `opencode`, `claude_code`, `codex`, `cursor`, `openai_compatible` |
+| `profile` | — | **Deprecated.** Legacy alias for `runtime`; accepted only for known runtime identifiers |
+| `model` | — | Optional requested model identifier (persisted only in this release) |
+| `agent_profile` | — | Optional behavioral role identifier (persisted only in this release) |
+| `result_schema` | — | Optional result-contract identifier (persisted only in this release) |
+| `provider` | — | Required when `runtime` is `openai_compatible` |
 | `timeout_seconds` | `1800` | positive integer |
 | `verification_policy` | `none` | `none`, `advisory`, `required` |
 | `verify_commands` | — | array of argv arrays |
 
-`delegate` returns `task_id`, `state`, `workspace`, `profile`, etc. — not a fabricated completion.
+`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent fields, and `compatibility` when a legacy `profile` was translated — not a fabricated completion.
+
+See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
 
 ## Tool result envelope
 

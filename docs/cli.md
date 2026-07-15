@@ -19,7 +19,7 @@ There is **no** `recollect` executable (removed in field-readiness work).
 
 | Command | Purpose |
 |---------|---------|
-| `create` | Queue a task (`--task`, `--workspace`, `--profile`, `--mode`, `--timeout`, …) |
+| `create` | Queue a task (`--task`, `--workspace`, `--runtime`, `--mode`, `--timeout`, …) |
 | `start` | Launch the selected runtime |
 | `status` | State, events, artifacts |
 | `complete` | Finish **mock** tasks with `--summary` |
@@ -38,14 +38,18 @@ There is **no** `recollect` executable (removed in field-readiness work).
 --task TEXT            (required)
 --workspace PATH       (required)
 --mode read_only|isolated_worktree   (default read_only)
---profile mock|opencode|claude_code|codex|cursor|openai_compatible
+--runtime mock|opencode|claude_code|codex|cursor|openai_compatible   (preferred)
+--profile NAME         (deprecated alias for --runtime)
+--model NAME           (optional; persisted only)
+--agent-profile NAME   (optional behavioral role; persisted only)
+--result-schema NAME   (optional result contract; persisted only)
 --provider NAME        (required for openai_compatible)
 --timeout SECONDS      (default 1800)
 --verification-policy none|advisory|required
 --verify-command JSON  (repeatable argv array)
 ```
 
-Profiles and modes are validated against broker policy before queueing.
+Runtimes and modes are validated against broker policy before queueing. Legacy `--profile` follows the same translation rules as MCP; see [migration-runtime-profile.md](migration-runtime-profile.md).
 
 ## Discovery and routing
 

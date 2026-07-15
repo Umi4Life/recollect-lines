@@ -419,6 +419,111 @@ class CodexMcpSelectionTests(unittest.TestCase):
         self.assertIn("42", collected_payload["data"]["runtime_result"]["summary"])
 
 
+class RuntimeProfileCompatibilityMcpTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+        self.client = McpStdioClient(self.home)
+        self.initialize()
+
+    def tearDown(self):
+        self.client.close()
+        self.tempdir.cleanup()
+
+    def initialize(self):
+        return self.client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+
+    def _delegate_payload(self, **overrides):
+        arguments = {"task": "Inspect tests", "workspace": str(self.workspace)}
+        arguments.update(overrides)
+        response = self.client.call_tool("delegate", arguments)
+        return json.loads(response["result"]["content"][0]["text"])
+
+    def test_runtime_delegate_has_no_compatibility_marker(self):
+        payload = self._delegate_payload(runtime="mock")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["runtime"], "mock")
+        self.assertNotIn("compatibility", payload["data"])
+
+    def test_legacy_profile_delegate_has_compatibility_marker(self):
+        payload = self._delegate_payload(profile="mock")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["compatibility"], {
+            "legacy_profile_translated": True,
+            "deprecated_fields": ["profile"],
+        })
+
+    def test_runtime_with_agent_profile_stays_separate(self):
+        payload = self._delegate_payload(runtime="mock", agent_profile="architecture-reviewer")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["runtime"], "mock")
+        self.assertEqual(payload["data"]["agent_profile"], "architecture-reviewer")
+        self.assertNotIn("compatibility", payload["data"])
+
+    def test_delegate_batch_propagates_compatibility_per_item(self):
+        response = self.client.call_tool("delegate_batch", {
+            "tasks": [
+                {"task": "one", "workspace": str(self.workspace), "runtime": "mock"},
+                {"task": "two", "workspace": str(self.workspace), "profile": "mock"},
+            ],
+        })
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertTrue(payload["ok"])
+        outcomes = payload["data"]["outcomes"]
+        self.assertTrue(outcomes[0]["accepted"])
+        self.assertNotIn("compatibility", outcomes[0])
+        self.assertTrue(outcomes[1]["accepted"])
+        self.assertEqual(outcomes[1]["compatibility"]["legacy_profile_translated"], True)
+
+    def test_delegate_rejects_conflicting_runtime_and_profile(self):
+        response = self.client.call_tool("delegate", {
+            "task": "Inspect tests",
+            "workspace": str(self.workspace),
+            "runtime": "codex",
+            "profile": "claude_code",
+        })
+        self.assertTrue(response["result"]["isError"])
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "LegacyProfileConflictError")
+        self.assertIn("runtime", payload["error"]["message"])
+        self.assertIn("profile", payload["error"]["message"])
+
+    def test_delegate_rejects_unknown_legacy_profile(self):
+        response = self.client.call_tool("delegate", {
+            "task": "Inspect tests",
+            "workspace": str(self.workspace),
+            "profile": "architecture-reviewer",
+        })
+        self.assertTrue(response["result"]["isError"])
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "ValueError")
+        self.assertIn("agent_profile", payload["error"]["message"])
+        self.assertIn("architecture-reviewer", payload["error"]["message"])
+
+    def test_delegate_batch_rejects_conflicting_runtime_and_profile_per_item(self):
+        response = self.client.call_tool("delegate_batch", {
+            "tasks": [
+                {"task": "one", "workspace": str(self.workspace), "runtime": "mock"},
+                {
+                    "task": "two",
+                    "workspace": str(self.workspace),
+                    "runtime": "codex",
+                    "profile": "claude_code",
+                },
+            ],
+        })
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertTrue(payload["ok"])
+        outcomes = payload["data"]["outcomes"]
+        self.assertTrue(outcomes[0]["accepted"])
+        self.assertFalse(outcomes[1]["accepted"])
+        self.assertEqual(outcomes[1]["error"]["code"], "LegacyProfileConflictError")
+
+
 class CursorMcpSelectionTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()

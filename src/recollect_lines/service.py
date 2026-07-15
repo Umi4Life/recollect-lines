@@ -38,7 +38,9 @@ from .models import (
     TaskRequest,
     TaskState,
     WorkspaceLeaseConflict,
+    effective_runtime,
     now,
+    request_artifact_payload,
     validate_result,
     validate_verify_commands,
 )
@@ -132,16 +134,17 @@ class Broker:
             raise ValueError("Workspace must not be empty")
         if request.timeout_seconds <= 0:
             raise ValueError("Timeout must be positive")
-        policy = self.profiles.get(request.profile)
+        runtime = effective_runtime(request)
+        policy = self.profiles.get(runtime)
         if policy is None:
-            raise ValueError(f"Unknown profile: {request.profile}")
+            raise ValueError(f"Unknown profile: {runtime}")
         if request.execution_mode not in policy.allowed_modes:
             raise ValueError(f"Profile {policy.name} does not permit mode {request.execution_mode}")
         if request.timeout_seconds > policy.max_timeout_seconds:
             raise ValueError(f"Profile {policy.name} maximum timeout is {policy.max_timeout_seconds} seconds")
         if request.verification_policy not in VERIFICATION_POLICIES:
             raise ValueError(f"Unknown verification_policy: {request.verification_policy}")
-        if request.profile == DIRECT_API_PROFILE:
+        if runtime == DIRECT_API_PROFILE:
             if self.direct_api_runtime is None:
                 raise ValueError(
                     f"Profile {DIRECT_API_PROFILE!r} requires a provider configuration (--providers-config)"
@@ -151,7 +154,7 @@ class Broker:
             self.direct_api_runtime.get_provider(request.provider)
         elif request.provider is not None:
             raise ValueError(f"provider is only valid with profile {DIRECT_API_PROFILE!r}")
-        if self.store.active_count(policy.name) >= policy.max_concurrency:
+        if self.store.active_count(runtime) >= policy.max_concurrency:
             raise ValueError(f"Profile {policy.name} concurrency limit reached")
         return policy
 
@@ -164,7 +167,7 @@ class Broker:
         if verify_commands is not None:
             validate_verify_commands(verify_commands)
         record = self.store.create(TaskRecord.new(request))
-        self.store.write_artifact(record.id, "request.json", json.dumps(record.json(), indent=2) + "\n")
+        self.store.write_artifact(record.id, "request.json", json.dumps(request_artifact_payload(request), indent=2) + "\n")
         if verify_commands is not None:
             self.store.write_artifact(record.id, "verify_commands.json", json.dumps(verify_commands, indent=2) + "\n")
         return self.store.transition(record.id, TaskState.QUEUED, "Task queued", {})
@@ -202,7 +205,7 @@ class Broker:
                     {"reason": "workspace_allocation_failed", "error": str(error)},
                 )
             effective_workspace = worktree_path
-        if record.profile == DIRECT_API_PROFILE:
+        if record.runtime == DIRECT_API_PROFILE:
             runtime = self.direct_api_runtime
             assert runtime is not None
             try:
@@ -231,7 +234,7 @@ class Broker:
             )
             self.store.refresh_manifest(record.id)
             return self.store.transition(record.id, TaskState.RUNNING, f"{runtime.name} direct API request started", metadata)
-        adapter = self.subprocess_adapters.get(record.profile)
+        adapter = self.subprocess_adapters.get(record.runtime)
         if adapter is not None:
             try:
                 metadata, handle = adapter.start(record, self.store.artifacts / record.id, workspace=effective_workspace)
@@ -333,7 +336,7 @@ class Broker:
             return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected.get("exit_code"), "verification_gate": gate})
         if task_id in self._process_handles:
             handle = self._process_handles.pop(task_id)
-            adapter = self.subprocess_adapters[record.profile]
+            adapter = self.subprocess_adapters[record.runtime]
             record = self.store.transition(task_id, TaskState.COLLECTING, f"Collecting {adapter.name} result", {})
             collected = adapter.collect(handle)
             self.store.refresh_manifest(record.id)
@@ -356,12 +359,12 @@ class Broker:
             return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
         if task_id in self._adopted_durable_handles:
             return self._collect_adopted_durable(task_id, record)
-        if record.profile == DIRECT_API_PROFILE:
+        if record.runtime == DIRECT_API_PROFILE:
             reconciled = self.reconcile(task_id)
             if reconciled.state is not TaskState.FAILED:
                 raise RecoveryRequired(task_id, reconciled.state)
             return reconciled
-        if record.profile not in self.subprocess_adapters:
+        if record.runtime not in self.subprocess_adapters:
             # No subprocess was ever involved for this profile (mock tasks are
             # collected via complete(), not collect()); this is a caller/protocol
             # error, not a restart, and there is nothing to reconcile. Any
@@ -477,14 +480,14 @@ class Broker:
             return record
         if record.state not in self._RECONCILABLE_STATES:
             return record
-        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
+        if record.runtime not in self.subprocess_adapters and record.runtime != DIRECT_API_PROFILE:
             return record  # mock tasks never hold a subprocess; nothing to reconcile
         launch = self.store.get_launch(task_id)
-        if is_durable_launch_row(launch) and record.profile in self.subprocess_adapters:
-            adapter = self.subprocess_adapters[record.profile]
+        if is_durable_launch_row(launch) and record.runtime in self.subprocess_adapters:
+            adapter = self.subprocess_adapters[record.runtime]
             if getattr(adapter.capabilities, "uses_durable_subprocess_runner", False):
                 return self._reconcile_durable_subprocess(task_id, record, launch, adapter.name)
-        if record.profile == DIRECT_API_PROFILE:
+        if record.runtime == DIRECT_API_PROFILE:
             launch = self.store.get_launch(task_id)
             if launch is not None:
                 self.store.mark_launch_reconciled(task_id)
@@ -494,7 +497,7 @@ class Broker:
                 "Direct API request was in flight when the broker restarted; outcome could not be observed",
                 {"reason": "direct_api_restart_no_reattachment", "provider": launch.get("command", [None])[0] if launch else None},
             )
-        adapter_name = self.subprocess_adapters[record.profile].name
+        adapter_name = self.subprocess_adapters[record.runtime].name
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
         if launch is not None:
@@ -641,7 +644,7 @@ class Broker:
         return [
             self.reconcile(record.id)
             for record in self.store.list()
-            if (record.profile in self.subprocess_adapters or record.profile == DIRECT_API_PROFILE)
+            if (record.runtime in self.subprocess_adapters or record.runtime == DIRECT_API_PROFILE)
             and record.state in self._RECONCILABLE_STATES
             and record.id not in self._process_handles
             and record.id not in self._direct_api_handles
@@ -714,7 +717,7 @@ class Broker:
         handle = self._process_handles.get(task_id)
         if handle is not None:
             self._process_handles.pop(task_id, None)
-            cancellation = self.subprocess_adapters[record.profile].cancel(handle)
+            cancellation = self.subprocess_adapters[record.runtime].cancel(handle)
             if cancellation["group_terminated"]:
                 self._finalize_workspace(task_id)
                 return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason, "cancellation": cancellation})
@@ -724,12 +727,12 @@ class Broker:
                 {"reason": reason, "cancellation": cancellation},
             )
 
-        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
+        if record.runtime not in self.subprocess_adapters and record.runtime != DIRECT_API_PROFILE:
             # Mock tasks never hold a subprocess; nothing to protect.
             self._finalize_workspace(task_id)
             return self.store.transition(task_id, TaskState.TIMED_OUT, reason, {"reason": reason})
 
-        if record.profile == DIRECT_API_PROFILE:
+        if record.runtime == DIRECT_API_PROFILE:
             self._finalize_workspace(task_id)
             return self.store.transition(
                 task_id, TaskState.TIMED_OUT, reason,
@@ -750,7 +753,7 @@ class Broker:
             )
 
         if status == "alive":
-            cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.profile].grace_period_seconds)
+            cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.runtime].grace_period_seconds)
             if cancellation["group_terminated"]:
                 self._finalize_workspace(task_id)
                 return self.store.transition(
@@ -807,10 +810,10 @@ class Broker:
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation})
         handle = self._process_handles.get(task_id)
         if handle is not None:
-            adapter_name = self.subprocess_adapters[record.profile].name
+            adapter_name = self.subprocess_adapters[record.runtime].name
             record = self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             self._process_handles.pop(record.id, None)
-            cancellation = self.subprocess_adapters[record.profile].cancel(handle)
+            cancellation = self.subprocess_adapters[record.runtime].cancel(handle)
             target = TaskState.CANCELLED if cancellation["group_terminated"] else TaskState.FAILED
             message = f"{adapter_name} process group terminated" if cancellation["group_terminated"] else f"{adapter_name} process group termination unconfirmed"
             if cancellation["group_terminated"]:
@@ -834,13 +837,13 @@ class Broker:
                 self._finalize_workspace(record.id)
             return self.store.transition(record.id, target, message, {"reason": reason, "cancellation": cancellation, "adopted_durable": True})
 
-        if record.profile not in self.subprocess_adapters and record.profile != DIRECT_API_PROFILE:
+        if record.runtime not in self.subprocess_adapters and record.runtime != DIRECT_API_PROFILE:
             self._finalize_workspace(task_id)
             if record.state is not TaskState.CANCELLING:
                 self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             return self.store.transition(task_id, TaskState.CANCELLED, "Mock cancellation confirmed", {"reason": reason})
 
-        if record.profile == DIRECT_API_PROFILE:
+        if record.runtime == DIRECT_API_PROFILE:
             if record.state is not TaskState.CANCELLING:
                 self.store.transition(task_id, TaskState.CANCELLING, reason, {"reason": reason})
             self._finalize_workspace(task_id)
@@ -850,7 +853,7 @@ class Broker:
                 {"reason": reason, "note": "no_session_reattachment"},
             )
 
-        adapter_name = self.subprocess_adapters[record.profile].name
+        adapter_name = self.subprocess_adapters[record.runtime].name
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
         if launch is not None:
@@ -889,7 +892,7 @@ class Broker:
                 {"reason": reason, "cancellation": {"signals_sent": [], "group_terminated": True, "note": "confirmed dead via persisted pgid before any signal was sent"}},
             )
 
-        cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.profile].grace_period_seconds)
+        cancellation = self._cancel_by_pgid(launch["pgid"], grace_period_seconds=self.subprocess_adapters[record.runtime].grace_period_seconds)
         if cancellation["group_terminated"]:
             self._finalize_workspace(task_id)
             return self.store.transition(
