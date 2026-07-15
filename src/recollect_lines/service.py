@@ -149,7 +149,7 @@ class Broker:
                 adapter_capabilities=caps,
                 limitations=SUBPROCESS_LIMITATIONS,
                 model_selection=ModelSelectionSupport.PERSISTED_NOT_INVOKED,
-                runtime_label=getattr(adapter, "runtime_label", name) if adapter is not None else name,
+                runtime_label=name if adapter is None else None,
             ))
         if profiles is not None:
             self.profiles = {**self.runtime_registry.policies(), **profiles}
