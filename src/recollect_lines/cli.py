@@ -118,6 +118,32 @@ def parser() -> argparse.ArgumentParser:
     children.add_argument("task_id")
     task_tree = sub.add_parser("task-tree", help="Show bounded task tree for a root task id")
     task_tree.add_argument("root_task_id")
+    completion_events = sub.add_parser(
+        "completion-events",
+        help="Poll durable completion signals from the global event cursor",
+    )
+    completion_events.add_argument(
+        "--after-event-id",
+        dest="after_event_id",
+        type=int,
+        default=0,
+        help="Exclusive lower bound on durable event id (default 0)",
+    )
+    completion_events.add_argument("--limit", type=int, default=64)
+    completion_events.add_argument("--task-id", dest="task_id", default=None)
+    completion_events.add_argument("--root-task-id", dest="root_task_id", default=None)
+    completion_events.add_argument(
+        "--include-non-terminal",
+        action="store_true",
+        help="Include non-completion events (default returns terminal/recovery completion signals only)",
+    )
+    completion_events.add_argument(
+        "--state",
+        dest="states",
+        action="append",
+        default=None,
+        help="Restrict to specific completion state(s); repeatable",
+    )
     sub.add_parser("reconcile-all")
     sub.add_parser("discover")
     sub.add_parser("list-agent-profiles", help="List built-in and configured behavioral agent profiles")
@@ -311,6 +337,16 @@ def main(argv: list[str] | None = None) -> int:
             output = {"parent_task_id": args.task_id, "children": broker.children(args.task_id)}
         elif args.command == "task-tree":
             output = broker.task_tree(args.root_task_id)
+        elif args.command == "completion-events":
+            states = frozenset(args.states) if args.states else None
+            output = broker.completion_events_since(
+                args.after_event_id,
+                limit=args.limit,
+                task_id=args.task_id,
+                root_task_id=args.root_task_id,
+                completion_only=not args.include_non_terminal,
+                states=states,
+            )
         elif args.command == "council":
             plan = json.loads(args.plan)
             if args.council_command == "validate":

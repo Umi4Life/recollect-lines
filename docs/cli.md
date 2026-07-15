@@ -33,6 +33,7 @@ There is **no** `recollect` executable (removed in field-readiness work).
 | `list` | List all tasks |
 | `children` | Direct child task summaries for a parent |
 | `task-tree` | Bounded tree for a broker `root_task_id` |
+| `completion-events` | Poll durable completion signals from the global event cursor |
 
 ### `create` flags
 

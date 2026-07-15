@@ -70,6 +70,7 @@ from .result_normalization import (
     persist_raw_runtime_output_if_needed,
     validate_result_schema,
 )
+from .completion_events import completion_events_page
 from .store import TaskStore
 from .task_lineage import (
     DEFAULT_LINEAGE_POLICY,
@@ -347,6 +348,27 @@ class Broker:
             "truncated": truncated,
             "tasks": [concise_task_summary(task) for task in tasks],
         }
+
+    def completion_events_since(
+        self,
+        after_event_id: int = 0,
+        *,
+        limit: int = 64,
+        task_id: str | None = None,
+        root_task_id: str | None = None,
+        completion_only: bool = True,
+        states: frozenset[str] | None = None,
+    ) -> dict:
+        """Poll durable completion signals in global event-id order."""
+        return completion_events_page(
+            self.store,
+            after_event_id=after_event_id,
+            limit=limit,
+            task_id=task_id,
+            root_task_id=root_task_id,
+            completion_only=completion_only,
+            states=states,
+        )
 
     def create(self, request: TaskRequest, verify_commands: list[list[str]] | None = None) -> TaskRecord:
         """Create a task, optionally declaring the broker-verified commands its
