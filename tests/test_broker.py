@@ -39,7 +39,9 @@ class BrokerTests(unittest.TestCase):
         names = [item["name"] for item in self.broker.store.artifact_manifest(record.id)["files"]]
         self.assertEqual(result["summary"], "Found no failures")
         self.assertEqual(result["state"], "succeeded")
-        self.assertEqual(names, ["request.json", "result.json"])
+        self.assertIn("request.json", names)
+        self.assertIn("result.json", names)
+        self.assertIn("normalized_result.json", names)
 
     def test_cancel_running_task_reaches_terminal_state(self):
         record = self.create()

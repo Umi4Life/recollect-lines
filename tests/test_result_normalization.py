@@ -1,0 +1,208 @@
+"""MR 8.6: provenance-aware structured result normalization."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from recollect_lines.codex_adapter import CodexAdapter
+from recollect_lines.models import TaskRequest, TaskState
+from recollect_lines.result_normalization import (
+    NORMALIZED_RESULT_ARTIFACT,
+    RAW_OUTPUT_ARTIFACT,
+    SUPPORTED_RESULT_SCHEMAS,
+    UnknownResultSchemaError,
+    build_normalized_envelope,
+    validate_result_schema,
+)
+from recollect_lines.service import Broker
+
+FIXTURE_CODEX = Path(__file__).parent / "fixtures" / "fake_codex.py"
+
+
+def fake_codex_adapter(**kwargs):
+    return CodexAdapter(command_prefix=(sys.executable, str(FIXTURE_CODEX)), grace_period_seconds=2.0, **kwargs)
+
+
+SCHEMA_FIXTURES = {
+    "plain-summary": "PLAIN_SUMMARY ok",
+    "evidence-report": json.dumps({
+        "summary": "evidence gathered",
+        "findings": [{"id": "f1", "detail": "race in handler"}],
+        "claimed_evidence": ["logs/trace.txt"],
+        "commands_executed": ["pytest -q"],
+        "unresolved_questions": ["is retry bounded?"],
+    }),
+    "review-findings": json.dumps({
+        "summary": "architecture review complete",
+        "findings": [{"severity": "medium", "topic": "coupling"}],
+    }),
+    "implementation-report": json.dumps({
+        "summary": "implemented fix",
+        "commands_executed": ["make test"],
+        "tests_reported": [{"name": "unit", "passed": True}],
+    }),
+}
+
+
+class ResultSchemaPolicyTests(unittest.TestCase):
+    def test_supported_schemas_are_explicit(self):
+        self.assertEqual(
+            SUPPORTED_RESULT_SCHEMAS,
+            frozenset({"plain-summary", "evidence-report", "review-findings", "implementation-report"}),
+        )
+
+    def test_unknown_schema_is_rejected(self):
+        with self.assertRaises(UnknownResultSchemaError):
+            validate_result_schema("investigation-report")
+
+    def test_none_schema_is_allowed_at_validation(self):
+        validate_result_schema(None)
+
+
+class BrokerNormalizationTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+        self.broker = Broker(self.home, codex_adapter=fake_codex_adapter())
+
+    def tearDown(self):
+        self.broker.close()
+        self.tempdir.cleanup()
+
+    def _collect_mock(self, summary: str, *, result_schema: str | None = None):
+        kwargs = {}
+        if result_schema is not None:
+            kwargs["result_schema"] = result_schema
+            kwargs["explicit_fields"] = frozenset({"result_schema"})
+        record = self.broker.create(TaskRequest("task", str(self.workspace), runtime="mock", **kwargs))
+        self.broker.start(record.id)
+        self.broker.complete(record.id, summary)
+        return record
+
+    def _collect_codex(self, prompt: str, *, result_schema: str):
+        record = self.broker.create(TaskRequest(
+            prompt,
+            str(self.workspace),
+            runtime="codex",
+            result_schema=result_schema,
+            explicit_fields=frozenset({"result_schema"}),
+        ))
+        self.broker.start(record.id)
+        self.broker.collect(record.id)
+        return record
+
+    def _normalized(self, task_id: str) -> dict:
+        path = self.broker.store.artifacts / task_id / NORMALIZED_RESULT_ARTIFACT
+        self.assertTrue(path.is_file(), "expected normalized_result.json artifact")
+        return json.loads(path.read_text())
+
+    def test_unknown_schema_fails_before_launch(self):
+        with self.assertRaises(UnknownResultSchemaError):
+            self.broker.create(TaskRequest(
+                "task",
+                str(self.workspace),
+                runtime="mock",
+                result_schema="not-a-schema",
+                explicit_fields=frozenset({"result_schema"}),
+            ))
+
+    def test_plain_summary_mock_remains_compatible(self):
+        record = self._collect_mock("Found no failures")
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["envelope_version"], 1)
+        self.assertEqual(envelope["parser"]["requested_schema"], "plain-summary")
+        self.assertEqual(envelope["parser"]["parse_status"], "ok")
+        self.assertEqual(envelope["runtime_reported"]["summary"], "Found no failures")
+        self.assertIsNone(envelope["broker_observed"]["verification"])
+        raw_path = self.broker.store.artifacts / record.id / RAW_OUTPUT_ARTIFACT
+        self.assertTrue(raw_path.is_file())
+        self.assertEqual(raw_path.read_text(), "Found no failures\n")
+
+    def test_each_supported_schema_fixture(self):
+        for schema, payload in SCHEMA_FIXTURES.items():
+            with self.subTest(schema=schema):
+                if schema == "plain-summary":
+                    record = self._collect_mock(payload, result_schema=schema)
+                else:
+                    record = self._collect_codex(f"SCHEMA_{schema} {payload}", result_schema=schema)
+                envelope = self._normalized(record.id)
+                self.assertEqual(envelope["parser"]["requested_schema"], schema)
+                self.assertIn(envelope["parser"]["parse_status"], {"ok", "partial", "fallback"})
+                self.assertIn("summary", envelope["runtime_reported"])
+                self.assertTrue(envelope["parser"]["raw_output_artifact"])
+
+    def test_malformed_json_is_evidence_not_fabricated_success(self):
+        record = self._collect_codex("MALFORMED", result_schema="evidence-report")
+        envelope = self._normalized(record.id)
+        self.assertIn(envelope["parser"]["parse_status"], {"fallback", "partial"})
+        self.assertTrue(envelope["parser"]["warnings"])
+        self.assertGreater(envelope["parser"]["malformed_output_lines"], 0)
+        self.assertEqual(envelope["runtime_reported"]["summary"], "partial result despite a malformed line")
+
+    def test_runtime_commands_are_not_broker_verified(self):
+        payload = SCHEMA_FIXTURES["implementation-report"]
+        record = self._collect_codex(f"SCHEMA_implementation-report {payload}", result_schema="implementation-report")
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["runtime_reported"]["claimed_commands"], ["make test"])
+        self.assertIsNone(envelope["broker_observed"]["verification"])
+
+    def test_broker_verification_only_when_broker_ran_commands(self):
+        record = self.broker.create(
+            TaskRequest("verify me", str(self.workspace), runtime="mock"),
+            verify_commands=[[sys.executable, "-c", "print('ok')"]],
+        )
+        self.broker.start(record.id)
+        self.broker.complete(record.id, "done")
+        envelope = self._normalized(record.id)
+        verification = envelope["broker_observed"]["verification"]
+        self.assertIsNotNone(verification)
+        self.assertTrue(verification["broker_verified"])
+        self.assertTrue(all(cmd["broker_verified"] for cmd in verification["commands"]))
+
+    def test_artifact_refs_are_hash_backed(self):
+        record = self._collect_mock("summary", result_schema="plain-summary")
+        envelope = self._normalized(record.id)
+        refs = envelope["broker_observed"]["artifact_refs"]
+        names = {item["name"] for item in refs}
+        self.assertIn(NORMALIZED_RESULT_ARTIFACT, names)
+        self.assertIn("result.json", names)
+        for item in refs:
+            self.assertRegex(item["sha256"], r"^[a-f0-9]{64}$")
+            self.assertGreater(item["bytes"], 0)
+
+    def test_status_exposes_concise_normalized_view(self):
+        record = self._collect_mock("summary", result_schema="plain-summary")
+        status = self.broker.status(record.id)
+        self.assertIn("normalized_result", status)
+        self.assertEqual(status["normalized_result"]["requested_schema"], "plain-summary")
+        self.assertNotIn("runtime_reported", status["normalized_result"])
+
+    def test_profile_default_schema_is_validated(self):
+        record = self.broker.create(TaskRequest(
+            "inspect",
+            str(self.workspace),
+            runtime="mock",
+            agent_profile="repository-investigator",
+        ))
+        self.assertEqual(record.result_schema, "evidence-report")
+
+    def test_explicit_task_schema_overrides_profile_default(self):
+        record = self.broker.create(TaskRequest(
+            "inspect",
+            str(self.workspace),
+            runtime="mock",
+            agent_profile="repository-investigator",
+            result_schema="review-findings",
+            explicit_fields=frozenset({"result_schema"}),
+        ))
+        self.assertEqual(record.result_schema, "review-findings")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -11,7 +11,7 @@ Recollect Lines previously overloaded `profile` as the execution-backend selecto
 | `agent_profile` | Optional behavioral agent profile name (resolves prompt prefix and defaults at create; composed at launch) |
 | `model` | Optional requested model identifier (passed to adapters when the runtime's `model_selection` supports it) |
 | `effective_model` | Model resolved at launch (adapter/provider default or task override); persisted after `start()` |
-| `result_schema` | Optional requested result-contract identifier (persisted; not yet normalized) |
+| `result_schema` | Optional requested normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`); unknown values fail at create |
 
 The SQLite `profile` column remains as a compatibility bridge (`profile = runtime`).
 
@@ -98,7 +98,7 @@ Built-in profiles (`repository-investigator`, `architecture-reviewer`, `implemen
 | Field | Meaning |
 |-------|---------|
 | `prompt_prefix` | Instructions prepended to task text at launch (deterministic composition) |
-| `default_result_schema` | Default result-contract identifier when the task omits one |
+| `default_result_schema` | Default normalized result schema when the task omits one (must be a supported schema) |
 | `default_execution_mode` | Default mode when the task omits `execution_mode` |
 | `default_timeout_seconds` | Default timeout when the task omits `timeout_seconds` |
 | `recommended_runtime` | Advisory hint only — never overrides an explicit `runtime` |
@@ -117,3 +117,24 @@ At create time the broker persists `agent_profile_resolution.json` (name, conten
 Optional JSON configuration extends built-ins (`--agent-profiles-config` / broker constructor). List profiles via `discover` / `discover_capabilities` or `list-agent-profiles`.
 
 No destructive schema replacement. Re-running migration is idempotent.
+
+## Normalized results (MR 8.6)
+
+Supported `result_schema` values:
+
+| Schema | Purpose |
+|--------|---------|
+| `plain-summary` | Default when unset; summary text only |
+| `evidence-report` | Investigation output with optional findings/evidence/commands (runtime-reported) |
+| `review-findings` | Review output with findings list |
+| `implementation-report` | Change summary with runtime-reported commands/tests |
+
+Unknown schemas are rejected at task create (including profile-resolved defaults). Profile defaults follow the precedence in §Behavioral agent profiles; explicit permitted task values win.
+
+On collect/complete the broker writes:
+
+- `result.json` — legacy-compatible runtime result (unchanged role)
+- `normalized_result.json` — versioned envelope with `runtime_reported`, `broker_observed`, and `parser` zones
+- raw runtime output remains in the adapter events artifact or `runtime_raw_output.txt` (mock path); parser references rather than duplicating it
+
+Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.

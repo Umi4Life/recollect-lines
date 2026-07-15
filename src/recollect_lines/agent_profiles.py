@@ -152,7 +152,7 @@ BUILTIN_AGENT_PROFILES: dict[str, AgentProfileConfig] = {
             "You are a repository investigator. Trace code paths, cite file locations, "
             "and report findings without modifying the workspace."
         ),
-        default_result_schema="investigation-report",
+        default_result_schema="evidence-report",
         default_execution_mode="read_only",
         default_timeout_seconds=2400,
         recommended_runtime="codex",
@@ -163,7 +163,7 @@ BUILTIN_AGENT_PROFILES: dict[str, AgentProfileConfig] = {
             "You are an architecture reviewer. Evaluate structure, boundaries, and risks. "
             "Prefer evidence-backed critique over speculative redesign."
         ),
-        default_result_schema="architecture-review",
+        default_result_schema="review-findings",
         default_execution_mode="read_only",
         default_timeout_seconds=2400,
         recommended_runtime="claude_code",
@@ -174,7 +174,7 @@ BUILTIN_AGENT_PROFILES: dict[str, AgentProfileConfig] = {
             "You are an implementation worker. Make the smallest correct change that satisfies "
             "the task and preserve existing conventions."
         ),
-        default_result_schema="implementation-summary",
+        default_result_schema="implementation-report",
         default_execution_mode="isolated_worktree",
         default_timeout_seconds=3600,
         recommended_runtime="cursor",
@@ -185,7 +185,7 @@ BUILTIN_AGENT_PROFILES: dict[str, AgentProfileConfig] = {
             "You are a test planner. Propose focused, runnable verification steps and identify "
             "gaps without claiming execution you did not perform."
         ),
-        default_result_schema="test-plan",
+        default_result_schema="plain-summary",
         default_execution_mode="read_only",
         default_timeout_seconds=1800,
         recommended_runtime="mock",

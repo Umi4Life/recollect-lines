@@ -7,6 +7,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from .adapters import AdapterCapabilities
 from .durable_reconciliation import (
@@ -62,6 +63,13 @@ from .models import (
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .providers import ProviderConfigError, load_providers_config
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
+from .result_normalization import (
+    NORMALIZED_RESULT_ARTIFACT,
+    build_normalized_envelope,
+    concise_normalized_view,
+    persist_raw_runtime_output_if_needed,
+    validate_result_schema,
+)
 from .store import TaskStore
 from .task_lineage import (
     DEFAULT_LINEAGE_POLICY,
@@ -346,6 +354,7 @@ class Broker:
         neither duplicates this policy check (PRD §6).
         """
         effective_request, resolved_profile = self._resolve_agent_profile_request(request)
+        validate_result_schema(effective_request.result_schema)
         self._validate_request(effective_request)
         if verify_commands is not None:
             validate_verify_commands(verify_commands)
@@ -494,16 +503,94 @@ class Broker:
             mock_metadata,
         )
 
+    def _read_verification_artifact(self, task_id: str) -> dict | None:
+        path = self.store.artifacts / task_id / "verification.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def _persist_normalized_result(
+        self,
+        record: TaskRecord,
+        result: dict[str, Any],
+        collected: dict[str, Any],
+        gate: dict[str, Any],
+        final_state: TaskState,
+    ) -> str | None:
+        from .result_normalization import _artifact_refs
+
+        launch = self.store.get_launch(record.id)
+        raw_ref = persist_raw_runtime_output_if_needed(
+            self.store, record.id, launch=launch, collected=collected,
+        )
+        self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
+        manifest = self.store.artifact_manifest(record.id)
+        normalized = build_normalized_envelope(
+            record=record,
+            result=result,
+            collected=collected,
+            gate=gate,
+            verification=self._read_verification_artifact(record.id),
+            manifest=manifest,
+            launch=launch,
+            raw_output_artifact=raw_ref,
+            final_state=final_state,
+        )
+        self.store.write_artifact(
+            record.id,
+            NORMALIZED_RESULT_ARTIFACT,
+            json.dumps(normalized, indent=2, sort_keys=True) + "\n",
+        )
+        manifest = self.store.artifact_manifest(record.id)
+        normalized["broker_observed"]["artifact_refs"] = _artifact_refs(manifest)
+        self.store.write_artifact(
+            record.id,
+            NORMALIZED_RESULT_ARTIFACT,
+            json.dumps(normalized, indent=2, sort_keys=True) + "\n",
+        )
+        return raw_ref
+
+    def _finalize_runtime_collection(
+        self,
+        record: TaskRecord,
+        result: dict[str, Any],
+        collected: dict[str, Any],
+        candidate_state: TaskState,
+        *,
+        success_message: str,
+        blocked_message: str,
+        transition_metadata: dict,
+    ) -> TaskRecord:
+        if candidate_state in (TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS):
+            validate_result(result, record.id)
+        final_state, gate = self._apply_verification_gate(record.id, record, candidate_state)
+        self._write_gate_artifact(record.id, gate)
+        self._persist_normalized_result(record, result, collected, gate, final_state)
+        self._finalize_workspace(record.id)
+        message = success_message if final_state is candidate_state else blocked_message.format(outcome=gate["outcome"])
+        return self.store.transition(
+            record.id,
+            final_state,
+            message,
+            {
+                **transition_metadata,
+                "result_artifact": "result.json",
+                "normalized_result_artifact": NORMALIZED_RESULT_ARTIFACT,
+                "verification_gate": gate,
+            },
+        )
+
     def complete(self, task_id: str, summary: str) -> TaskRecord:
         record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting mock result", {})
         result = {"task_id": record.id, "state": "succeeded", "summary": summary, "runtime": {"adapter": "mock"}}
-        validate_result(result, record.id)
-        self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-        final_state, gate = self._apply_verification_gate(record.id, record, TaskState.SUCCEEDED)
-        self._write_gate_artifact(record.id, gate)
-        self._finalize_workspace(record.id)
-        message = "Mock task completed" if final_state is TaskState.SUCCEEDED else f"Mock task blocked by verification gate ({gate['outcome']})"
-        return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "verification_gate": gate})
+        collected = {"summary": summary, "exit_code": 0, "adapter": "mock"}
+        return self._finalize_runtime_collection(
+            record,
+            result,
+            collected,
+            TaskState.SUCCEEDED,
+            success_message="Mock task completed",
+            blocked_message="Mock task blocked by verification gate ({outcome})",
+            transition_metadata={},
+        )
 
     def collect(self, task_id: str) -> TaskRecord:
         """Collect a task's runtime-reported result.
@@ -533,11 +620,12 @@ class Broker:
                     "summary": collected.get("summary") or collected.get("error_message") or f"{runtime.name} request failed",
                     "runtime": runtime_payload,
                 }
-                self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-                _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
-                self._write_gate_artifact(record.id, gate)
-                self._finalize_workspace(record.id)
-                return self.store.transition(record.id, TaskState.FAILED, f"{runtime.name} task failed", {"result_artifact": "result.json", "exit_code": collected.get("exit_code"), "verification_gate": gate})
+                return self._finalize_runtime_collection(
+                    record, result, runtime_payload, TaskState.FAILED,
+                    success_message=f"{runtime.name} task failed",
+                    blocked_message=f"{runtime.name} task blocked by verification gate ({{outcome}})",
+                    transition_metadata={"exit_code": collected.get("exit_code")},
+                )
             state = TaskState.SUCCEEDED if collected.get("summary") else TaskState.SUCCEEDED_WITH_WARNINGS
             result = {
                 "task_id": record.id,
@@ -545,13 +633,12 @@ class Broker:
                 "summary": collected.get("summary") or f"{runtime.name} run produced no text result",
                 "runtime": runtime_payload,
             }
-            validate_result(result, record.id)
-            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-            final_state, gate = self._apply_verification_gate(record.id, record, state)
-            self._write_gate_artifact(record.id, gate)
-            self._finalize_workspace(record.id)
-            message = f"{runtime.name} task completed" if final_state is state else f"{runtime.name} task blocked by verification gate ({gate['outcome']})"
-            return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected.get("exit_code"), "verification_gate": gate})
+            return self._finalize_runtime_collection(
+                record, result, runtime_payload, state,
+                success_message=f"{runtime.name} task completed",
+                blocked_message=f"{runtime.name} task blocked by verification gate ({{outcome}})",
+                transition_metadata={"exit_code": collected.get("exit_code")},
+            )
         if task_id in self._process_handles:
             handle = self._process_handles.pop(task_id)
             adapter = self.subprocess_adapters[record.runtime]
@@ -561,20 +648,20 @@ class Broker:
             runtime = {"adapter": adapter.name, **collected}
             if collected["exit_code"] != 0:
                 result = {"task_id": record.id, "state": TaskState.FAILED.value, "summary": collected["summary"] or f"{adapter.name} exited with a non-zero status", "runtime": runtime}
-                self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-                _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
-                self._write_gate_artifact(record.id, gate)
-                self._finalize_workspace(record.id)
-                return self.store.transition(record.id, TaskState.FAILED, f"{adapter.name} task failed", {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
+                return self._finalize_runtime_collection(
+                    record, result, runtime, TaskState.FAILED,
+                    success_message=f"{adapter.name} task failed",
+                    blocked_message=f"{adapter.name} task blocked by verification gate ({{outcome}})",
+                    transition_metadata={"exit_code": collected["exit_code"]},
+                )
             state = TaskState.SUCCEEDED if collected["summary"] else TaskState.SUCCEEDED_WITH_WARNINGS
             result = {"task_id": record.id, "state": state.value, "summary": collected["summary"] or f"{adapter.name} run produced no text result", "runtime": runtime}
-            validate_result(result, record.id)
-            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-            final_state, gate = self._apply_verification_gate(record.id, record, state)
-            self._write_gate_artifact(record.id, gate)
-            self._finalize_workspace(record.id)
-            message = f"{adapter.name} task completed" if final_state is state else f"{adapter.name} task blocked by verification gate ({gate['outcome']})"
-            return self.store.transition(record.id, final_state, message, {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate})
+            return self._finalize_runtime_collection(
+                record, result, runtime, state,
+                success_message=f"{adapter.name} task completed",
+                blocked_message=f"{adapter.name} task blocked by verification gate ({{outcome}})",
+                transition_metadata={"exit_code": collected["exit_code"]},
+            )
         if task_id in self._adopted_durable_handles:
             return self._collect_adopted_durable(task_id, record)
         if record.runtime == DIRECT_API_PROFILE:
@@ -618,13 +705,11 @@ class Broker:
                 "summary": collected.get("summary") or f"{adapter_name} durable payload exited with a non-zero status",
                 "runtime": runtime,
             }
-            self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-            _, gate = self._apply_verification_gate(record.id, record, TaskState.FAILED)
-            self._write_gate_artifact(record.id, gate)
-            self._finalize_workspace(record.id)
-            return self.store.transition(
-                record.id, TaskState.FAILED, f"{adapter_name} task failed",
-                {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate, "adopted_durable": True},
+            return self._finalize_runtime_collection(
+                record, result, runtime, TaskState.FAILED,
+                success_message=f"{adapter_name} task failed",
+                blocked_message=f"{adapter_name} task blocked by verification gate ({{outcome}})",
+                transition_metadata={"exit_code": collected["exit_code"], "adopted_durable": True},
             )
         state = TaskState.SUCCEEDED if collected.get("summary") else TaskState.SUCCEEDED_WITH_WARNINGS
         result = {
@@ -633,19 +718,11 @@ class Broker:
             "summary": collected.get("summary") or f"{adapter_name} durable run produced no text result",
             "runtime": runtime,
         }
-        validate_result(result, record.id)
-        self.store.write_artifact(record.id, "result.json", json.dumps(result, indent=2) + "\n")
-        final_state, gate = self._apply_verification_gate(record.id, record, state)
-        self._write_gate_artifact(record.id, gate)
-        self._finalize_workspace(record.id)
-        message = (
-            f"{adapter_name} task completed from adopted durable artifacts"
-            if final_state is state else
-            f"{adapter_name} task blocked by verification gate ({gate['outcome']})"
-        )
-        return self.store.transition(
-            record.id, final_state, message,
-            {"result_artifact": "result.json", "exit_code": collected["exit_code"], "verification_gate": gate, "adopted_durable": True},
+        return self._finalize_runtime_collection(
+            record, result, runtime, state,
+            success_message=f"{adapter_name} task completed from adopted durable artifacts",
+            blocked_message=f"{adapter_name} task blocked by verification gate ({{outcome}})",
+            transition_metadata={"exit_code": collected["exit_code"], "adopted_durable": True},
         )
 
     def _process_group_status(self, task_id: str) -> str:
@@ -1160,6 +1237,10 @@ class Broker:
         adopted = self._adopted_durable_handles.get(task_id)
         if adopted is not None:
             payload["adopted_durable"] = adopted_status(adopted)
+        normalized_path = self.store.artifacts / task_id / NORMALIZED_RESULT_ARTIFACT
+        if normalized_path.is_file():
+            envelope = json.loads(normalized_path.read_text())
+            payload["normalized_result"] = concise_normalized_view(envelope)
         return payload
 
     def _finalize_workspace(self, task_id: str) -> None:
