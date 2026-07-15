@@ -7,7 +7,7 @@ from pathlib import Path
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
-from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest
+from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest, translate_delegate_fields
 from .opencode_adapter import OpenCodeAdapter
 from .doctor import format_human_report as format_doctor_report, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
@@ -59,7 +59,11 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--task", required=True)
     create.add_argument("--workspace", required=True)
     create.add_argument("--mode", default="read_only")
-    create.add_argument("--profile", default="mock")
+    create.add_argument("--runtime", default=None, help="Execution backend identifier (preferred over --profile).")
+    create.add_argument("--profile", default=None, help="Deprecated alias for --runtime.")
+    create.add_argument("--model", default=None, help="Optional requested model identifier (persisted only).")
+    create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral role identifier (persisted only).")
+    create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier (persisted only).")
     create.add_argument(
         "--provider", default=None,
         help="Named provider from --providers-config (required when --profile openai_compatible).",
@@ -201,9 +205,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         if args.command == "create":
-            request = TaskRequest(args.task, args.workspace, args.mode, args.profile, args.provider, args.timeout, args.verification_policy)
+            runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
+                runtime=args.runtime,
+                profile=args.profile,
+                model=args.model,
+                agent_profile=args.agent_profile,
+                result_schema=args.result_schema,
+            )
+            request = TaskRequest(
+                args.task,
+                args.workspace,
+                args.mode,
+                runtime,
+                args.provider,
+                args.timeout,
+                args.verification_policy,
+                runtime=runtime,
+                model=model,
+                agent_profile=agent_profile,
+                result_schema=result_schema,
+                compatibility=compatibility,
+            )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
-            output = broker.create(request, verify_commands=verify_commands).json()
+            record = broker.create(request, verify_commands=verify_commands)
+            output = record.json()
+            if compatibility is not None:
+                output = {**output, "compatibility": compatibility}
         elif args.command == "start":
             output = broker.start(args.task_id).json()
         elif args.command == "complete":
