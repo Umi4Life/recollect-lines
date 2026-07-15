@@ -28,6 +28,7 @@ from .runtime_registry import (
     RuntimeDescriptor,
     RuntimeRegistry,
     SUBPROCESS_LIMITATIONS,
+    resolve_runtime_label,
 )
 
 
@@ -197,7 +198,7 @@ def _descriptor_entry(
         "kind": descriptor.discovery_kind,
         "execution_strategy": descriptor.execution_strategy.value,
         "adapter_name": getattr(adapter, "name", descriptor.name),
-        "runtime_label": descriptor.runtime_label or getattr(adapter, "runtime_label", descriptor.name),
+        "runtime_label": resolve_runtime_label(descriptor, adapter),
         "execution_modes": sorted(policy.allowed_modes),
         "declared_capabilities": _declared_capabilities(descriptor),
         "observed_availability": _observed_adapter_availability(adapter),

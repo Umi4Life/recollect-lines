@@ -137,6 +137,18 @@ class RuntimeRegistry:
         )
 
 
+def resolve_runtime_label(descriptor: RuntimeDescriptor, adapter: object | None = None) -> str:
+    """Return a JSON-safe descriptive label for discovery output."""
+    static = descriptor.runtime_label
+    if isinstance(static, str):
+        return static
+    if adapter is not None:
+        dynamic = getattr(adapter, "runtime_label", descriptor.name)
+        if isinstance(dynamic, str):
+            return dynamic
+    return descriptor.name
+
+
 def _subprocess_descriptor(
     adapter_cls: type,
     *,
@@ -150,7 +162,6 @@ def _subprocess_descriptor(
         adapter_capabilities=adapter_cls.capabilities,
         limitations=SUBPROCESS_LIMITATIONS,
         model_selection=model_selection,
-        runtime_label=getattr(adapter_cls, "runtime_label", adapter_cls.name),
     )
 
 

@@ -21,6 +21,9 @@ erase that boundary.
 - **`runtimes`** — every registered profile (`mock`, subprocess adapters,
   `openai_compatible`) with:
   - `kind`: `synthetic` | `subprocess_cli` | `direct_api`
+  - `runtime_label` (subprocess entries) — descriptive string resolved from the
+    registered adapter instance at discovery time, or a static descriptor label
+    for fixtures; never a raw Python class attribute or property descriptor
   - `execution_modes`, profile limits (`max_timeout_seconds`, `max_concurrency`)
   - **`declared_capabilities`** — broker-known facts (e.g. `isolated_worktree`,
     `process_group_cancellation`, `synthetic_runtime` for mock)
