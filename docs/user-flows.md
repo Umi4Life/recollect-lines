@@ -154,7 +154,7 @@ Recollect Lines does **not** embed Codex, Cursor, or Claude. Each **profile** se
 A parent host (human or agent) can delegate multiple bounded children under one operation:
 
 1. **Group host work** with `external_root_id` — audit-only; does not invent a broker parent.
-2. **Delegate children** with explicit `runtime`, optional `model`, optional `agent_profile`, optional `result_schema`, and `parent_task_id` when the child belongs to a host-directed tree.
+2. **Delegate children** with explicit `runtime`, optional `model`, optional `agent_profile`, optional `result_schema`, and `parent_task_id` when the child belongs to a host-directed tree. Absent `origin_kind`, host-facing CLI/MCP calls default to `origin_kind=host` whether or not `parent_task_id` is set; parenthood alone does not imply `side_agent`. Reserve `origin_kind=side_agent` for a future explicit authenticated recursive callback path. Provenance is audit metadata only — it does not change authorization, permissions, or runtime behavior.
 3. **Continue host-side work** while children run (separate tasks sharing the same `external_root_id`).
 4. **Poll** `completion_events` / `completion-events` by monotonic cursor for compact terminal signals.
 5. **Collect** concise `normalized_result` views; inspect raw runtime artifacts separately under the task artifact directory.

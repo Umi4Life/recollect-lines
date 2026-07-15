@@ -7,7 +7,7 @@ from pathlib import Path
 from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState
 from recollect_lines.service import Broker
 from recollect_lines.store import TaskStore
-from recollect_lines.task_lineage import LineagePolicy
+from recollect_lines.task_lineage import LineagePolicy, resolve_lineage
 
 
 class TaskLineageTests(unittest.TestCase):
@@ -22,8 +22,8 @@ class TaskLineageTests(unittest.TestCase):
         self.broker.close()
         self.tempdir.cleanup()
 
-    def create(self, task: str = "child work", **kwargs):
-        return self.broker.create(TaskRequest(task, "/repo", **kwargs))
+    def create(self, task: str = "child work", workspace: str = "/repo", **kwargs):
+        return self.broker.create(TaskRequest(task, workspace, **kwargs))
 
     def test_root_task_persists_through_restart(self):
         parent = self.create("parent")
@@ -32,7 +32,7 @@ class TaskLineageTests(unittest.TestCase):
         self.assertEqual(child.root_task_id, parent.id)
         self.assertEqual(child.delegation_depth, 1)
         self.assertEqual(child.relationship, "delegates")
-        self.assertEqual(child.origin_kind, "side_agent")
+        self.assertEqual(child.origin_kind, "host")
         self.broker.close()
         mock_policy = ProfilePolicy("mock", frozenset({"read_only", "isolated_worktree"}), 3600, 16)
         reloaded = Broker(self.home, profiles={"mock": mock_policy}, lineage_policy=self.policy)
@@ -188,6 +188,93 @@ class TaskLineageTests(unittest.TestCase):
                 tight.create(TaskRequest("two", "/repo"))
         finally:
             tight.close()
+
+
+class HostProvenanceDefaultTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.policy = LineagePolicy(max_active_agents=8, max_children_per_parent=4, max_delegation_depth=3)
+        mock_policy = ProfilePolicy("mock", frozenset({"read_only", "isolated_worktree"}), 3600, 16)
+        self.broker = Broker(self.home, profiles={"mock": mock_policy}, lineage_policy=self.policy)
+
+    def tearDown(self):
+        self.broker.close()
+        self.tempdir.cleanup()
+
+    def create(self, task: str = "child work", workspace: str = "/repo", **kwargs):
+        return self.broker.create(TaskRequest(task, workspace, **kwargs))
+
+    def test_resolve_lineage_parented_without_origin_defaults_host(self):
+        parent = self.create("parent")
+        resolved = resolve_lineage(
+            task_id="tsk_child",
+            parent_task_id=parent.id,
+            external_root_id=None,
+            relationship=None,
+            origin_kind=None,
+            origin_ref=None,
+            get_parent=self.broker.store.get,
+            child_count=self.broker.store.child_count,
+            active_agent_count=self.broker.store.total_active_count,
+            policy=self.policy,
+        )
+        self.assertEqual(resolved.origin_kind, "host")
+
+    def test_parented_task_defaults_host_not_side_agent(self):
+        parent = self.create("parent", origin_kind="host")
+        child = self.create("child", parent_task_id=parent.id)
+        self.assertEqual(child.origin_kind, "host")
+
+    def test_explicit_side_agent_persists_for_parented_task(self):
+        parent = self.create("parent")
+        child = self.create("child", parent_task_id=parent.id, origin_kind="side_agent")
+        self.assertEqual(child.origin_kind, "side_agent")
+
+    def test_parenthood_does_not_infer_side_agent_from_parent_origin(self):
+        parent = self.create("parent", origin_kind="side_agent")
+        child = self.create("child", parent_task_id=parent.id)
+        self.assertEqual(parent.origin_kind, "side_agent")
+        self.assertEqual(child.origin_kind, "host")
+
+    def test_origin_kind_does_not_bypass_writer_lease(self):
+        from tests.test_workspace_safety import init_repo
+
+        source = init_repo(Path(self.tempdir.name) / "source")
+        parent = self.create(
+            "parent writer",
+            workspace=str(source),
+            execution_mode="isolated_worktree",
+            profile="mock",
+            origin_kind="side_agent",
+        )
+        child = self.create(
+            "child writer",
+            workspace=str(source),
+            execution_mode="isolated_worktree",
+            profile="mock",
+            parent_task_id=parent.id,
+            origin_kind="host",
+        )
+        started_parent = self.broker.start(parent.id)
+        started_child = self.broker.start(child.id)
+        self.assertEqual(started_parent.state, TaskState.RUNNING)
+        self.assertEqual(started_child.state, TaskState.FAILED)
+        events = self.broker.store.events(child.id)
+        self.assertTrue(
+            any(event.get("metadata", {}).get("reason") == "workspace_lease_conflict" for event in events)
+        )
+
+    def test_lineage_tree_and_limits_unchanged_with_host_parented_child(self):
+        parent = self.create("parent")
+        child = self.create("child", parent_task_id=parent.id, relationship="delegates")
+        self.assertEqual(child.root_task_id, parent.id)
+        self.assertEqual(child.delegation_depth, 1)
+        self.assertEqual(child.relationship, "delegates")
+        tree = self.broker.task_tree(parent.id)
+        self.assertEqual(tree["root_task_id"], parent.id)
+        self.assertEqual(len(tree["tasks"]), 2)
+        self.assertFalse(tree["truncated"])
 
 
 if __name__ == "__main__":

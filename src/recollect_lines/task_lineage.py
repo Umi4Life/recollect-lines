@@ -130,11 +130,10 @@ def resolve_lineage(
                 f"delegation_depth {delegation_depth} exceeds policy maximum {policy.max_delegation_depth}"
             )
         root_task_id = parent.root_task_id
-        resolved_origin = origin_kind or "side_agent"
     else:
         delegation_depth = 0
         root_task_id = task_id
-        resolved_origin = origin_kind or "host"
+    resolved_origin = origin_kind or "host"
     if active_agent_count() >= policy.max_active_agents:
         raise ValueError(f"Broker active-agent limit reached ({policy.max_active_agents})")
     return ResolvedLineage(

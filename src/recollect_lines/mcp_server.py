@@ -532,7 +532,11 @@ DELEGATE_INPUT_SCHEMA = {
         "origin_kind": {
             "type": "string",
             "enum": list(VALID_ORIGIN_KINDS),
-            "description": "Audit-only provenance class (not used for authorization).",
+            "description": (
+                "Audit-only provenance class (not used for authorization). Defaults to host for "
+                "CLI/MCP delegation, including when parent_task_id is set. side_agent is reserved "
+                "for a future explicit recursive callback path."
+            ),
         },
         "origin_ref": {
             "type": "string",

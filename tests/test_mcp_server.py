@@ -141,6 +141,24 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(collected_payload["data"]["state"], "failed")
         self.assertIsNone(collected_payload["data"]["runtime_result"])
 
+    def test_mcp_root_delegate_defaults_origin_kind_host(self):
+        self.initialize()
+        self.client.notify("notifications/initialized")
+        delegated = self.delegate()
+        payload = json.loads(delegated["result"]["content"][0]["text"])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["origin_kind"], "host")
+
+    def test_mcp_parented_delegate_defaults_origin_kind_host(self):
+        self.initialize()
+        self.client.notify("notifications/initialized")
+        parent = json.loads(self.delegate()["result"]["content"][0]["text"])["data"]
+        child = json.loads(
+            self.delegate(parent_task_id=parent["task_id"])["result"]["content"][0]["text"]
+        )["data"]
+        self.assertEqual(child["origin_kind"], "host")
+        self.assertEqual(child["parent_task_id"], parent["task_id"])
+
     def test_ping(self):
         self.initialize()
         response = self.client.request("ping")

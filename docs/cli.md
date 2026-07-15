@@ -53,13 +53,13 @@ There is **no** `recollect` executable (removed in field-readiness work).
 --parent-task-id ID    (optional broker parent)
 --external-root-id ID  (audit-only host grouping)
 --relationship delegates|continues
---origin-kind host|side_agent
+--origin-kind host|side_agent   (default host; parent_task_id does not imply side_agent)
 --origin-ref TEXT      (audit-only caller reference)
 ```
 
 Runtimes and modes are validated against broker policy before queueing. Legacy `--profile` follows the same translation rules as MCP; see [migration-runtime-profile.md](migration-runtime-profile.md).
 
-`root_task_id` and `delegation_depth` are broker-derived and cannot be supplied by callers. `external_root_id` groups host-side work without inventing a broker parent. Agent callback delegation remains unimplemented; host `create`/`delegate` calls are not conflated with it.
+`root_task_id` and `delegation_depth` are broker-derived and cannot be supplied by callers. `external_root_id` groups host-side work without inventing a broker parent. Absent `origin_kind`, host-facing `create` defaults to `host` (including parented tasks); `side_agent` is reserved for a future explicit recursive callback path and is audit-only. Agent callback delegation remains unimplemented; host `create`/`delegate` calls are not conflated with it.
 
 ## Discovery and routing
 
