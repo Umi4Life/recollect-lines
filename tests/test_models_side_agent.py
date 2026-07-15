@@ -83,6 +83,7 @@ class PersistenceAndMigrationTests(unittest.TestCase):
             model="fixture-model",
             agent_profile="architecture-reviewer",
             result_schema="evidence-report",
+            explicit_fields=frozenset({"result_schema", "model", "agent_profile"}),
         )
         created = broker.create(request)
         broker.close()

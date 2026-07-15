@@ -188,7 +188,7 @@ class ClaudeCodeAdapter:
             command += ["--disallowedTools", ",".join(READ_ONLY_DISALLOWED_TOOLS)]
         return command
 
-    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None) -> tuple[dict, ProcessHandle]:
+    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, ProcessHandle]:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = artifacts_dir / "stdout.log"
         stderr_path = artifacts_dir / "stderr.log"
@@ -196,7 +196,7 @@ class ClaudeCodeAdapter:
         # Claude Code has no --dir/--workspace flag (unlike OpenCode); tool
         # access is scoped to the process's own cwd, so isolation depends on
         # launching in effective_workspace, not on an argument.
-        command = self.build_command(record.task, record.execution_mode, model=record.effective_model)
+        command = self.build_command(prompt or record.task, record.execution_mode, model=record.effective_model)
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
                 command, stdout=stdout_file, stderr=stderr_file, cwd=effective_workspace, start_new_session=True,

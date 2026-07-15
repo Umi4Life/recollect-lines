@@ -87,7 +87,7 @@ class FixtureDurableAdapter:
             command.append("prompt-with-RL_SECRET_SENTINEL-in-argv")
         return command
 
-    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None) -> tuple[dict, DurableFixtureHandle]:
+    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, DurableFixtureHandle]:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         events_path = artifacts_dir / "events.jsonl"
         stderr_path = artifacts_dir / "stderr.log"

@@ -99,11 +99,20 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         raise ValueError("'task' must be a non-empty string")
     if not isinstance(workspace, str) or not workspace.strip():
         raise ValueError("'workspace' must be a non-empty string")
+    explicit_fields: set[str] = set()
+    if "execution_mode" in item:
+        explicit_fields.add("execution_mode")
     execution_mode = item.get("execution_mode", "read_only")
     if execution_mode not in EXECUTION_MODES:
         raise ValueError(f"execution_mode must be one of {EXECUTION_MODES}, got {execution_mode!r}")
     runtime = item.get("runtime")
     profile = item.get("profile") if "profile" in item else None
+    if "model" in item:
+        explicit_fields.add("model")
+    if "agent_profile" in item:
+        explicit_fields.add("agent_profile")
+    if "result_schema" in item:
+        explicit_fields.add("result_schema")
     effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
         runtime=runtime,
         profile=profile,
@@ -111,6 +120,8 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         agent_profile=item.get("agent_profile"),
         result_schema=item.get("result_schema"),
     )
+    if "timeout_seconds" in item:
+        explicit_fields.add("timeout_seconds")
     timeout_seconds = item.get("timeout_seconds", 1800)
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds < 1:
         raise ValueError("timeout_seconds must be a positive integer")
@@ -136,6 +147,7 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         agent_profile=agent_profile,
         result_schema=result_schema,
         compatibility=compatibility,
+        explicit_fields=frozenset(explicit_fields),
     ), verify_commands
 
 
@@ -418,7 +430,10 @@ DELEGATE_INPUT_SCHEMA = {
         },
         "agent_profile": {
             "type": "string",
-            "description": "Optional behavioral role identifier (persisted; prompt composition is future work).",
+            "description": (
+                "Optional behavioral agent profile name. Resolves prompt prefix and default task fields "
+                "at create time; recommended_runtime is advisory only."
+            ),
         },
         "result_schema": {
             "type": "string",

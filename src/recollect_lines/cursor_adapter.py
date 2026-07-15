@@ -141,13 +141,13 @@ class CursorAdapter:
         command.append(prompt)
         return command
 
-    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None) -> tuple[dict, ProcessHandle]:
+    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, ProcessHandle]:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = artifacts_dir / "stdout.log"
         stderr_path = artifacts_dir / "stderr.log"
         effective_workspace = workspace or record.workspace
         command = self.build_command(
-            record.task, record.execution_mode, effective_workspace, model=record.effective_model,
+            prompt or record.task, record.execution_mode, effective_workspace, model=record.effective_model,
         )
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
