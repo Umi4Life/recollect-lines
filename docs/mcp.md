@@ -33,6 +33,8 @@ Adapter override flags match `recollect-lines` (`--codex-command`, etc.).
 | `select_candidates` | Policy-aware filtering (parent chooses) |
 | `council_validate` | Validate council plan |
 | `council_execute` | Execute bounded council plan |
+| `task_children` | Direct child task summaries for a parent |
+| `task_tree` | Bounded tree for a `root_task_id` |
 
 ## `delegate` input (schema summary)
 
@@ -55,8 +57,15 @@ Optional:
 | `timeout_seconds` | `1800` | positive integer |
 | `verification_policy` | `none` | `none`, `advisory`, `required` |
 | `verify_commands` | — | array of argv arrays |
+| `parent_task_id` | — | optional existing broker parent |
+| `external_root_id` | — | audit-only host/conversation grouping |
+| `relationship` | — | `delegates`, `continues` (requires parent; `continues` is a new task, not resume) |
+| `origin_kind` | derived | `host`, `side_agent` (audit only; not authorization) |
+| `origin_ref` | — | audit-only caller reference |
 
-`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent fields, and `compatibility` when a legacy `profile` was translated — not a fabricated completion.
+`root_task_id` and `delegation_depth` are broker-derived and rejected if callers supply them.
+
+`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent and lineage fields, and `compatibility` when a legacy `profile` was translated — not a fabricated completion.
 
 See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
 
