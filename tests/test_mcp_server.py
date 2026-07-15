@@ -477,6 +477,52 @@ class RuntimeProfileCompatibilityMcpTests(unittest.TestCase):
         self.assertTrue(outcomes[1]["accepted"])
         self.assertEqual(outcomes[1]["compatibility"]["legacy_profile_translated"], True)
 
+    def test_delegate_rejects_conflicting_runtime_and_profile(self):
+        response = self.client.call_tool("delegate", {
+            "task": "Inspect tests",
+            "workspace": str(self.workspace),
+            "runtime": "codex",
+            "profile": "claude_code",
+        })
+        self.assertTrue(response["result"]["isError"])
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "LegacyProfileConflictError")
+        self.assertIn("runtime", payload["error"]["message"])
+        self.assertIn("profile", payload["error"]["message"])
+
+    def test_delegate_rejects_unknown_legacy_profile(self):
+        response = self.client.call_tool("delegate", {
+            "task": "Inspect tests",
+            "workspace": str(self.workspace),
+            "profile": "architecture-reviewer",
+        })
+        self.assertTrue(response["result"]["isError"])
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "ValueError")
+        self.assertIn("agent_profile", payload["error"]["message"])
+        self.assertIn("architecture-reviewer", payload["error"]["message"])
+
+    def test_delegate_batch_rejects_conflicting_runtime_and_profile_per_item(self):
+        response = self.client.call_tool("delegate_batch", {
+            "tasks": [
+                {"task": "one", "workspace": str(self.workspace), "runtime": "mock"},
+                {
+                    "task": "two",
+                    "workspace": str(self.workspace),
+                    "runtime": "codex",
+                    "profile": "claude_code",
+                },
+            ],
+        })
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertTrue(payload["ok"])
+        outcomes = payload["data"]["outcomes"]
+        self.assertTrue(outcomes[0]["accepted"])
+        self.assertFalse(outcomes[1]["accepted"])
+        self.assertEqual(outcomes[1]["error"]["code"], "LegacyProfileConflictError")
+
 
 class CursorMcpSelectionTests(unittest.TestCase):
     def setUp(self):

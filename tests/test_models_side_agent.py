@@ -1,9 +1,12 @@
+import io
 import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
+from recollect_lines import cli
 from recollect_lines.models import (
     LegacyProfileConflictError,
     TaskRecord,
@@ -142,7 +145,42 @@ class PersistenceAndMigrationTests(unittest.TestCase):
         record = store.get("tsk_legacy")
         self.assertEqual(record.runtime, "codex")
         self.assertEqual(record.profile, "codex")
+        self.assertEqual(store.active_count("codex"), 1)
         store.close()
+
+    def test_backfill_legacy_row_active_count_after_reopen(self):
+        db_path = self.home / "recollectlines.db"
+        self.home.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(db_path)
+        connection.executescript(
+            """
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                task TEXT NOT NULL,
+                workspace TEXT NOT NULL,
+                execution_mode TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                provider TEXT,
+                timeout_seconds INTEGER NOT NULL,
+                verification_policy TEXT NOT NULL DEFAULT 'none',
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO tasks VALUES (
+                'tsk_legacy', 'old task', '/repo', 'read_only', 'codex', NULL,
+                1800, 'none', 'queued', '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00'
+            );
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        store = TaskStore(self.home)
+        store.close()
+        store2 = TaskStore(self.home)
+        self.assertEqual(store2.active_count("codex"), 1)
+        store2.close()
 
     def test_legacy_request_artifact_has_compatibility_without_secrets(self):
         broker = Broker(self.home)
@@ -175,6 +213,43 @@ class EffectiveRuntimeTests(unittest.TestCase):
         self.assertEqual(record.runtime, "codex")
         self.assertEqual(record.profile, "codex")
         self.assertEqual(record.agent_profile, "architecture-reviewer")
+
+
+class CliRuntimeProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _create_stdout(self, *extra_args: str) -> dict:
+        buf = io.StringIO()
+        args = ["--home", str(self.home), "create", "--task", "cli task", "--workspace", str(self.workspace), *extra_args]
+        with redirect_stdout(buf):
+            exit_code = cli.main(args)
+        self.assertEqual(exit_code, 0)
+        return json.loads(buf.getvalue())
+
+    def test_cli_runtime_and_side_agent_fields(self):
+        output = self._create_stdout(
+            "--runtime", "codex",
+            "--model", "fixture-model",
+            "--agent-profile", "architecture-reviewer",
+            "--result-schema", "evidence-report",
+        )
+        self.assertEqual(output["runtime"], "codex")
+        self.assertEqual(output["model"], "fixture-model")
+        self.assertEqual(output["agent_profile"], "architecture-reviewer")
+        self.assertEqual(output["result_schema"], "evidence-report")
+        self.assertNotIn("compatibility", output)
+
+    def test_cli_legacy_profile_echoes_compatibility(self):
+        output = self._create_stdout("--profile", "codex")
+        self.assertEqual(output["runtime"], "codex")
+        self.assertEqual(output["compatibility"], legacy_profile_compatibility_metadata())
 
 
 if __name__ == "__main__":

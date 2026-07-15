@@ -66,7 +66,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier (persisted only).")
     create.add_argument(
         "--provider", default=None,
-        help="Named provider from --providers-config (required when --profile openai_compatible).",
+        help="Named provider from --providers-config (required when --runtime openai_compatible).",
     )
     create.add_argument("--timeout", type=int, default=1800)
     create.add_argument("--verification-policy", default="none", choices=VERIFICATION_POLICIES)

@@ -424,7 +424,7 @@ DELEGATE_INPUT_SCHEMA = {
         },
         "provider": {
             "type": "string",
-            "description": "Named provider entry (required when profile is openai_compatible).",
+            "description": "Named provider entry (required when runtime is openai_compatible).",
         },
         "timeout_seconds": {
             "type": "integer",
