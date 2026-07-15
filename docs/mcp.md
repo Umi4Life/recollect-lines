@@ -35,6 +35,7 @@ Adapter override flags match `recollect-lines` (`--codex-command`, etc.).
 | `council_execute` | Execute bounded council plan |
 | `task_children` | Direct child task summaries for a parent |
 | `task_tree` | Bounded tree for a `root_task_id` |
+| `completion_events` | Poll durable completion signals from the global event cursor |
 
 ## `delegate` input (schema summary)
 

@@ -401,6 +401,37 @@ def handle_task_tree(broker: Broker, args: dict) -> dict:
     return broker.task_tree(root_task_id.strip())
 
 
+def handle_completion_events(broker: Broker, args: dict) -> dict:
+    after_event_id = args.get("after_event_id", 0)
+    if not isinstance(after_event_id, int) or isinstance(after_event_id, bool):
+        raise ValueError("'after_event_id' must be a non-negative integer")
+    limit = args.get("limit", 64)
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValueError("'limit' must be a positive integer")
+    task_id = args.get("task_id")
+    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
+        raise ValueError("'task_id' must be a non-empty string when provided")
+    root_task_id = args.get("root_task_id")
+    if root_task_id is not None and (not isinstance(root_task_id, str) or not root_task_id.strip()):
+        raise ValueError("'root_task_id' must be a non-empty string when provided")
+    completion_only = args.get("completion_only", True)
+    if not isinstance(completion_only, bool):
+        raise ValueError("'completion_only' must be a boolean")
+    states = args.get("states")
+    if states is not None:
+        if not isinstance(states, list) or not all(isinstance(item, str) for item in states):
+            raise ValueError("'states' must be an array of strings when provided")
+        states = frozenset(states)
+    return broker.completion_events_since(
+        after_event_id,
+        limit=limit,
+        task_id=task_id.strip() if isinstance(task_id, str) else None,
+        root_task_id=root_task_id.strip() if isinstance(root_task_id, str) else None,
+        completion_only=completion_only,
+        states=states,
+    )
+
+
 # --- tool schemas and registry ----------------------------------------------
 
 DELEGATE_INPUT_SCHEMA = {
@@ -608,6 +639,36 @@ TASK_TREE_INPUT_SCHEMA = {
     },
     "required": ["root_task_id"],
 }
+COMPLETION_EVENTS_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "after_event_id": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Exclusive lower bound on durable global event id.",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256,
+            "default": 64,
+            "description": "Maximum completion events to return in chronological order.",
+        },
+        "task_id": {"type": "string", "description": "Optional filter to one task id."},
+        "root_task_id": {"type": "string", "description": "Optional filter to one broker root_task_id lineage."},
+        "completion_only": {
+            "type": "boolean",
+            "default": True,
+            "description": "When true (default), return terminal and recovery_required completion signals only.",
+        },
+        "states": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional explicit completion-state filter (repeatable values in one array).",
+        },
+    },
+}
 
 TOOLS = {
     "delegate": {
@@ -694,6 +755,14 @@ TOOLS = {
         "description": "Return a deterministic bounded task tree for a broker root_task_id (concise summaries only).",
         "inputSchema": TASK_TREE_INPUT_SCHEMA,
         "handler": handle_task_tree,
+    },
+    "completion_events": {
+        "description": (
+            "Poll durable completion signals from the global append-only event cursor. "
+            "Returns compact terminal/recovery summaries with lineage and normalized result hints — never raw logs."
+        ),
+        "inputSchema": COMPLETION_EVENTS_INPUT_SCHEMA,
+        "handler": handle_completion_events,
     },
 }
 

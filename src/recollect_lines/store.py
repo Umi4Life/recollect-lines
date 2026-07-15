@@ -276,6 +276,45 @@ class TaskStore:
         rows = self.connection.execute("SELECT * FROM events WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
         return [{**dict(row), "metadata": json.loads(row["metadata_json"])} for row in rows]
 
+    def event_high_water_mark(self) -> int:
+        row = self.connection.execute("SELECT COALESCE(MAX(id), 0) AS high_water FROM events").fetchone()
+        return int(row["high_water"])
+
+    def events_since(
+        self,
+        after_event_id: int,
+        *,
+        limit: int,
+        task_id: str | None = None,
+        root_task_id: str | None = None,
+        state_after_in: frozenset[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        if after_event_id < 0:
+            raise ValueError("after_event_id must be non-negative")
+        clauses = ["e.id > ?"]
+        params: list[Any] = [after_event_id]
+        if task_id is not None:
+            clauses.append("e.task_id = ?")
+            params.append(task_id)
+        if root_task_id is not None:
+            clauses.append("t.root_task_id = ?")
+            params.append(root_task_id)
+        if state_after_in is not None:
+            placeholders = ",".join("?" for _ in state_after_in)
+            clauses.append(f"e.state_after IN ({placeholders})")
+            params.extend(sorted(state_after_in))
+        where = " AND ".join(clauses)
+        query = (
+            "SELECT e.id, e.task_id, e.timestamp, e.type, e.state_before, e.state_after, e.message, e.metadata_json, "
+            "t.runtime, t.model, t.effective_model, t.agent_profile, t.parent_task_id, t.root_task_id, "
+            "t.external_root_id, t.delegation_depth, t.relationship, t.origin_kind, t.origin_ref "
+            f"FROM events e JOIN tasks t ON e.task_id = t.id WHERE {where} "
+            "ORDER BY e.id ASC LIMIT ?"
+        )
+        params.append(limit)
+        rows = self.connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows], self.event_high_water_mark()
+
     def write_artifact(self, task_id: str, name: str, content: str | bytes) -> Path:
         if "/" in name or name in {"", ".", "..", "manifest.json"}:
             raise ValueError("Artifact name must be a simple non-manifest filename")

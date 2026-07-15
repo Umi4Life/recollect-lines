@@ -116,7 +116,7 @@ class McpServerTests(unittest.TestCase):
             {
                 "delegate", "delegate_batch", "status", "collect", "cancel", "control", "message", "reconcile",
                 "discover_capabilities", "select_candidates", "council_validate", "council_execute",
-                "task_children", "task_tree",
+                "task_children", "task_tree", "completion_events",
             },
         )
 
