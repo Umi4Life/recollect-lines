@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -170,11 +171,32 @@ class BrokerNormalizationTests(unittest.TestCase):
         envelope = self._normalized(record.id)
         refs = envelope["broker_observed"]["artifact_refs"]
         names = {item["name"] for item in refs}
-        self.assertIn(NORMALIZED_RESULT_ARTIFACT, names)
+        self.assertNotIn(NORMALIZED_RESULT_ARTIFACT, names)
         self.assertIn("result.json", names)
         for item in refs:
             self.assertRegex(item["sha256"], r"^[a-f0-9]{64}$")
             self.assertGreater(item["bytes"], 0)
+
+    def test_normalized_result_excludes_self_and_manifest_matches_final_bytes(self):
+        record = self._collect_mock("integrity check", result_schema="plain-summary")
+        task_dir = self.broker.store.artifacts / record.id
+        envelope = self._normalized(record.id)
+        ref_names = {item["name"] for item in envelope["broker_observed"]["artifact_refs"]}
+        self.assertNotIn(NORMALIZED_RESULT_ARTIFACT, ref_names)
+        self.assertEqual(envelope["broker_observed"]["artifact_manifest_ref"], "manifest.json")
+
+        manifest = json.loads((task_dir / "manifest.json").read_text())
+        manifest_entry = next(
+            (item for item in manifest["files"] if item["name"] == NORMALIZED_RESULT_ARTIFACT),
+            None,
+        )
+        self.assertIsNotNone(manifest_entry, "manifest.json must list normalized_result.json")
+
+        normalized_path = task_dir / NORMALIZED_RESULT_ARTIFACT
+        on_disk = normalized_path.read_bytes()
+        recomputed = hashlib.sha256(on_disk).hexdigest()
+        self.assertEqual(recomputed, manifest_entry["sha256"])
+        self.assertEqual(len(on_disk), manifest_entry["bytes"])
 
     def test_status_exposes_concise_normalized_view(self):
         record = self._collect_mock("summary", result_schema="plain-summary")

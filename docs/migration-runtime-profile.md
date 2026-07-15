@@ -135,6 +135,7 @@ On collect/complete the broker writes:
 
 - `result.json` — legacy-compatible runtime result (unchanged role)
 - `normalized_result.json` — versioned envelope with `runtime_reported`, `broker_observed`, and `parser` zones
+- `broker_observed.artifact_manifest_ref` points at `manifest.json`; embedded `artifact_refs` list sibling artifacts only (never `normalized_result.json` itself, since a file cannot embed a stable hash of its own final bytes)
 - raw runtime output remains in the adapter events artifact or `runtime_raw_output.txt` (mock path); parser references rather than duplicating it
 
 Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.
