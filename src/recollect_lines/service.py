@@ -29,7 +29,6 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .models import (
-    DEFAULT_PROFILES,
     TERMINAL_STATES,
     VERIFICATION_POLICIES,
     ProfilePolicy,
@@ -46,6 +45,7 @@ from .models import (
 )
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .providers import ProviderConfigError, load_providers_config
+from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
 from .store import TaskStore
 from .workspace import WorkspaceError, WorkspaceManager, canonical_source, capture_head
 
@@ -70,6 +70,7 @@ class Broker:
         self,
         home: Path,
         profiles: dict[str, ProfilePolicy] | None = None,
+        runtime_registry: RuntimeRegistry | None = None,
         opencode_adapter: OpenCodeAdapter | None = None,
         claude_code_adapter: ClaudeCodeAdapter | None = None,
         codex_adapter: CodexAdapter | None = None,
@@ -98,7 +99,26 @@ class Broker:
         }
         if self.fixture_durable_adapter is not None:
             self.subprocess_adapters[self.fixture_durable_adapter.name] = self.fixture_durable_adapter
-        self.profiles = profiles or DEFAULT_PROFILES
+        self.runtime_registry = (runtime_registry or DEFAULT_RUNTIME_REGISTRY).copy()
+        seed_profiles = profiles or self.runtime_registry.policies()
+        for name, policy in seed_profiles.items():
+            if self.runtime_registry.contains(name):
+                continue
+            adapter = self.subprocess_adapters.get(name)
+            caps = adapter.capabilities if adapter is not None else self.adapter.capabilities
+            self.runtime_registry.register(RuntimeDescriptor(
+                name=name,
+                execution_strategy=ExecutionStrategy.FIXTURE,
+                policy=policy,
+                adapter_capabilities=caps,
+                limitations=SUBPROCESS_LIMITATIONS,
+                model_selection=ModelSelectionSupport.PERSISTED_NOT_INVOKED,
+                runtime_label=getattr(adapter, "runtime_label", name) if adapter is not None else name,
+            ))
+        if profiles is not None:
+            self.profiles = {**self.runtime_registry.policies(), **profiles}
+        else:
+            self.profiles = self.runtime_registry.policies()
         self.workspaces = WorkspaceManager(self.store.home)
         self._environ = environ
         if direct_api_runtime is not None:
@@ -135,9 +155,9 @@ class Broker:
         if request.timeout_seconds <= 0:
             raise ValueError("Timeout must be positive")
         runtime = effective_runtime(request)
-        policy = self.profiles.get(runtime)
-        if policy is None:
-            raise ValueError(f"Unknown profile: {runtime}")
+        if runtime not in self.profiles:
+            raise ValueError(f"Unknown runtime: {runtime}")
+        policy = self.profiles[runtime]
         if request.execution_mode not in policy.allowed_modes:
             raise ValueError(f"Profile {policy.name} does not permit mode {request.execution_mode}")
         if request.timeout_seconds > policy.max_timeout_seconds:
@@ -1121,7 +1141,7 @@ class Broker:
         return {
             "recovery_contract_schema_version": RECOVERY_CONTRACT_SCHEMA_VERSION,
             "runtimes": discover_runtimes(
-                profiles=self.profiles,
+                registry=self.runtime_registry,
                 subprocess_adapters=self.subprocess_adapters,
                 mock_adapter=self.adapter,
                 direct_api_runtime=self.direct_api_runtime,
@@ -1146,7 +1166,7 @@ class Broker:
 
         environ = self._environ if self._environ is not None else os.environ
         return _select_candidates(
-            profiles=self.profiles,
+            registry=self.runtime_registry,
             subprocess_adapters=self.subprocess_adapters,
             direct_api_runtime=self.direct_api_runtime,
             environ=environ,

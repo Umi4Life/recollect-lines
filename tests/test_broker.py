@@ -61,7 +61,7 @@ class BrokerTests(unittest.TestCase):
             self.broker.complete(record.id, "too early")
 
     def test_profile_policy_rejects_invalid_requests(self):
-        with self.assertRaisesRegex(ValueError, "Unknown profile"):
+        with self.assertRaisesRegex(ValueError, "Unknown runtime"):
             self.create(profile="missing")
         with self.assertRaisesRegex(ValueError, "does not permit"):
             self.create(execution_mode="shared_write")

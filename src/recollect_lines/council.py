@@ -15,7 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from .discovery import select_candidates
-from .direct_api_runtime import DIRECT_API_PROFILE
+from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, ExecutionStrategy
 from .models import TaskRequest, TaskState, TERMINAL_STATES
 
 MAX_MAX_ROUNDS = 20
@@ -94,14 +94,20 @@ def _parse_stage(raw: Any) -> CouncilStage:
         raise CouncilValidationError(f"stage.role must be one of {sorted(VALID_ROLES)}")
     if not isinstance(profile, str) or not profile.strip():
         raise CouncilValidationError("stage.profile must be a non-empty string")
+    profile = profile.strip()
+    if not DEFAULT_RUNTIME_REGISTRY.contains(profile):
+        raise CouncilValidationError(
+            f"stage.profile must be a registered runtime, got {profile!r}"
+        )
+    descriptor = DEFAULT_RUNTIME_REGISTRY.get(profile)
+    if descriptor.requires_named_provider and not provider:
+        raise CouncilValidationError(f"stage.provider is required when profile is {profile!r}")
+    if not descriptor.requires_named_provider and provider is not None:
+        raise CouncilValidationError("stage.provider is only valid with openai_compatible profile")
     if not isinstance(task, str) or not task.strip():
         raise CouncilValidationError("stage.task must be a non-empty string")
     if provider is not None and (not isinstance(provider, str) or not provider.strip()):
         raise CouncilValidationError("stage.provider must be a non-empty string when set")
-    if profile == DIRECT_API_PROFILE and not provider:
-        raise CouncilValidationError(f"stage.provider is required when profile is {DIRECT_API_PROFILE!r}")
-    if profile != DIRECT_API_PROFILE and provider is not None:
-        raise CouncilValidationError("stage.provider is only valid with openai_compatible profile")
     if not isinstance(depends_on, list) or not all(isinstance(item, str) for item in depends_on):
         raise CouncilValidationError("stage.depends_on must be an array of strings")
     if not isinstance(stage_round, int) or isinstance(stage_round, bool) or stage_round <= 0:
@@ -201,7 +207,7 @@ def _topological_waves(stages: list[CouncilStage]) -> list[list[CouncilStage]]:
 
 
 def _stage_cost_upper_bound(broker: object, stage: CouncilStage) -> float | None:
-    if stage.profile != DIRECT_API_PROFILE:
+    if DEFAULT_RUNTIME_REGISTRY.get(stage.profile).execution_strategy is not ExecutionStrategy.DIRECT_API:
         return None
     runtime = broker.direct_api_runtime
     if runtime is None or stage.provider is None:
@@ -331,7 +337,7 @@ def _record_council_rejection(
 
 def _validate_stage_candidates(broker: object, header: dict[str, Any], stage: CouncilStage) -> None:
     select_candidates(
-        profiles=broker.profiles,
+        registry=broker.runtime_registry,
         subprocess_adapters=broker.subprocess_adapters,
         direct_api_runtime=broker.direct_api_runtime,
         environ=broker._environ if broker._environ is not None else __import__("os").environ,
@@ -463,7 +469,7 @@ def execute_council(broker: object, raw: dict[str, Any]) -> dict[str, Any]:
                 try:
                     if stage.profile == "mock":
                         evidence = _run_mock_stage(broker, header, stage, per_task_timeout)
-                    elif stage.profile == DIRECT_API_PROFILE:
+                    elif DEFAULT_RUNTIME_REGISTRY.get(stage.profile).execution_strategy is ExecutionStrategy.DIRECT_API:
                         evidence = _run_direct_api_stage(broker, header, stage, per_task_timeout)
                     elif stage.profile in broker.subprocess_adapters:
                         evidence = _run_subprocess_stage(broker, header, stage, per_task_timeout)

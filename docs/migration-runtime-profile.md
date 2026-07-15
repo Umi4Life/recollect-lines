@@ -66,6 +66,23 @@ Translated legacy requests persist secret-safe metadata:
 
 This appears in `request.json` and in MCP `delegate` / `delegate_batch` summaries when translation occurred. New `runtime=` requests are not marked deprecated.
 
+## Runtime registry (Phase 8.2)
+
+Execution backends are registered centrally in `RuntimeRegistry` as immutable
+`RuntimeDescriptor` records. Each descriptor declares:
+
+| Field | Meaning |
+|-------|---------|
+| `execution_strategy` | `subprocess_cli`, `direct_api`, `synthetic`, or `fixture` |
+| `model_selection` | Honest model behavior: `not_supported`, `persisted_not_invoked`, or `provider_config_default` |
+| `adapter_capabilities` | Reuses `AdapterCapabilities` / recovery contracts from adapters |
+| `policy` | Timeout, concurrency, and allowed execution modes |
+
+CLI, MCP, certification, council validation, and discovery read runtime names
+from the registry instead of separately maintained lists. Test-only fixture
+runtimes can register into a copied registry without editing broker lifecycle
+code or interface constants.
+
 ## Database
 
 Additive migration on the existing `tasks` table:

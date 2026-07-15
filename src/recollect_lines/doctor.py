@@ -21,7 +21,7 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .discovery import discover_providers, discover_runtimes, probe_cli_version
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
-from .models import DEFAULT_PROFILES
+from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
 from .providers import MissingCredentialReference, ProviderConfigError, load_providers_config, resolve_api_key
 from .recovery_contract import ControlAction, RecoveryLevel
@@ -312,7 +312,7 @@ def _check_providers_config(
 
 def _check_inventory_consistency(broker: Broker, environ: dict[str, str]) -> list[Finding]:
     runtimes = discover_runtimes(
-        profiles=broker.profiles,
+        registry=broker.runtime_registry,
         subprocess_adapters=broker.subprocess_adapters,
         mock_adapter=broker.adapter,
         direct_api_runtime=broker.direct_api_runtime,
@@ -336,14 +336,14 @@ def _check_inventory_consistency(broker: Broker, environ: dict[str, str]) -> lis
         ),
     ]
     profile_names = {entry["name"] for entry in runtimes}
-    for expected in sorted(DEFAULT_PROFILES):
+    for expected in DEFAULT_RUNTIME_REGISTRY.names():
         if expected not in profile_names:
             findings.append(_finding(
                 "INVENTORY_PROFILE_MISSING",
                 severity="error",
                 status="error",
-                message=f"Expected profile {expected!r} missing from capability inventory",
-                remediation="Report as a packaging bug; DEFAULT_PROFILES and discovery are out of sync.",
+                message=f"Expected runtime {expected!r} missing from capability inventory",
+                remediation="Report as a packaging bug; runtime registry and discovery are out of sync.",
                 details={"profile": expected},
             ))
     for entry in runtimes:
