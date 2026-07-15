@@ -288,6 +288,11 @@ class Broker:
             result_schema=resolved.result_schema,
             compatibility=request.compatibility,
             explicit_fields=request.explicit_fields,
+            parent_task_id=request.parent_task_id,
+            external_root_id=request.external_root_id,
+            relationship=request.relationship,
+            origin_kind=request.origin_kind,
+            origin_ref=request.origin_ref,
         )
         return effective, resolved
 

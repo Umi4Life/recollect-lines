@@ -76,6 +76,16 @@ recollect-lines --home "$RECOLLECT_HOME" list
 
 For **real subprocess runtimes** (Codex, Claude Code, OpenCode, Cursor), use a **long-lived** `recollect-mcp` session or the [Codex demo script](../scripts/run_codex_demo.py) — see [user-flows.md](user-flows.md#cli-limitation-subprocess-collection).
 
+### Integrated side-agent fixture (offline)
+
+Proves heterogeneous concurrent children, completion-event polling, normalized results, task trees, steering refusal with `continues` follow-up, and writer isolation — without provider credentials:
+
+```bash
+PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
+```
+
+Evidence: [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json). Live multi-runtime dogfood is a separate opt-in runbook: [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md).
+
 ## MCP quick start
 
 Add to your MCP host (shape is generic; adjust paths):
@@ -103,5 +113,6 @@ recollect-lines --home ~/.recollect doctor --json
 ## Next steps
 
 - [user-flows.md](user-flows.md) — roles, boundaries, runtime matrix
+- [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json) — offline integrated side-agent proof
 - [demos/codex-marker-evidence.json](demos/codex-marker-evidence.json) — recorded live Codex-through-broker run
 - [design/PRD.md](design/PRD.md) — full product contract

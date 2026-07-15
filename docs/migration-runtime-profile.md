@@ -138,3 +138,13 @@ On collect/complete the broker writes:
 - raw runtime output remains in the adapter events artifact or `runtime_raw_output.txt` (mock path); parser references rather than duplicating it
 
 Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.
+
+## Integrated fixture proof (MR 8.8)
+
+Offline acceptance tying lineage, heterogeneous runtimes/profiles/schemas, completion-event cursor polling, normalized collection, task trees, steering refusal with `continues` follow-up, and writer isolation:
+
+```bash
+PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
+```
+
+Recorded evidence: [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json). Live two-runtime dogfood is documented separately and is opt-in only: [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md).

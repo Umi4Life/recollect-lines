@@ -100,7 +100,23 @@ class TaskLineageTests(unittest.TestCase):
             self.assertIn("task_id", node)
             self.assertNotIn("task", node)
 
-    def test_continues_relationship_is_new_task_not_resume(self):
+    def test_agent_profile_resolution_preserves_lineage_fields(self):
+        parent = self.create("parent")
+        child = self.create(
+            "child with profile",
+            parent_task_id=parent.id,
+            external_root_id="host-session-1",
+            relationship="delegates",
+            origin_kind="side_agent",
+            agent_profile="repository-investigator",
+            runtime="mock",
+        )
+        self.assertEqual(child.parent_task_id, parent.id)
+        self.assertEqual(child.root_task_id, parent.id)
+        self.assertEqual(child.external_root_id, "host-session-1")
+        self.assertEqual(child.relationship, "delegates")
+        self.assertEqual(child.agent_profile, "repository-investigator")
+
         parent = self.create("parent")
         follow_up = self.create("follow up", parent_task_id=parent.id, relationship="continues")
         self.assertEqual(follow_up.relationship, "continues")

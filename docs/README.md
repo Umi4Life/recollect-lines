@@ -10,7 +10,7 @@ Recollect Lines is a **local-first delegation broker**: a parent agent (or human
 | [user-flows.md](user-flows.md) | Operator CLI, parent-agent MCP, and runtime-backend roles |
 | [cli.md](cli.md) | `recollect-lines` commands and honest CLI limitations |
 | [mcp.md](mcp.md) | `recollect-mcp` tools, schemas, host configuration |
-| [demos/](demos/) | Recorded end-to-end proofs (including live Codex) |
+| [demos/](demos/) | Recorded end-to-end proofs (fixture side-agent tree, live Codex, opt-in live dogfood runbook) |
 
 ## Design reference
 

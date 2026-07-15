@@ -130,14 +130,41 @@ Recollect Lines does **not** embed Codex, Cursor, or Claude. Each **profile** se
 - Optional per-task verification gate (`none` / `advisory` / `required`)
 - Post-restart **reconciliation** (truthful `failed` / `recovery_required`, not fabricated success)
 - Capability discovery and parent-directed routing (`discover`, `select`, `council`)
+- Bounded task trees with `external_root_id`, `parent_task_id`, `relationship`, and `task_tree`
+- Per-child `runtime`, `agent_profile`, `model`, and `result_schema` (independent dimensions)
+- Durable `completion_events` cursor polling and provenance-aware `normalized_result` on `collect`
+- Fixture proof of heterogeneous concurrent children: [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json)
 
 ### What does not work / is not claimed
 
 - **Session resume** — no re-attachment to a running runtime after broker restart with full result recovery
-- **In-flight steering** — `message` / `control --action message` always refuse
+- **In-flight steering** — `message` / `control --action message` always refuse; use `relationship=continues` for explicit follow-up tasks
+- **Live multi-runtime dogfood in CI** — see [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md) (opt-in operator runbook, not performed here)
 - **Continuous upstream CLI certification** — adapters are spike-tested, not pinned to every upstream release
 - **PyPI install** — source install only until published
 
-## Recorded demo
+## Recorded demos
 
-Live Codex marker identification through MCP: [demos/README.md](demos/README.md).
+- Integrated side-agent fixture proof (offline, CI): [demos/README.md](demos/README.md#integrated-side-agent-fixture-proof-offline-ci)
+- Live Codex marker identification through MCP: [demos/README.md](demos/README.md#codex-marker-identification-live)
+- Opt-in live two-runtime dogfood runbook (not performed in repo): [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md)
+
+## Parent-directed side-agent tree (host flow)
+
+A parent host (human or agent) can delegate multiple bounded children under one operation:
+
+1. **Group host work** with `external_root_id` — audit-only; does not invent a broker parent.
+2. **Delegate children** with explicit `runtime`, optional `model`, optional `agent_profile`, optional `result_schema`, and `parent_task_id` when the child belongs to a host-directed tree.
+3. **Continue host-side work** while children run (separate tasks sharing the same `external_root_id`).
+4. **Poll** `completion_events` / `completion-events` by monotonic cursor for compact terminal signals.
+5. **Collect** concise `normalized_result` views; inspect raw runtime artifacts separately under the task artifact directory.
+6. **Inspect** `task_tree` / `task-tree` for a bounded descendant list.
+7. When mid-task steering is required, expect an explicit refusal — create a new child with `relationship=continues` instead of session resume.
+
+Offline proof (fixture adapters only, no provider credentials):
+
+```bash
+PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
+```
+
+Live two-runtime proof is documented separately and requires operator opt-in: [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md).
