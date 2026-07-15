@@ -35,6 +35,7 @@ from .models import (
     validate_verify_commands,
     verification_gate_label,
 )
+from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
@@ -264,10 +265,13 @@ def handle_collect(broker: Broker, args: dict) -> dict:
     broker.store.get(task_id)  # raises KeyError for an unknown task, same as every other tool
     record = broker.collect(task_id)
     gate = _read_json_artifact(broker, task_id, "verification_gate.json")
+    normalized = _read_json_artifact(broker, task_id, NORMALIZED_RESULT_ARTIFACT)
     return {
         "task_id": record.id,
         "state": record.state.value,
         "runtime_result": _read_json_artifact(broker, task_id, "result.json"),
+        "normalized_result": normalized,
+        "normalized_summary": concise_normalized_view(normalized),
         "broker_verification": _read_json_artifact(broker, task_id, "verification.json"),
         "verification_gate": {**gate, "label": verification_gate_label(gate)} if gate else None,
     }
@@ -447,7 +451,11 @@ DELEGATE_INPUT_SCHEMA = {
         },
         "result_schema": {
             "type": "string",
-            "description": "Optional requested result-contract identifier (persisted; normalization is future work).",
+            "enum": ["plain-summary", "evidence-report", "review-findings", "implementation-report"],
+            "description": (
+                "Requested normalized result schema. Unknown values are rejected at delegate time; "
+                "profile defaults apply when omitted unless an explicit task value wins."
+            ),
         },
         "provider": {
             "type": "string",
@@ -619,10 +627,10 @@ TOOLS = {
     },
     "collect": {
         "description": (
-            "Collect a completed task's runtime-reported result, plus broker-verified command evidence for "
-            "any verify_commands supplied at delegate time. verification_gate.label distinguishes whether the "
-            "returned state is runtime_reported (evidence-only), advisory_verified/advisory_verification_failed, "
-            "required_verified, or blocked_failed_verification — see verification_policy on delegate."
+            "Collect a completed task's runtime-reported result plus a provenance-aware normalized envelope "
+            "(runtime_reported vs broker_observed vs parser). Returns artifact references, not full raw logs. "
+            "Broker-verified command evidence appears in broker_verification when verify_commands were declared. "
+            "verification_gate.label distinguishes runtime_reported vs advisory/required verification outcomes."
         ),
         "inputSchema": COLLECT_INPUT_SCHEMA,
         "handler": handle_collect,

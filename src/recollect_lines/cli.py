@@ -67,7 +67,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--profile", default=None, help="Deprecated alias for --runtime.")
     create.add_argument("--model", default=None, help="Optional per-task model override (capability-gated by runtime).")
     create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral agent profile name.")
-    create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier.")
+    create.add_argument("--result-schema", dest="result_schema", default=None, help="Normalized result schema (plain-summary, evidence-report, review-findings, implementation-report).")
     create.add_argument(
         "--provider", default=None,
         help="Named provider from --providers-config (required when --runtime openai_compatible).",

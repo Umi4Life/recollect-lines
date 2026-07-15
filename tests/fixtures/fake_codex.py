@@ -86,6 +86,12 @@ def main():
         emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}})
         return 0
 
+    if prompt.startswith("SCHEMA_"):
+        payload = prompt.split(" ", 1)[1] if " " in prompt else prompt
+        agent_message(payload)
+        emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}})
+        return 0
+
     agent_message(f"42 (from {prompt})")
     emit({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}})
     return 0

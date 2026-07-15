@@ -43,7 +43,7 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         profile = AgentProfileConfig(
             name="architecture-reviewer",
             prompt_prefix="review",
-            default_result_schema="architecture-review",
+            default_result_schema="review-findings",
             default_execution_mode="isolated_worktree",
             default_timeout_seconds=2400,
         )
@@ -58,7 +58,7 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         )
         self.assertEqual(resolved.execution_mode, "isolated_worktree")
         self.assertEqual(resolved.timeout_seconds, 2400)
-        self.assertEqual(resolved.result_schema, "architecture-review")
+        self.assertEqual(resolved.result_schema, "review-findings")
         self.assertEqual(resolved.sources["execution_mode"], "profile_default")
 
     def test_explicit_task_values_override_profile_defaults(self):
@@ -67,20 +67,20 @@ class ResolutionPrecedenceTests(unittest.TestCase):
             prompt_prefix="review",
             default_execution_mode="isolated_worktree",
             default_timeout_seconds=2400,
-            default_result_schema="architecture-review",
+            default_result_schema="review-findings",
         )
         resolved = resolve_agent_profile(
             profile=profile,
             explicit_fields=frozenset({"execution_mode", "timeout_seconds", "result_schema"}),
             execution_mode="read_only",
             timeout_seconds=900,
-            result_schema="custom-schema",
+            result_schema="review-findings",
             allowed_modes=frozenset({"read_only", "isolated_worktree"}),
             max_timeout_seconds=3600,
         )
         self.assertEqual(resolved.execution_mode, "read_only")
         self.assertEqual(resolved.timeout_seconds, 900)
-        self.assertEqual(resolved.result_schema, "custom-schema")
+        self.assertEqual(resolved.result_schema, "review-findings")
         self.assertEqual(resolved.sources["timeout_seconds"], "task_request")
 
     def test_broker_ceiling_rejects_excessive_timeout(self):
