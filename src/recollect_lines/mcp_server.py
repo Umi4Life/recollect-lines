@@ -29,13 +29,13 @@ from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .models import (
-    KNOWN_RUNTIME_IDENTIFIERS,
     VERIFICATION_POLICIES,
     TaskRequest,
     translate_delegate_fields,
     validate_verify_commands,
     verification_gate_label,
 )
+from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
 from .service import Broker
@@ -53,7 +53,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 EXECUTION_MODES = ("read_only", "isolated_worktree")
-RUNTIMES = tuple(sorted(KNOWN_RUNTIME_IDENTIFIERS))
+RUNTIMES = DEFAULT_RUNTIME_REGISTRY.names()
 PROFILES = RUNTIMES  # deprecated alias for schema/documentation continuity
 
 

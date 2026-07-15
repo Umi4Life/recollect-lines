@@ -14,31 +14,20 @@ from urllib.parse import urlparse
 
 from .adapters import AdapterCapabilities
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
-from .models import DEFAULT_PROFILES, ProfilePolicy
 from .providers import MissingCredentialReference, ProviderCapabilities, resolve_api_key
 from .recovery_contract import (
     DIRECT_API_RECOVERY_CONTROL,
-    SYNTHETIC_RECOVERY_CONTROL,
     build_compatibility_evidence,
     probe_version_help_only,
     recovery_control_discovery_payload,
 )
-
-MOCK_PROFILE = "mock"
-SUBPROCESS_LIMITATIONS = (
-    "no_durable_session_reattachment_after_broker_restart",
-    "no_live_mid_task_steering",
-    "broker_observed_cancellation_not_runtime_self_report",
-)
-DIRECT_API_LIMITATIONS = (
-    "read_only_execution_only",
-    "no_subprocess_supervision",
-    "no_isolated_worktree",
-    "no_process_group_cancellation",
-    "cooperative_http_abort_only",
-    "no_live_mid_task_steering",
-    "no_durable_session_reattachment_after_broker_restart",
-    "no_agent_tool_loop",
+from .runtime_registry import (
+    DEFAULT_RUNTIME_REGISTRY,
+    DIRECT_API_LIMITATIONS,
+    ExecutionStrategy,
+    RuntimeDescriptor,
+    RuntimeRegistry,
+    SUBPROCESS_LIMITATIONS,
 )
 
 
@@ -67,33 +56,24 @@ def _endpoint_summary(base_url: str) -> dict[str, str]:
     return {"scheme": parsed.scheme or "unknown", "host_class": host_class}
 
 
-def _subprocess_declared_capabilities(policy: ProfilePolicy, adapter_caps: AdapterCapabilities) -> dict[str, bool]:
+def _declared_capabilities(descriptor: RuntimeDescriptor) -> dict[str, bool | str]:
+    policy = descriptor.policy
     modes = policy.allowed_modes
-    return {
-        "subprocess_supervision": adapter_caps.requires_subprocess,
-        "process_group_cancellation": adapter_caps.supports_process_group_cancellation,
+    caps = descriptor.adapter_capabilities
+    payload: dict[str, bool | str] = {
+        "subprocess_supervision": caps.requires_subprocess,
+        "process_group_cancellation": caps.supports_process_group_cancellation,
         "read_only_execution": "read_only" in modes,
         "isolated_worktree": "isolated_worktree" in modes,
         "workspace_mutation": "isolated_worktree" in modes,
         "live_steering": False,
         "session_reattachment": False,
-        "broker_verified_tests": adapter_caps.reports_broker_verified_tests,
+        "broker_verified_tests": caps.reports_broker_verified_tests,
+        "model_selection": descriptor.model_selection.value,
     }
-
-
-def _mock_declared_capabilities(policy: ProfilePolicy) -> dict[str, bool]:
-    modes = policy.allowed_modes
-    return {
-        "subprocess_supervision": False,
-        "process_group_cancellation": False,
-        "read_only_execution": "read_only" in modes,
-        "isolated_worktree": "isolated_worktree" in modes,
-        "workspace_mutation": "isolated_worktree" in modes,
-        "live_steering": False,
-        "session_reattachment": False,
-        "broker_verified_tests": False,
-        "synthetic_runtime": True,
-    }
+    if descriptor.execution_strategy is ExecutionStrategy.SYNTHETIC:
+        payload["synthetic_runtime"] = True
+    return payload
 
 
 def _provider_declared_capabilities(caps: ProviderCapabilities) -> dict[str, bool]:
@@ -161,86 +141,103 @@ def _observed_provider_availability(runtime: OpenAiCompatibleDirectRuntime | Non
     return {"available": True}
 
 
-def discover_runtimes(
+def _descriptor_entry(
+    descriptor: RuntimeDescriptor,
     *,
-    profiles: dict[str, ProfilePolicy],
     subprocess_adapters: dict[str, object],
-    mock_adapter: object,
     direct_api_runtime: OpenAiCompatibleDirectRuntime | None,
-    include_compatibility_evidence: bool = True,
-) -> list[dict[str, Any]]:
-    """Machine-readable inventory of registered runtime profiles."""
-    entries: list[dict[str, Any]] = []
-    for profile_name in sorted(profiles):
-        policy = profiles[profile_name]
-        if profile_name == MOCK_PROFILE:
-            entries.append({
-                "name": profile_name,
-                "kind": "synthetic",
-                "execution_modes": sorted(policy.allowed_modes),
-                "declared_capabilities": _mock_declared_capabilities(policy),
-                "observed_availability": {"available": True, "reason": "synthetic_fixture"},
-                "recovery_control": recovery_control_discovery_payload(SYNTHETIC_RECOVERY_CONTROL),
-                "policy": {
-                    "max_timeout_seconds": policy.max_timeout_seconds,
-                    "max_concurrency": policy.max_concurrency,
-                },
-                "limitations": list(SUBPROCESS_LIMITATIONS),
-            })
-            continue
-        if profile_name == DIRECT_API_PROFILE:
-            caps = direct_api_runtime.capabilities if direct_api_runtime else AdapterCapabilities(
-                False, False, False, DIRECT_API_RECOVERY_CONTROL,
-            )
-            contract = caps.recovery_control
-            entries.append({
-                "name": profile_name,
-                "kind": "direct_api",
-                "execution_modes": sorted(policy.allowed_modes),
-                "declared_capabilities": _subprocess_declared_capabilities(policy, caps),
-                "observed_availability": {
+    include_compatibility_evidence: bool,
+) -> dict[str, Any] | None:
+    policy = descriptor.policy
+    if descriptor.execution_strategy is ExecutionStrategy.SYNTHETIC:
+        return {
+            "name": descriptor.name,
+            "kind": descriptor.discovery_kind,
+            "execution_strategy": descriptor.execution_strategy.value,
+            "execution_modes": sorted(policy.allowed_modes),
+            "declared_capabilities": _declared_capabilities(descriptor),
+            "observed_availability": {"available": True, "reason": "synthetic_fixture"},
+            "recovery_control": recovery_control_discovery_payload(descriptor.adapter_capabilities.recovery_control),
+            "policy": {
+                "max_timeout_seconds": policy.max_timeout_seconds,
+                "max_concurrency": policy.max_concurrency,
+            },
+            "limitations": list(descriptor.limitations),
+        }
+    if descriptor.execution_strategy is ExecutionStrategy.DIRECT_API:
+        return {
+            "name": descriptor.name,
+            "kind": descriptor.discovery_kind,
+            "execution_strategy": descriptor.execution_strategy.value,
+            "execution_modes": sorted(policy.allowed_modes),
+            "declared_capabilities": _declared_capabilities(descriptor),
+            "observed_availability": {
+                "available": direct_api_runtime is not None,
+                "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
+            },
+            "recovery_control": recovery_control_discovery_payload(
+                descriptor.adapter_capabilities.recovery_control,
+                observed_local={
                     "available": direct_api_runtime is not None,
                     "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
                 },
-                "recovery_control": recovery_control_discovery_payload(
-                    contract,
-                    observed_local={
-                        "available": direct_api_runtime is not None,
-                        "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
-                    },
-                ),
-                "policy": {
-                    "max_timeout_seconds": policy.max_timeout_seconds,
-                    "max_concurrency": policy.max_concurrency,
-                },
-                "limitations": list(DIRECT_API_LIMITATIONS),
-                "requires_named_provider": True,
-            })
-            continue
-        adapter = subprocess_adapters.get(profile_name)
-        if adapter is None:
-            continue
-        entries.append({
-            "name": profile_name,
-            "kind": "subprocess_cli",
-            "adapter_name": getattr(adapter, "name", profile_name),
-            "runtime_label": getattr(adapter, "runtime_label", profile_name),
-            "execution_modes": sorted(policy.allowed_modes),
-            "declared_capabilities": _subprocess_declared_capabilities(policy, adapter.capabilities),
-            "observed_availability": _observed_adapter_availability(adapter),
-            "recovery_control": _recovery_control_for_runtime(
-                contract=adapter.capabilities.recovery_control,
-                adapter=adapter,
-                profile_name=profile_name,
-                runtime_kind="subprocess_cli",
-                include_compatibility_evidence=include_compatibility_evidence,
             ),
             "policy": {
                 "max_timeout_seconds": policy.max_timeout_seconds,
                 "max_concurrency": policy.max_concurrency,
             },
-            "limitations": list(SUBPROCESS_LIMITATIONS),
-        })
+            "limitations": list(descriptor.limitations),
+            "requires_named_provider": descriptor.requires_named_provider,
+        }
+    adapter = subprocess_adapters.get(descriptor.name)
+    if adapter is None:
+        return None
+    return {
+        "name": descriptor.name,
+        "kind": descriptor.discovery_kind,
+        "execution_strategy": descriptor.execution_strategy.value,
+        "adapter_name": getattr(adapter, "name", descriptor.name),
+        "runtime_label": descriptor.runtime_label or getattr(adapter, "runtime_label", descriptor.name),
+        "execution_modes": sorted(policy.allowed_modes),
+        "declared_capabilities": _declared_capabilities(descriptor),
+        "observed_availability": _observed_adapter_availability(adapter),
+        "recovery_control": _recovery_control_for_runtime(
+            contract=descriptor.adapter_capabilities.recovery_control,
+            adapter=adapter,
+            profile_name=descriptor.name,
+            runtime_kind=descriptor.discovery_kind,
+            include_compatibility_evidence=include_compatibility_evidence,
+        ),
+        "policy": {
+            "max_timeout_seconds": policy.max_timeout_seconds,
+            "max_concurrency": policy.max_concurrency,
+        },
+        "limitations": list(descriptor.limitations),
+    }
+
+
+def discover_runtimes(
+    *,
+    registry: RuntimeRegistry | None = None,
+    subprocess_adapters: dict[str, object],
+    mock_adapter: object | None = None,
+    direct_api_runtime: OpenAiCompatibleDirectRuntime | None,
+    include_compatibility_evidence: bool = True,
+    profiles: dict[str, ProfilePolicy] | None = None,
+) -> list[dict[str, Any]]:
+    """Machine-readable inventory of registered runtime profiles."""
+    del mock_adapter, profiles  # retained for call-site compatibility
+    runtime_registry = registry or DEFAULT_RUNTIME_REGISTRY
+    entries: list[dict[str, Any]] = []
+    for descriptor in runtime_registry.descriptors():
+        entry = _descriptor_entry(
+            descriptor,
+            subprocess_adapters=subprocess_adapters,
+            direct_api_runtime=direct_api_runtime,
+            include_compatibility_evidence=include_compatibility_evidence,
+        )
+        if entry is not None:
+            entries.append(entry)
     return entries
 
 
@@ -270,7 +267,7 @@ def discover_providers(
     return entries
 
 
-def _capability_match(declared: dict[str, bool], required: dict[str, bool]) -> list[str]:
+def _capability_match(declared: dict[str, bool | str], required: dict[str, bool]) -> list[str]:
     reasons: list[str] = []
     for key, needed in sorted(required.items()):
         if not isinstance(needed, bool):
@@ -287,7 +284,7 @@ def _capability_match(declared: dict[str, bool], required: dict[str, bool]) -> l
 
 def select_candidates(
     *,
-    profiles: dict[str, ProfilePolicy],
+    registry: RuntimeRegistry | None = None,
     subprocess_adapters: dict[str, object],
     direct_api_runtime: OpenAiCompatibleDirectRuntime | None,
     environ: dict[str, str],
@@ -297,14 +294,15 @@ def select_candidates(
     allowed_runtimes: list[str] | None = None,
     allowed_providers: list[str] | None = None,
     require_available: bool = True,
+    profiles: dict[str, ProfilePolicy] | None = None,
 ) -> dict[str, Any]:
     """Deterministic capability filtering with auditable exclusion evidence."""
+    del profiles  # retained for call-site compatibility
     if not execution_mode:
         raise ValueError("execution_mode must be a non-empty string")
     runtime_inventory = {entry["name"]: entry for entry in discover_runtimes(
-        profiles=profiles,
+        registry=registry,
         subprocess_adapters=subprocess_adapters,
-        mock_adapter=None,
         direct_api_runtime=direct_api_runtime,
     )}
     provider_inventory = {entry["name"]: entry for entry in discover_providers(

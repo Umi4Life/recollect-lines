@@ -24,7 +24,8 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .discovery import probe_cli_version
-from .models import DEFAULT_PROFILES, TaskRecord, TaskRequest
+from .models import TaskRecord, TaskRequest
+from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, ExecutionStrategy
 from .opencode_adapter import OpenCodeAdapter
 from .providers import (
     MissingCredentialReference,
@@ -44,9 +45,16 @@ DRY_RUN_EVIDENCE_CLASS = "local_dry_run"
 ExecutionOutcome = Literal["dry_run", "blocked", "executed"]
 TargetKind = Literal["cli_adapter", "direct_api", "synthetic"]
 
-CLI_PROFILES = frozenset({"opencode", "claude_code", "codex", "cursor"})
-SUBPROCESS_PROFILES = CLI_PROFILES
-DIRECT_API_PROFILES = frozenset({DIRECT_API_PROFILE})
+
+def _target_kind(profile: str, *, registry=DEFAULT_RUNTIME_REGISTRY) -> TargetKind:
+    if not registry.contains(profile):
+        return "synthetic"
+    strategy = registry.get(profile).execution_strategy
+    if strategy is ExecutionStrategy.SYNTHETIC:
+        return "synthetic"
+    if strategy is ExecutionStrategy.DIRECT_API:
+        return "direct_api"
+    return "cli_adapter"
 
 
 @dataclass(frozen=True)
@@ -95,27 +103,7 @@ def _check(
     return payload
 
 
-def _target_kind(profile: str) -> TargetKind:
-    if profile == "mock":
-        return "synthetic"
-    if profile in DIRECT_API_PROFILES:
-        return "direct_api"
-    if profile in CLI_PROFILES:
-        return "cli_adapter"
-    return "synthetic"
-
-
-def _adapter_for_profile(request: CertifyRequest) -> Any | None:
-    mapping = {
-        "opencode": request.opencode_adapter or OpenCodeAdapter(),
-        "claude_code": request.claude_code_adapter or ClaudeCodeAdapter(),
-        "codex": request.codex_adapter or CodexAdapter(),
-        "cursor": request.cursor_adapter or CursorAdapter(),
-    }
-    return mapping.get(request.profile)
-
-
-def _declared_capabilities(profile: str, provider_config: ProviderConfig | None) -> dict[str, Any]:
+def _declared_capabilities(profile: str, provider_config: ProviderConfig | None, *, registry=DEFAULT_RUNTIME_REGISTRY) -> dict[str, Any]:
     if provider_config is not None:
         caps = provider_config.capabilities
         return {
@@ -126,15 +114,28 @@ def _declared_capabilities(profile: str, provider_config: ProviderConfig | None)
             "workspace_access": caps.workspace_access,
             "process_cancellation": caps.process_cancellation,
         }
-    policy = DEFAULT_PROFILES.get(profile)
-    if policy is None:
+    if not registry.contains(profile):
         return {}
+    descriptor = registry.get(profile)
+    policy = descriptor.policy
     modes = policy.allowed_modes
+    caps = descriptor.adapter_capabilities
     return {
         "read_only_execution": "read_only" in modes,
         "isolated_worktree": "isolated_worktree" in modes,
-        "subprocess_supervision": profile in SUBPROCESS_PROFILES,
+        "subprocess_supervision": caps.requires_subprocess,
+        "model_selection": descriptor.model_selection.value,
     }
+
+
+def _adapter_for_profile(request: CertifyRequest) -> Any | None:
+    mapping = {
+        "opencode": request.opencode_adapter or OpenCodeAdapter(),
+        "claude_code": request.claude_code_adapter or ClaudeCodeAdapter(),
+        "codex": request.codex_adapter or CodexAdapter(),
+        "cursor": request.cursor_adapter or CursorAdapter(),
+    }
+    return mapping.get(request.profile)
 
 
 def _safe_provider_identity(config: ProviderConfig) -> dict[str, Any]:
@@ -199,15 +200,16 @@ def _validate_selection(request: CertifyRequest, checks: list[dict[str, Any]]) -
             remediation="Pass --profile <name> and --provider <name> when profile is openai_compatible.",
         ))
         return "blocked"
-    if request.profile not in DEFAULT_PROFILES:
+    if not DEFAULT_RUNTIME_REGISTRY.contains(request.profile):
         checks.append(_check(
             "PROFILE_UNKNOWN",
             status="error",
             message=f"Unknown profile {request.profile!r}",
-            remediation=f"Choose one of: {', '.join(sorted(DEFAULT_PROFILES))}.",
+            remediation=f"Choose one of: {', '.join(DEFAULT_RUNTIME_REGISTRY.names())}.",
         ))
         return "blocked"
-    if request.profile in DIRECT_API_PROFILES:
+    profile_descriptor = DEFAULT_RUNTIME_REGISTRY.get(request.profile)
+    if profile_descriptor.execution_strategy is ExecutionStrategy.DIRECT_API:
         if not request.provider:
             checks.append(_check(
                 "PROVIDER_NOT_SELECTED",
@@ -239,7 +241,7 @@ def _load_provider(
     checks: list[dict[str, Any]],
     env: dict[str, str],
 ) -> tuple[ProviderConfig | None, OpenAiCompatibleDirectRuntime | None, ExecutionOutcome | None]:
-    if request.profile not in DIRECT_API_PROFILES:
+    if DEFAULT_RUNTIME_REGISTRY.get(request.profile).execution_strategy is not ExecutionStrategy.DIRECT_API:
         return None, request.fixture_runtime, None
     assert request.providers_config is not None
     assert request.provider is not None
@@ -336,7 +338,7 @@ def _validate_live_gates(
             remediation="Pass --max-cost-usd <positive_number> within your approved spend limit.",
         ))
         return "blocked"
-    if request.profile in CLI_PROFILES:
+    if DEFAULT_RUNTIME_REGISTRY.get(request.profile).execution_strategy is ExecutionStrategy.SUBPROCESS_CLI:
         checks.append(_check(
             "LIVE_CLI_NOT_SUPPORTED",
             status="error",
@@ -388,20 +390,21 @@ def _dry_run_checks(
     provider_config: ProviderConfig | None,
     checks: list[dict[str, Any]],
 ) -> None:
+    profile_descriptor = DEFAULT_RUNTIME_REGISTRY.get(request.profile)
     checks.append(_check(
         "DECLARED_CAPABILITIES",
         status="ok",
         message="Declared capabilities recorded (not remote availability)",
         details={"capabilities": _declared_capabilities(request.profile, provider_config)},
     ))
-    if request.profile in CLI_PROFILES:
+    if profile_descriptor.execution_strategy is ExecutionStrategy.SUBPROCESS_CLI:
         checks.append(_check(
             "CLI_INVOCATION_SKIPPED",
             status="ok",
             message="Dry-run did not invoke model CLI binaries",
             details={"profile": request.profile},
         ))
-    if request.profile in DIRECT_API_PROFILES:
+    if profile_descriptor.execution_strategy is ExecutionStrategy.DIRECT_API:
         checks.append(_check(
             "REMOTE_REQUEST_SKIPPED",
             status="ok",
@@ -594,10 +597,11 @@ def run_certify(request: CertifyRequest) -> tuple[dict[str, Any], int]:
             evidence_class = DRY_RUN_EVIDENCE_CLASS
         elif mode_requested == "fixture_execute":
             evidence_class = FIXTURE_EVIDENCE_CLASS
-            if request.profile in DIRECT_API_PROFILES:
+            strategy = DEFAULT_RUNTIME_REGISTRY.get(request.profile).execution_strategy
+            if strategy is ExecutionStrategy.DIRECT_API:
                 assert runtime is not None and provider_config is not None
                 outcome, checks = _execute_fixture_direct_api(runtime, provider_config, env, checks)
-            elif request.profile in CLI_PROFILES:
+            elif strategy is ExecutionStrategy.SUBPROCESS_CLI:
                 outcome, checks = _execute_fixture_cli(request, checks)
             else:
                 checks.append(_check(

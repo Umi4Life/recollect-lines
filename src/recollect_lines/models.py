@@ -80,6 +80,7 @@ DEFAULT_PROFILES = {
 }
 
 # Execution-backend identifiers accepted from legacy `profile=` at API boundaries.
+# Kept aligned with DEFAULT_RUNTIME_REGISTRY (see runtime_registry.py).
 KNOWN_RUNTIME_IDENTIFIERS = frozenset(DEFAULT_PROFILES)
 
 # Verification-gate policy (Phase 5C): distinguishes evidence-only from
@@ -131,12 +132,17 @@ def translate_delegate_fields(
     model: str | None = None,
     agent_profile: str | None = None,
     result_schema: str | None = None,
+    runtime_registry: object | None = None,
 ) -> tuple[str, str | None, str | None, str | None, dict[str, Any] | None]:
     """Centralized runtime/profile translation for CLI and MCP delegate inputs.
 
     Returns the effective execution-backend identifier, optional persisted side-agent
     fields, and optional compatibility metadata when legacy `profile` was translated.
     """
+    from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
+
+    registry = runtime_registry or DEFAULT_RUNTIME_REGISTRY
+    known_runtimes = registry.known_runtimes()
     model = _optional_non_empty_string(model, "model")
     agent_profile = _optional_non_empty_string(agent_profile, "agent_profile")
     result_schema = _optional_non_empty_string(result_schema, "result_schema")
@@ -145,9 +151,9 @@ def translate_delegate_fields(
     if has_runtime:
         runtime = _optional_non_empty_string(runtime, "runtime")
         assert runtime is not None
-        if runtime not in KNOWN_RUNTIME_IDENTIFIERS:
+        if runtime not in known_runtimes:
             raise ValueError(
-                f"runtime must be one of {sorted(KNOWN_RUNTIME_IDENTIFIERS)}, got {runtime!r}"
+                f"runtime must be one of {sorted(known_runtimes)}, got {runtime!r}"
             )
     if has_profile:
         profile = _optional_non_empty_string(profile, "profile")
@@ -162,10 +168,10 @@ def translate_delegate_fields(
         return runtime, model, agent_profile, result_schema, None
     if has_profile:
         assert profile is not None
-        if profile not in KNOWN_RUNTIME_IDENTIFIERS:
+        if profile not in known_runtimes:
             raise ValueError(
                 f"Unknown profile {profile!r}: legacy profile is only accepted for known "
-                f"runtime identifiers ({sorted(KNOWN_RUNTIME_IDENTIFIERS)}). "
+                f"runtime identifiers ({sorted(known_runtimes)}). "
                 f"For behavioral roles use agent_profile={profile!r} with an explicit runtime=..."
             )
         return profile, model, agent_profile, result_schema, legacy_profile_compatibility_metadata()
