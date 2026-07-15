@@ -50,11 +50,16 @@ def validate_result_schema(schema: str | None) -> None:
         raise UnknownResultSchemaError(schema)
 
 
-def _artifact_refs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+def _artifact_refs(
+    manifest: dict[str, Any],
+    *,
+    exclude: frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    skip = exclude or frozenset()
     return [
         {"name": item["name"], "sha256": item["sha256"], "bytes": item["bytes"]}
         for item in manifest.get("files", [])
-        if isinstance(item, dict) and "name" in item
+        if isinstance(item, dict) and "name" in item and item["name"] not in skip
     ]
 
 
@@ -258,7 +263,7 @@ def build_normalized_envelope(
             "exit_code": collected.get("exit_code"),
             "process_exit_code": collected.get("process_exit_code"),
             "artifact_manifest_ref": "manifest.json",
-            "artifact_refs": _artifact_refs(manifest),
+            "artifact_refs": _artifact_refs(manifest, exclude=frozenset({NORMALIZED_RESULT_ARTIFACT})),
             "verification": broker_verification,
             "verification_gate": {
                 "policy": gate.get("policy"),

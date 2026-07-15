@@ -542,8 +542,6 @@ class Broker:
         gate: dict[str, Any],
         final_state: TaskState,
     ) -> str | None:
-        from .result_normalization import _artifact_refs
-
         launch = self.store.get_launch(record.id)
         raw_ref = persist_raw_runtime_output_if_needed(
             self.store, record.id, launch=launch, collected=collected,
@@ -561,13 +559,6 @@ class Broker:
             raw_output_artifact=raw_ref,
             final_state=final_state,
         )
-        self.store.write_artifact(
-            record.id,
-            NORMALIZED_RESULT_ARTIFACT,
-            json.dumps(normalized, indent=2, sort_keys=True) + "\n",
-        )
-        manifest = self.store.artifact_manifest(record.id)
-        normalized["broker_observed"]["artifact_refs"] = _artifact_refs(manifest)
         self.store.write_artifact(
             record.id,
             NORMALIZED_RESULT_ARTIFACT,
