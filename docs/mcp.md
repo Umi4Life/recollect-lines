@@ -61,7 +61,7 @@ Optional:
 | `parent_task_id` | — | optional existing broker parent |
 | `external_root_id` | — | audit-only host/conversation grouping |
 | `relationship` | — | `delegates`, `continues` (requires parent; `continues` is a new task, not resume) |
-| `origin_kind` | derived | `host`, `side_agent` (audit only; not authorization) |
+| `origin_kind` | `host` | `host` (external host via CLI/MCP, including parented tasks), `side_agent` (reserved for future explicit recursive callback path; audit only, not authorization) |
 | `origin_ref` | — | audit-only caller reference |
 
 `root_task_id` and `delegation_depth` are broker-derived and rejected if callers supply them.

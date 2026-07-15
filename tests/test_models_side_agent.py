@@ -253,6 +253,16 @@ class CliRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(output["runtime"], "codex")
         self.assertEqual(output["compatibility"], legacy_profile_compatibility_metadata())
 
+    def test_cli_root_create_defaults_origin_kind_host(self):
+        output = self._create_stdout()
+        self.assertEqual(output["origin_kind"], "host")
+
+    def test_cli_parented_create_defaults_origin_kind_host(self):
+        parent = self._create_stdout()
+        child = self._create_stdout("--parent-task-id", parent["id"])
+        self.assertEqual(child["origin_kind"], "host")
+        self.assertEqual(child["parent_task_id"], parent["id"])
+
 
 if __name__ == "__main__":
     unittest.main()
