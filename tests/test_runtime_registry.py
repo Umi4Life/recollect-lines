@@ -99,6 +99,11 @@ class RuntimeRegistryTests(unittest.TestCase):
         descriptor = DEFAULT_RUNTIME_REGISTRY.get("codex")
         self.assertEqual(descriptor.execution_strategy, ExecutionStrategy.SUBPROCESS_CLI)
         self.assertTrue(descriptor.adapter_capabilities.requires_subprocess)
+        self.assertEqual(descriptor.model_selection, ModelSelectionSupport.PER_TASK_REQUEST)
+
+    def test_opencode_model_selection_is_persisted_not_invoked(self):
+        descriptor = DEFAULT_RUNTIME_REGISTRY.get("opencode")
+        self.assertEqual(descriptor.model_selection, ModelSelectionSupport.PERSISTED_NOT_INVOKED)
 
 
 if __name__ == "__main__":

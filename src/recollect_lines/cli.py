@@ -61,7 +61,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read_only")
     create.add_argument("--runtime", default=None, help="Execution backend identifier (preferred over --profile).")
     create.add_argument("--profile", default=None, help="Deprecated alias for --runtime.")
-    create.add_argument("--model", default=None, help="Optional requested model identifier (persisted only).")
+    create.add_argument("--model", default=None, help="Optional per-task model override (capability-gated by runtime).")
     create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral role identifier (persisted only).")
     create.add_argument("--result-schema", dest="result_schema", default=None, help="Optional result-contract identifier (persisted only).")
     create.add_argument(

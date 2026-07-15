@@ -126,7 +126,7 @@ class CodexAdapter:
             return {"available": False, "reason": "version_check_failed", "detail": detail}
         return {"available": True, "version": (completed.stdout or completed.stderr).strip()}
 
-    def build_command(self, prompt: str, execution_mode: str, workspace: str) -> list:
+    def build_command(self, prompt: str, execution_mode: str, workspace: str, *, model: str | None = None) -> list:
         sandbox = SANDBOX_BY_EXECUTION_MODE.get(execution_mode)
         if sandbox is None:
             raise CodexUnsupportedPolicy(
@@ -142,8 +142,9 @@ class CodexAdapter:
             "--ephemeral",
             prompt,
         ]
-        if self.model:
-            command += ["--model", self.model]
+        effective_model = model if model is not None else self.model
+        if effective_model:
+            command += ["--model", effective_model]
         return command
 
     def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None) -> tuple[dict, ProcessHandle]:
@@ -151,7 +152,9 @@ class CodexAdapter:
         events_path = artifacts_dir / "events.jsonl"
         stderr_path = artifacts_dir / "stderr.log"
         effective_workspace = workspace or record.workspace
-        command = self.build_command(record.task, record.execution_mode, effective_workspace)
+        command = self.build_command(
+            record.task, record.execution_mode, effective_workspace, model=record.effective_model,
+        )
         with events_path.open("wb") as events_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=events_file, stderr=stderr_file, start_new_session=True,

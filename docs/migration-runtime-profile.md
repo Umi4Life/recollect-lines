@@ -9,7 +9,8 @@ Recollect Lines previously overloaded `profile` as the execution-backend selecto
 |-------|---------|
 | `runtime` | Execution backend identifier |
 | `agent_profile` | Optional behavioral role identifier (persisted; not yet composed into prompts) |
-| `model` | Optional requested model identifier (persisted; not yet passed to adapters) |
+| `model` | Optional requested model identifier (passed to adapters when the runtime's `model_selection` supports it) |
+| `effective_model` | Model resolved at launch (adapter/provider default or task override); persisted after `start()` |
 | `result_schema` | Optional requested result-contract identifier (persisted; not yet normalized) |
 
 The SQLite `profile` column remains as a compatibility bridge (`profile = runtime`).
@@ -74,7 +75,7 @@ Execution backends are registered centrally in `RuntimeRegistry` as immutable
 | Field | Meaning |
 |-------|---------|
 | `execution_strategy` | `subprocess_cli`, `direct_api`, `synthetic`, or `fixture` |
-| `model_selection` | Honest model behavior: `not_supported`, `persisted_not_invoked`, or `provider_config_default` |
+| `model_selection` | Honest model behavior: `not_supported`, `persisted_not_invoked`, `per_task_request`, or `provider_config_default` |
 | `adapter_capabilities` | Reuses `AdapterCapabilities` / recovery contracts from adapters |
 | `policy` | Timeout, concurrency, and allowed execution modes |
 

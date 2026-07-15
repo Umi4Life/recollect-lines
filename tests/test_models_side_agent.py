@@ -105,6 +105,7 @@ class PersistenceAndMigrationTests(unittest.TestCase):
         columns = {row["name"] for row in store.connection.execute("PRAGMA table_info(tasks)")}
         self.assertIn("runtime", columns)
         self.assertIn("model", columns)
+        self.assertIn("effective_model", columns)
         self.assertIn("agent_profile", columns)
         self.assertIn("result_schema", columns)
         store.close()

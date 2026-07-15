@@ -165,7 +165,7 @@ class ClaudeCodeAdapter:
             return {"available": False, "reason": "version_check_failed", "detail": detail}
         return {"available": True, "version": completed.stdout.strip()}
 
-    def build_command(self, prompt: str, execution_mode: str) -> list:
+    def build_command(self, prompt: str, execution_mode: str, *, model: str | None = None) -> list:
         permission_mode = PERMISSION_MODE_BY_EXECUTION_MODE.get(execution_mode)
         if permission_mode is None:
             raise ClaudeCodeUnsupportedPolicy(
@@ -180,8 +180,9 @@ class ClaudeCodeAdapter:
             "--permission-mode", permission_mode,
             "--no-session-persistence",
         ]
-        if self.model:
-            command += ["--model", self.model]
+        effective_model = model if model is not None else self.model
+        if effective_model:
+            command += ["--model", effective_model]
         if execution_mode == "read_only":
             command += ["--tools", ",".join(READ_ONLY_TOOLS)]
             command += ["--disallowedTools", ",".join(READ_ONLY_DISALLOWED_TOOLS)]
@@ -195,7 +196,7 @@ class ClaudeCodeAdapter:
         # Claude Code has no --dir/--workspace flag (unlike OpenCode); tool
         # access is scoped to the process's own cwd, so isolation depends on
         # launching in effective_workspace, not on an argument.
-        command = self.build_command(record.task, record.execution_mode)
+        command = self.build_command(record.task, record.execution_mode, model=record.effective_model)
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
                 command, stdout=stdout_file, stderr=stderr_file, cwd=effective_workspace, start_new_session=True,

@@ -101,6 +101,7 @@ class TaskStore:
             "model": "TEXT",
             "agent_profile": "TEXT",
             "result_schema": "TEXT",
+            "effective_model": "TEXT",
         }
         for column, column_type in side_agent_columns.items():
             if column not in existing_columns:
@@ -133,8 +134,8 @@ class TaskStore:
         with self.connection:
             self.connection.execute(
                 "INSERT INTO tasks (id, task, workspace, execution_mode, runtime, profile, provider, "
-                "timeout_seconds, verification_policy, state, created_at, updated_at, model, agent_profile, result_schema) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "timeout_seconds, verification_policy, state, created_at, updated_at, model, agent_profile, result_schema, effective_model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.task,
@@ -151,6 +152,7 @@ class TaskStore:
                     record.model,
                     record.agent_profile,
                     record.result_schema,
+                    record.effective_model,
                 ),
             )
             self.event(record.id, "task.created", None, record.state, "Task accepted", {})
@@ -173,6 +175,14 @@ class TaskStore:
             f"SELECT COUNT(*) FROM tasks WHERE runtime = ? AND state IN ({','.join('?' for _ in active)})",
             (runtime, *active),
         ).fetchone()[0]
+
+    def set_effective_model(self, task_id: str, effective_model: str | None) -> TaskRecord:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE tasks SET effective_model = ? WHERE id = ?",
+                (effective_model, task_id),
+            )
+        return self.get(task_id)
 
     def transition(self, task_id: str, target: TaskState, message: str, metadata: dict[str, Any] | None = None) -> TaskRecord:
         record = self.get(task_id)
