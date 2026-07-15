@@ -31,7 +31,6 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .agent_profiles import (
-    compose_task_prompt,
     get_agent_profile,
     list_agent_profiles,
     load_agent_profiles_config,
@@ -67,9 +66,11 @@ from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
     concise_normalized_view,
+    effective_result_schema,
     persist_raw_runtime_output_if_needed,
     validate_result_schema,
 )
+from .result_schema_prompt import RESULT_SCHEMA_PROMPT_VERSION, compose_launch_prompt
 from .completion_events import completion_events_page
 from .store import TaskStore
 from .task_lineage import (
@@ -297,19 +298,45 @@ class Broker:
         return effective, resolved
 
     def _composed_launch_prompt(self, task_id: str, record: TaskRecord) -> tuple[str, dict[str, object] | None]:
-        path = self.store.artifacts / task_id / "agent_profile_resolution.json"
-        if not path.is_file():
+        schema = effective_result_schema(record)
+        resolution_path = self.store.artifacts / task_id / "agent_profile_resolution.json"
+        if resolution_path.is_file():
+            resolution = json.loads(resolution_path.read_text())
+            composed, contract = compose_launch_prompt(
+                prompt_prefix=resolution["prompt_prefix"],
+                task_text=record.task,
+                result_schema=schema,
+            )
+            evidence: dict[str, object] = {
+                "profile_name": resolution["name"],
+                "profile_content_hash": resolution["content_hash"],
+                "task_text": record.task,
+                "prompt_prefix": resolution["prompt_prefix"],
+                "result_schema": schema,
+                "result_schema_source": resolution.get("sources", {}).get("result_schema", "runtime_default"),
+                "result_schema_prompt_version": RESULT_SCHEMA_PROMPT_VERSION,
+                "composed_prompt": composed,
+            }
+            if contract is not None:
+                evidence["result_schema_contract"] = contract
+            return composed, evidence
+
+        composed, contract = compose_launch_prompt(
+            prompt_prefix=None,
+            task_text=record.task,
+            result_schema=schema,
+        )
+        if contract is None:
             return record.task, None
-        resolution = json.loads(path.read_text())
-        composed = compose_task_prompt(resolution["prompt_prefix"], record.task)
-        evidence = {
-            "profile_name": resolution["name"],
-            "profile_content_hash": resolution["content_hash"],
+        source = "task_request" if record.result_schema is not None else "runtime_default"
+        return composed, {
             "task_text": record.task,
-            "prompt_prefix": resolution["prompt_prefix"],
+            "result_schema": schema,
+            "result_schema_source": source,
+            "result_schema_prompt_version": RESULT_SCHEMA_PROMPT_VERSION,
+            "result_schema_contract": contract,
             "composed_prompt": composed,
         }
-        return composed, evidence
 
     def _apply_resolved_lineage(self, record: TaskRecord, resolved) -> TaskRecord:
         return dataclasses.replace(

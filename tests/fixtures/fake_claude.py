@@ -32,6 +32,14 @@ def result(text, session_id="ses_fake", is_error=False, api_error_status=None):
     })
 
 
+def task_prompt_only(prompt: str) -> str:
+    marker = "[recollect-lines result-schema contract"
+    marker_at = prompt.find(marker)
+    if marker_at >= 0:
+        return prompt[:marker_at].rstrip()
+    return prompt
+
+
 def main():
     args = sys.argv[1:]
     prompt = args[args.index("-p") + 1] if "-p" in args else ""
@@ -82,8 +90,10 @@ def main():
     if "EMPTY_OUTPUT" in prompt:
         return 0
 
-    if prompt.startswith("SCHEMA_"):
-        payload = prompt.split(" ", 1)[1] if " " in prompt else prompt
+    body = task_prompt_only(prompt)
+    if "SCHEMA_" in body:
+        schema_part = body[body.index("SCHEMA_"):]
+        payload = schema_part.split(" ", 1)[1] if " " in schema_part else schema_part
         result(payload)
         return 0
 
