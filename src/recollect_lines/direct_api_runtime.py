@@ -146,8 +146,9 @@ class OpenAiCompatibleDirectRuntime:
         ) from last_error
 
     def _worker(self, handle: DirectApiHandle, record: TaskRecord, config: ProviderConfig, api_key: str) -> None:
+        effective_model = record.effective_model or config.default_model
         payload = {
-            "model": config.default_model,
+            "model": effective_model,
             "messages": [{"role": "user", "content": record.task}],
         }
         handle.request_artifact.write_text(json.dumps({"provider": config.name, "url": config.chat_completions_url(), "payload": payload}, indent=2) + "\n")
@@ -174,7 +175,8 @@ class OpenAiCompatibleDirectRuntime:
                 "summary": summary,
                 "http_status": status,
                 "provider": config.name,
-                "model": config.default_model,
+                "model": effective_model,
+                "requested_model": record.model,
                 "runtime_description": RUNTIME_DESCRIPTION,
                 "capabilities_declared": _capabilities_payload(config),
                 "limitations": _direct_api_limitations(),
@@ -225,11 +227,12 @@ class OpenAiCompatibleDirectRuntime:
             )
         if not config.capabilities.chat_completions:
             raise ProviderConfigError(f"Provider {config.name!r} does not declare chat_completions capability")
+        effective_model = record.effective_model or config.default_model
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         handle = DirectApiHandle(
             task_id=record.id,
             provider_name=config.name,
-            model=config.default_model,
+            model=effective_model,
             request_artifact=artifacts_dir / "request_payload.json",
             response_artifact=artifacts_dir / "response.json",
         )
@@ -245,7 +248,8 @@ class OpenAiCompatibleDirectRuntime:
             "adapter": self.name,
             "runtime_description": RUNTIME_DESCRIPTION,
             "provider": config.name,
-            "model": config.default_model,
+            "model": effective_model,
+            "requested_model": record.model,
             "base_url": config.base_url,
             "events_artifact": handle.response_artifact.name,
             "stderr_artifact": None,

@@ -28,6 +28,12 @@ from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
+from .model_selection import (
+    ModelSelectionRefusedError,
+    model_selection_metadata,
+    resolve_effective_model,
+    validate_requested_model,
+)
 from .models import (
     TERMINAL_STATES,
     VERIFICATION_POLICIES,
@@ -147,6 +153,39 @@ class Broker:
         detail = self._last_reconcile_details.get(task_id)
         return detail.to_dict() if detail else None
 
+    def _adapter_default_model(self, runtime: str) -> str | None:
+        adapter = self.subprocess_adapters.get(runtime)
+        if adapter is None:
+            return None
+        return getattr(adapter, "model", None)
+
+    def _resolve_launch_model(self, record: TaskRecord) -> tuple[TaskRecord, dict[str, object]]:
+        descriptor = self.runtime_registry.get(record.runtime)
+        validate_requested_model(descriptor, record.model)
+        provider_default = None
+        if record.runtime == DIRECT_API_PROFILE:
+            assert self.direct_api_runtime is not None and record.provider is not None
+            provider_default = self.direct_api_runtime.get_provider(record.provider).default_model
+        effective_model, source = resolve_effective_model(
+            descriptor,
+            requested_model=record.model,
+            adapter_default=self._adapter_default_model(record.runtime),
+            provider_default=provider_default,
+        )
+        invoked = descriptor.model_selection in {
+            ModelSelectionSupport.PER_TASK_REQUEST,
+            ModelSelectionSupport.PROVIDER_CONFIG_DEFAULT,
+        } and effective_model is not None
+        evidence = model_selection_metadata(
+            requested_model=record.model,
+            effective_model=effective_model,
+            source=source,
+            invoked=invoked,
+        )
+        if record.effective_model != effective_model:
+            record = self.store.set_effective_model(record.id, effective_model)
+        return record, evidence
+
     def _validate_request(self, request: TaskRequest) -> ProfilePolicy:
         if not request.task.strip():
             raise ValueError("Task must not be empty")
@@ -176,6 +215,7 @@ class Broker:
             raise ValueError(f"provider is only valid with profile {DIRECT_API_PROFILE!r}")
         if self.store.active_count(runtime) >= policy.max_concurrency:
             raise ValueError(f"Profile {policy.name} concurrency limit reached")
+        validate_requested_model(self.runtime_registry.get(runtime), request.model)
         return policy
 
     def create(self, request: TaskRequest, verify_commands: list[list[str]] | None = None) -> TaskRecord:
@@ -194,6 +234,7 @@ class Broker:
 
     def start(self, task_id: str) -> TaskRecord:
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
+        record, model_evidence = self._resolve_launch_model(record)
         effective_workspace = record.workspace
         if record.execution_mode == ISOLATED_WORKTREE:
             try:
@@ -253,6 +294,7 @@ class Broker:
                 stderr_artifact=metadata["stderr_artifact"],
             )
             self.store.refresh_manifest(record.id)
+            metadata = {**metadata, "model_selection": model_evidence}
             return self.store.transition(record.id, TaskState.RUNNING, f"{runtime.name} direct API request started", metadata)
         adapter = self.subprocess_adapters.get(record.runtime)
         if adapter is not None:
@@ -293,8 +335,12 @@ class Broker:
             event_metadata = metadata
             if metadata.get("launch_kind") == LAUNCH_KIND_DURABLE:
                 event_metadata = {**metadata, "command": stored_command}
+            event_metadata = {**event_metadata, "model_selection": model_evidence}
             return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", event_metadata)
-        return self.store.transition(record.id, TaskState.RUNNING, "Mock adapter started", self.adapter.start_metadata(record, effective_workspace))
+        return self.store.transition(
+            record.id, TaskState.RUNNING, "Mock adapter started",
+            {**self.adapter.start_metadata(record, effective_workspace), "model_selection": model_evidence},
+        )
 
     def complete(self, task_id: str, summary: str) -> TaskRecord:
         record = self.store.transition(task_id, TaskState.COLLECTING, "Collecting mock result", {})

@@ -224,6 +224,7 @@ class TaskRecord:
     model: str | None = None
     agent_profile: str | None = None
     result_schema: str | None = None
+    effective_model: str | None = None
 
     @classmethod
     def new(cls, request: TaskRequest) -> "TaskRecord":

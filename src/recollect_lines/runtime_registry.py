@@ -43,6 +43,7 @@ class ExecutionStrategy(StrEnum):
 class ModelSelectionSupport(StrEnum):
     NOT_SUPPORTED = "not_supported"
     PERSISTED_NOT_INVOKED = "persisted_not_invoked"
+    PER_TASK_REQUEST = "per_task_request"
     PROVIDER_CONFIG_DEFAULT = "provider_config_default"
 
 
@@ -136,14 +137,19 @@ class RuntimeRegistry:
         )
 
 
-def _subprocess_descriptor(adapter_cls: type, *, policy_key: str) -> RuntimeDescriptor:
+def _subprocess_descriptor(
+    adapter_cls: type,
+    *,
+    policy_key: str,
+    model_selection: ModelSelectionSupport,
+) -> RuntimeDescriptor:
     return RuntimeDescriptor(
         name=adapter_cls.name,
         execution_strategy=ExecutionStrategy.SUBPROCESS_CLI,
         policy=DEFAULT_PROFILES[policy_key],
         adapter_capabilities=adapter_cls.capabilities,
         limitations=SUBPROCESS_LIMITATIONS,
-        model_selection=ModelSelectionSupport.PERSISTED_NOT_INVOKED,
+        model_selection=model_selection,
         runtime_label=getattr(adapter_cls, "runtime_label", adapter_cls.name),
     )
 
@@ -158,8 +164,13 @@ def build_default_runtime_registry() -> RuntimeRegistry:
         limitations=SUBPROCESS_LIMITATIONS,
         model_selection=ModelSelectionSupport.NOT_SUPPORTED,
     ))
-    for adapter_cls in (OpenCodeAdapter, ClaudeCodeAdapter, CodexAdapter, CursorAdapter):
-        registry.register(_subprocess_descriptor(adapter_cls, policy_key=adapter_cls.name))
+    registry.register(_subprocess_descriptor(
+        OpenCodeAdapter, policy_key=OpenCodeAdapter.name, model_selection=ModelSelectionSupport.PERSISTED_NOT_INVOKED,
+    ))
+    for adapter_cls in (ClaudeCodeAdapter, CodexAdapter, CursorAdapter):
+        registry.register(_subprocess_descriptor(
+            adapter_cls, policy_key=adapter_cls.name, model_selection=ModelSelectionSupport.PER_TASK_REQUEST,
+        ))
     registry.register(RuntimeDescriptor(
         name=DIRECT_API_PROFILE,
         execution_strategy=ExecutionStrategy.DIRECT_API,

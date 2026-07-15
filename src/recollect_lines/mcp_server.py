@@ -159,6 +159,8 @@ def _task_summary(record, broker: Broker | None = None) -> dict:
     }
     if record.model is not None:
         summary["model"] = record.model
+    if record.effective_model is not None:
+        summary["effective_model"] = record.effective_model
     if record.agent_profile is not None:
         summary["agent_profile"] = record.agent_profile
     if record.result_schema is not None:

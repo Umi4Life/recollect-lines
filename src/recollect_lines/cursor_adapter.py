@@ -119,7 +119,7 @@ class CursorAdapter:
             return {"available": False, "reason": "version_check_failed", "detail": detail}
         return {"available": True, "version": (completed.stdout or completed.stderr).strip()}
 
-    def build_command(self, prompt: str, execution_mode: str, workspace: str) -> list:
+    def build_command(self, prompt: str, execution_mode: str, workspace: str, *, model: str | None = None) -> list:
         sandbox = SANDBOX_BY_EXECUTION_MODE.get(execution_mode)
         if sandbox is None:
             raise CursorUnsupportedPolicy(
@@ -135,8 +135,9 @@ class CursorAdapter:
         ]
         if execution_mode == "read_only":
             command += ["--mode", "plan"]
-        if self.model:
-            command += ["--model", self.model]
+        effective_model = model if model is not None else self.model
+        if effective_model:
+            command += ["--model", effective_model]
         command.append(prompt)
         return command
 
@@ -145,7 +146,9 @@ class CursorAdapter:
         stdout_path = artifacts_dir / "stdout.log"
         stderr_path = artifacts_dir / "stderr.log"
         effective_workspace = workspace or record.workspace
-        command = self.build_command(record.task, record.execution_mode, effective_workspace)
+        command = self.build_command(
+            record.task, record.execution_mode, effective_workspace, model=record.effective_model,
+        )
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
                 command,
