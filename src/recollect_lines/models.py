@@ -55,7 +55,7 @@ ALLOWED_TRANSITIONS = {
     # after popping the in-memory process handle (runtime already reaped, or
     # verification already in flight) but before the final terminal
     # transition — see Broker._RECONCILABLE_STATES / reconcile() and
-    # docs/phase-5c.md. Reconciliation from here never fabricates a success.
+    # docs/history/phases/phase-5c.md. Reconciliation from here never fabricates a success.
     TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
     TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED, TaskState.RUNNING},
 }
@@ -81,7 +81,7 @@ DEFAULT_PROFILES = {
 
 # Verification-gate policy (Phase 5C): distinguishes evidence-only from
 # gating verification without inventing a new terminal state per outcome —
-# see Broker._apply_verification_gate and docs/phase-5c.md.
+# see Broker._apply_verification_gate and docs/history/phases/phase-5c.md.
 #   "none"     — no automatic gating; any declared verify_commands still run
 #                as evidence (unchanged from Phase 3/5B), but never affect
 #                the task's terminal state. Default; fully backward

@@ -1,7 +1,7 @@
 """Runtime adapter that runs the Codex CLI (`codex exec`) as a supervised subprocess.
 
 Command contract is grounded in a compatibility spike against the installed CLI
-(codex-cli 0.144.4) — see docs/phase-6b.md. `codex exec --json` streams
+(codex-cli 0.144.4) — see docs/history/phases/phase-6b.md. `codex exec --json` streams
 newline-delimited JSON events (`thread.started`, `turn.started`, `item.*`,
 `turn.completed`/`turn.failed`) to stdout; cancellation targets the process
 group directly, exactly as OpenCodeAdapter does, never a claimed self-report.
@@ -28,7 +28,7 @@ DEFAULT_COMMAND_PREFIX = ("codex",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
 RUNTIME_DESCRIPTION = "Codex via codex exec"
 
-# Spike-validated (docs/phase-6b.md): `read-only` sandbox structurally limits
+# Spike-validated (docs/history/phases/phase-6b.md): `read-only` sandbox structurally limits
 # shell/file mutations; `workspace-write` is the narrowest mode confirmed for
 # isolated_worktree tasks that must edit files inside the broker-owned worktree.
 # ponytail: only the two execution_modes the broker currently defines are

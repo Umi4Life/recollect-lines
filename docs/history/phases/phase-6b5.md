@@ -6,7 +6,7 @@ Phase 6B.5 adds a fourth heterogeneous runtime adapter — `CursorAdapter`, whic
 supervises the real Cursor Agent CLI (`cursor-agent --print`) — without changing
 any core broker lifecycle semantics. Phase 6C (provider fabric) and 6D
 (capability discovery/routing) remain planned, not implemented; see
-[PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
+[PHASE-5.md](PHASE-5.md) and [RFC-001.md](../../design/RFC-001.md) §10.
 
 Runtime identity is reported honestly throughout: `"Cursor Agent CLI via
 cursor-agent --print"`, never a generic model API or another vendor's CLI — see

@@ -234,7 +234,7 @@ scoped, not oversights:
   reconciles a durable launch record against the process group's actual
   liveness, reaching a truthful `failed` when it's confirmed dead or an
   explicit `recovery_required` state when it isn't, never a fabricated
-  success (see [RFC-001](RFC-001.md) §8 and [phase-5b.md](phase-5b.md)).
+  success (see [RFC-001](RFC-001.md) §8 and [phase-5b.md](../history/phases/phase-5b.md)).
   Whether *transparent* re-attachment is ever required for MVP remains open;
   nothing in Phase 5B attempts it.
 - **Verification is opt-in per task, by design**: Phase 5C added a
@@ -243,14 +243,14 @@ scoped, not oversights:
   policy than the caller asked for. Nothing globally forces every
   workspace-writable task through `required` — that remains a caller/host
   policy decision, not a broker-enforced default. See
-  [phase-5c.md](phase-5c.md).
+  [phase-5c.md](../history/phases/phase-5c.md).
 - **Heterogeneous adapter coverage was the largest MVP gap; Phase 6A closes
   it to "at least two"**: the product's MVP boundary calls for at least two
   heterogeneous runtime adapters, with Claude Code CLI and Codex CLI named
   as the preferred initial pair. Phase 6A implemented `ClaudeCodeAdapter`
   (supervising the real `claude` CLI in `-p` mode), so this codebase now has
   two adapters — OpenCode and Claude Code, both still marked experimental
-  (RFC-001 §2, §8, [phase-6a.md](phase-6a.md)). Truthful-verification and
+  (RFC-001 §2, §8, [phase-6a.md](../history/phases/phase-6a.md)). Truthful-verification and
   cancellation evidence has been exercised against both real runtimes;
   confidence generalizing further (a third, differently-shaped runtime) is
   still not established, and neither adapter has continuous re-verification
@@ -259,12 +259,12 @@ scoped, not oversights:
   CLI adapter) — see [RFC-001](RFC-001.md) §10 for the full sequence and
   design constraints. Phase 6B implemented `CodexAdapter` (supervising the real
   `codex exec` CLI); Phase 6B.5 implemented `CursorAdapter` (supervising the real
-  `cursor-agent --print` CLI) — see [phase-6b5.md](phase-6b5.md). Phase 6C
+  `cursor-agent --print` CLI) — see [phase-6b5.md](../history/phases/phase-6b5.md). Phase 6C
   implemented the plural OpenAI-compatible provider configuration layer and a
   capability-limited direct HTTP runtime (`openai_compatible` profile) —
-  see [phase-6c.md](phase-6c.md). Phase 6D implemented capability discovery,
+  see [phase-6c.md](../history/phases/phase-6c.md). Phase 6D implemented capability discovery,
   parent-directed selection, and bounded council graphs — see
-  [phase-6d.md](phase-6d.md) and [RFC-001](RFC-001.md) §10.5.
+  [phase-6d.md](../history/phases/phase-6d.md) and [RFC-001](RFC-001.md) §10.5.
 - **Plural model-provider support is a distinct, separately scheduled
   gap**: today nothing in this codebase talks to a model provider
   directly — adapters supervise a CLI, which itself owns provider/auth
@@ -274,8 +274,8 @@ scoped, not oversights:
   policy-aware routing, and bounded parent-directed model-council usage
   patterns (§3.1) scheduled as Phase 6D — see [RFC-001](RFC-001.md) §10.
   Phase 6C implemented named provider configuration and the direct
-  `openai_compatible` runtime ([phase-6c.md](phase-6c.md)). Phase 6D implemented
-  discovery, policy-aware routing, and bounded councils ([phase-6d.md](phase-6d.md)).
+  `openai_compatible` runtime ([phase-6c.md](../history/phases/phase-6c.md)). Phase 6D implemented
+  discovery, policy-aware routing, and bounded councils ([phase-6d.md](../history/phases/phase-6d.md)).
 
 ## 10. Acceptance checklist
 
@@ -294,8 +294,8 @@ scoped, not oversights:
 - [x] At least two heterogeneous runtime adapters exist and can run
       concurrently under the same broker (**met** — OpenCode, Claude Code, Codex,
       and Cursor are implemented and dispatch through the same generic broker
-      lifecycle; all remain marked experimental; see §9, [phase-6a.md](phase-6a.md),
-      [phase-6b.md](phase-6b.md), and [phase-6b5.md](phase-6b5.md)).
+      lifecycle; all remain marked experimental; see §9, [phase-6a.md](../history/phases/phase-6a.md),
+      [phase-6b.md](../history/phases/phase-6b.md), and [phase-6b5.md](../history/phases/phase-6b5.md)).
 
 ## 11. Terminology
 

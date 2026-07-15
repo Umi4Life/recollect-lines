@@ -1,7 +1,7 @@
 """Deterministic stand-in for the real Codex CLI (`codex exec`), used only in tests.
 
 Mirrors the `codex exec --json` NDJSON event shape confirmed against codex-cli
-0.144.4 during the Phase 6B compatibility spike (see docs/phase-6b.md):
+0.144.4 during the Phase 6B compatibility spike (see docs/history/phases/phase-6b.md):
 thread/turn lifecycle plus `item.completed` agent_message events. Behavior is
 selected by keywords in the trailing prompt argument so a single fixture can
 cover normal, malformed-output, error, and long-running scenarios without any

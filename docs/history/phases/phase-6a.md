@@ -3,14 +3,14 @@
 ## Scope
 
 Phase 6A closes one instance of the largest remaining MVP gap named in
-[PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8/§10: Recollect Lines
+[PRD.md](../../design/PRD.md) §9 and [RFC-001.md](../../design/RFC-001.md) §8/§10: Recollect Lines
 implemented exactly one runtime adapter (OpenCode, experimental) before this
 phase. This phase adds a second, heterogeneous runtime adapter —
 `ClaudeCodeAdapter`, which supervises the real `claude` CLI in non-interactive
 mode (`claude -p`) — without changing any core broker lifecycle semantics to
 accommodate it. Phase 6B (Codex CLI), 6B.5 (Cursor CLI), 6C (provider fabric),
 and 6D (capability discovery/routing) remain planned, not implemented; see
-[PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
+[PHASE-5.md](PHASE-5.md) and [RFC-001.md](../../design/RFC-001.md) §10.
 
 Runtime identity is reported honestly throughout: `"Claude Code via
 claude -p"`, never "Cursor" or a generic model API — see
@@ -84,7 +84,7 @@ alone. Raw output was preserved for each call; findings:
 
 `src/recollect_lines/claude_code_adapter.py` conforms to the same
 `RuntimeAdapter`/`AdapterCapabilities` boundary `OpenCodeAdapter` does
-([RFC-001.md](RFC-001.md) §1) and reuses its process-group cancellation
+([RFC-001.md](../../design/RFC-001.md) §1) and reuses its process-group cancellation
 implementation directly (`opencode_adapter.cancel_process_group`) rather than
 reinventing SIGTERM→SIGKILL escalation per adapter:
 
@@ -302,7 +302,7 @@ Observed:
 This is real evidence, and it is narrow: one CLI version, one short
 read-only prompt, one disposable fixture, not continuous compatibility
 testing against future `claude` CLI releases — the same honesty standard
-[RFC-001.md](RFC-001.md) §4 already applies to the OpenCode smoke evidence.
+[RFC-001.md](../../design/RFC-001.md) §4 already applies to the OpenCode smoke evidence.
 No broad implementation work was run against the live API; this phase's
 subscription-quota usage was limited to the three spike calls above and
 this one smoke call.
@@ -406,6 +406,6 @@ of the adapter's own smoke evidence and are not repeated by CI.
 - **Phase 6B (Codex CLI) and 6B.5 (Cursor CLI) are now implemented** — see
   [phase-6b.md](phase-6b.md) and [phase-6b5.md](phase-6b5.md). Phase 6C
   (provider fabric) and 6D (capability discovery/routing) remain planned, not
-  implemented — see [PHASE-5.md](PHASE-5.md) and [RFC-001.md](RFC-001.md) §10.
+  implemented — see [PHASE-5.md](PHASE-5.md) and [RFC-001.md](../../design/RFC-001.md) §10.
 - **Windows is still unsupported** — POSIX process groups only, unchanged
   from every prior phase.

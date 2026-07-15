@@ -10,8 +10,8 @@ the durable subprocess-runner primitive and read-only launch inspection.
 This document does **not** implement provider-native session resume or mid-task
 message injection.
 
-Related: [RFC-001.md](RFC-001.md), [phase-5b.md](phase-5b.md),
-[phase-6d.md](phase-6d.md), [PRD.md](PRD.md).
+Related: [RFC-001.md](../../design/RFC-001.md), [phase-5b.md](phase-5b.md),
+[phase-6d.md](phase-6d.md), [PRD.md](../../design/PRD.md).
 
 ## 1. Problem statement
 

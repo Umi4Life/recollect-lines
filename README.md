@@ -1,138 +1,83 @@
 # Recollect Lines
 
-> **Delegate work. Recollect the signal.**
+> Recollect Lines is a local-first delegation broker that lets a parent agent safely hand bounded work to existing AI coding runtimes and receive attributable, evidence-backed results.
 
-Recollect Lines is a local-first, **provider- and host-neutral** broker for
-delegating bounded agent work to heterogeneous side agents and recollecting
-concise, evidence-backed results. It is not tied to any one parent-agent
-host or model provider — see [`docs/PRD.md`](docs/PRD.md) §1 and §3.1.
-Hermes is one possible operator/host environment among many that can drive
-this broker over its documented CLI/MCP interfaces; it is never a required
-dependency.
+It is **not** a new editor, not a coding agent, not an OpenCode plugin, and not merely an MCP server. **MCP** and **CLI** are interfaces to the broker; **Codex, Cursor, Claude Code, OpenCode**, and HTTP providers are **runtime backends** the broker supervises.
 
-## Documentation
+## What is this?
 
-- [`docs/PRD.md`](docs/PRD.md) — canonical, provider-neutral product requirements.
-- [`docs/RFC-001.md`](docs/RFC-001.md) — current implementation RFC (architecture, evidence, known limitations).
-- [`docs/PHASE-5.md`](docs/PHASE-5.md) — roadmap for the next planned work.
-- [`docs/phase-6c.md`](docs/phase-6c.md) — OpenAI-compatible provider fabric and direct HTTP runtime.
-- [`docs/phase-6d.md`](docs/phase-6d.md) — capability discovery, routing, bounded councils.
-- [`docs/phase-7a.md`](docs/phase-7a.md) — field readiness, doctor, examples, clean-install proof.
-- [`docs/phase-7b.md`](docs/phase-7b.md) — explicit integration-certification harness (dry-run default).
-- [`docs/phase-7c-rfc.md`](docs/phase-7c-rfc.md) — recovery/control contract and compatibility evidence (Phase 7C.1).
-- [`docs/phase-5c.md`](docs/phase-5c.md) — verification-gate policy, timeout liveness safety, generic MCP-host acceptance.
-- `docs/phase-{1,2,3,4,5b}.md` — per-phase scope and test evidence as each was implemented.
+A small, local-first **delegation broker**: queue bounded work, supervise an external runtime, store durable evidence, and return a concise result. Parent agents (or human operators) stay in control of scope, timeouts, cancellation, and optional verification.
 
-## Implementation status
+## Who uses it?
 
-Phases 1-6A are implemented: durable SQLite task/event storage, explicit
-task-state transitions, local artifact directories with integrity
-manifests, profile-policy validation, timeout/cancellation lifecycle
-handling with process-group liveness classification, durable
-restart recovery and idempotent collection, an opt-in per-task
-verification-gate policy, a deterministic mock adapter, an experimental
-OpenCode runtime adapter, an experimental Claude Code CLI runtime adapter
-(Phase 6A), Git worktree workspace isolation with broker-side
-verification, and a local stdio MCP interface — plus the CLI. See
-[`docs/RFC-001.md`](docs/RFC-001.md) for the full architecture and known
-limitations, and `docs/phase-*.md` for per-phase evidence.
+| User | Role |
+|------|------|
+| **Parent agents** | Delegate bounded tasks via MCP or CLI; collect evidence-backed summaries |
+| **Operators** | Install, configure runtimes, diagnose (`doctor`), certify integrations |
 
-**Honest gap against the product PRD:** the MVP boundary calls for at
-least two heterogeneous runtime adapters, with Claude Code CLI and Codex
-CLI as the preferred initial pair. Phase 6A implements the Claude Code CLI
-adapter, so this codebase now has two adapters — OpenCode and Claude Code,
-both marked experimental — meeting that "at least two" boundary. A
-post-Phase-5C roadmap decision sequenced Codex CLI (Phase 6B) and Cursor
-CLI (Phase 6B.5) as further adapters — both now implemented — plus a
-separately scheduled plural OpenAI-compatible provider fabric (Phase 6C,
-now implemented — see [`docs/phase-6c.md`](docs/phase-6c.md)) and
-capability discovery/routing/bounded model-council patterns (Phase 6D,
-now implemented — see [`docs/phase-6d.md`](docs/phase-6d.md)). See [`docs/PRD.md`](docs/PRD.md) §9,
-[`docs/RFC-001.md`](docs/RFC-001.md) §8/§10, and
-[`docs/PHASE-5.md`](docs/PHASE-5.md) for the full capability accounting
-and roadmap.
+## What problem does it solve?
 
-## CI
+Ad-hoc subprocess delegation loses track of what was asked, what ran, and whether a self-reported success is true. Recollect Lines adds durable task state, artifact manifests, bounded execution, cancellation evidence, and optional broker-verified checks.
 
-`.github/workflows/ci.yml` runs on every pull request and push to `master`,
-against Python 3.11 and 3.13: the full unittest suite (`PYTHONPATH=src`),
-the generic MCP-host acceptance harness (`scripts/mcp_acceptance.py`),
-`compileall`, and a whitespace check. On one matrix leg it also installs the
-package and smoke-tests the `recollect-lines`/`recollect-mcp` console entry
-points, and runs the offline clean-install acceptance script. It runs no external services, network calls, or model credentials.
+## Is it an MCP server, plugin, or coding program?
 
-## Run tests
+| | |
+|-|-|
+| **Is** | A broker with **CLI** (`recollect-lines`) and **stdio MCP** (`recollect-mcp`) interfaces |
+| **Is** | A supervisor for **existing** runtime CLIs and HTTP provider endpoints |
+| **Is not** | A replacement IDE, agent host, or OpenCode/Codex plugin |
+| **Is not** | “Just MCP” — MCP is one entry point; the product is the broker + evidence model |
 
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+```text
+Operator / parent agent
+        |
+        v
+ Recollect Lines  ------>  Runtime backend (codex, claude, cursor, …)
+   (broker)                    existing CLI / API
+        |
+        v
+ Evidence-backed result (summary + artifacts)
 ```
 
-## Clean-install acceptance (Phase 7A)
+## What works today
 
-Proves a fresh `pip install .` exposes `recollect-lines` (not the removed `recollect` alias):
+- Task lifecycle: create, start, status, collect/cancel, timeout with process-group checks
+- Profiles: `mock`, `opencode`, `claude_code`, `codex`, `cursor`, `openai_compatible` (experimental CLI adapters)
+- Durable SQLite storage, artifact directories, optional verification gate
+- Post-restart reconciliation (truthful `failed` / `recovery_required`, not fabricated success)
+- Capability discovery, routing, bounded councils; `doctor` and `certify` harnesses
 
-```bash
-python3 scripts/clean_install_acceptance.py
-```
+**Honest limits:** no in-flight steering; no session resume after broker restart; subprocess `collect` needs the same long-lived broker instance that started the task (use MCP or a script for real runtimes). Details in [docs/user-flows.md](docs/user-flows.md).
 
-## Operational diagnostics
+## Fastest way to try it
 
-```bash
-recollect-lines --home ~/.recollect doctor
-recollect-lines --home ~/.recollect --providers-config examples/litellm-openai-compatible/providers.json doctor --json
-```
-
-## Integration certification (Phase 7B)
-
-Offline dry-run by default; explicit opt-in for live or fixture execution:
+**Python 3.11+**, install from source (not on PyPI yet):
 
 ```bash
-recollect-lines --home ~/.recollect \
-  --providers-config examples/litellm-openai-compatible/providers.json \
-  certify --profile openai_compatible --provider local_litellm --json
+git clone https://github.com/Umi4Life/recollect-lines.git
+cd recollect-lines
+python3 -m venv .venv && source .venv/bin/activate
+pip install .
+recollect-lines --help
+recollect-mcp --help
 ```
 
-See [`docs/phase-7b.md`](docs/phase-7b.md) for live opt-in warnings, fixture certification, and evidence semantics.
+**Offline mock (no provider):** [docs/getting-started.md](docs/getting-started.md#five-minute-quick-start-mock-no-provider)
 
-## Recovery/control contract (Phase 7C.1)
-
-Declared recovery levels and control actions are exposed via discovery, doctor, and MCP `discover_capabilities`. Help-text `resume` keywords are recorded as compatibility evidence only — never as `session_resume` capability.
+**Recorded live Codex demo:** [docs/demos/codex-marker-evidence.json](docs/demos/codex-marker-evidence.json) — reproduce with:
 
 ```bash
-recollect-lines --home ~/.recollect discover --json | jq '.runtimes[] | {name, recovery_control}'
-recollect-lines --home ~/.recollect doctor --json | jq '.findings[] | select(.code|startswith("RECOVERY_"))'
+python3 scripts/run_codex_demo.py --execute-live --acknowledge-provider-call
 ```
 
-See [`docs/phase-7c-rfc.md`](docs/phase-7c-rfc.md) for vocabulary, safety proof requirements, and the compatibility matrix.
+## Entry points
 
-See [`docs/phase-7a.md`](docs/phase-7a.md) for migration from `recollect` → `recollect-lines`, example configs, and release checklist.
+| Interface | Command | Doc |
+|-----------|---------|-----|
+| CLI | `recollect-lines` | [docs/cli.md](docs/cli.md) |
+| MCP | `recollect-mcp` | [docs/mcp.md](docs/mcp.md) |
 
-## Run the generic MCP-host acceptance harness
-
-`scripts/mcp_acceptance.py` drives a real `recollect-mcp` subprocess over
-its stdio JSON-RPC transport — exactly what any MCP-compatible host does —
-against a disposable local Git fixture, with no network access or model
-credentials required:
-
-```bash
-python3 scripts/mcp_acceptance.py
-```
-
-See [`docs/phase-5c.md`](docs/phase-5c.md) for what it proves.
-
-## Try the CLI
-
-```bash
-PYTHONPATH=src python3 -m recollect_lines --home /tmp/recollect-demo create \
-  --task 'Investigate a flaky test' --workspace /tmp/repo
-PYTHONPATH=src python3 -m recollect_lines --home /tmp/recollect-demo list
-```
-
-## Configure an MCP host
-
-Any MCP-compatible host can launch `recollect-mcp` as a local stdio
-server. A generic client configuration (after `pip install .`, so the
-`recollect-mcp` console script is on `PATH`) looks like:
+Generic MCP host config:
 
 ```json
 {
@@ -145,24 +90,39 @@ server. A generic client configuration (after `pip install .`, so the
 }
 ```
 
-This is not specific to any one client — it's the same shape most
-MCP-stdio hosts expect. Nothing about Recollect Lines requires a
-particular host to be present or configured.
+## Documentation
 
-**Optional, illustrative only:** an operator running Hermes as their
-parent-agent environment could add the same server under Hermes's own MCP
-configuration surface, e.g. an entry equivalent to:
+- [docs/README.md](docs/README.md) — documentation index
+- [docs/getting-started.md](docs/getting-started.md) — install and quick start
+- [docs/user-flows.md](docs/user-flows.md) — operator, parent-agent, and runtime flows
+- [docs/demos/](docs/demos/) — end-to-end proofs
 
-```json
-{
-  "mcpServers": {
-    "recollect-lines": {
-      "command": "recollect-mcp",
-      "args": ["--home", "~/.recollect"]
-    }
-  }
-}
+## Supported capabilities and limitations
+
+| Area | Status |
+|------|--------|
+| Local broker + artifacts | Supported |
+| MCP + CLI interfaces | Supported |
+| Multiple runtime adapters | Supported, experimental |
+| `isolated_worktree` workspace safety | Supported |
+| Broker-verified verification gate | Supported, opt-in per task |
+| Post-restart reconciliation | Supported; no full result recovery |
+| In-flight message steering | Not supported (explicit refusal) |
+| PyPI package | Not published yet |
+
+Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001.md](docs/design/RFC-001.md).
+
+## Tests and CI
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+python3 scripts/mcp_acceptance.py
+python3 scripts/clean_install_acceptance.py
+python3 -m compileall -q src tests scripts
 ```
 
-This is one possible operator configuration among many, never a required
-integration or an acceptance criterion for this project.
+## Contributing / design history
+
+- Product requirements: [docs/design/PRD.md](docs/design/PRD.md)
+- Implementation RFC: [docs/design/RFC-001.md](docs/design/RFC-001.md)
+- Phase implementation records: [docs/history/phases/](docs/history/phases/) (not the user guide)

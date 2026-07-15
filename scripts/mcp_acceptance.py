@@ -6,7 +6,7 @@ Speaks the standard MCP stdio JSON-RPC protocol directly to a real
 plugin, a terminal agent, Hermes, or otherwise) does to use this broker.
 This harness assumes no specific host: it is a plain stdlib JSON-RPC
 client, not a Hermes client, and Hermes is not required to run it or to
-accept this phase's work (see docs/PRD.md and docs/phase-5c.md).
+accept this phase's work (see docs/design/PRD.md and docs/history/phases/phase-5c.md).
 
 It exercises the documented delegate -> observe -> collect -> cancel
 lifecycle against a disposable local Git fixture repository, including
@@ -226,7 +226,7 @@ def main() -> int:
 
             # --- delegate + collect: the claude_code profile through the exact same generic
             # dispatch, read_only mode — the execution mode this phase's reconciliation fixed
-            # (see docs/phase-6a.md "Reconciliation addendum") to structurally exclude Bash via
+            # (see docs/history/phases/phase-6a.md "Reconciliation addendum") to structurally exclude Bash via
             # --tools rather than relying on --disallowedTools alone ---
             is_error, claude_delegated = client.call_tool("delegate", {
                 "task": "Inspect the fixture repository",

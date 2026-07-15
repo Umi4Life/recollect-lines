@@ -4,8 +4,8 @@
 
 Scope: documentation and CI only, no runtime/product behavior change.
 
-- [`docs/PRD.md`](PRD.md): canonical, provider-neutral product requirements.
-- [`docs/RFC-001.md`](RFC-001.md): the current implementation RFC, consolidating
+- [`../../design/PRD.md`](../../design/PRD.md): canonical, provider-neutral product requirements.
+- [`../../design/RFC-001.md`](../../design/RFC-001.md): the current implementation RFC, consolidating
   Phase 1–4 evidence and known limitations.
 - `.github/workflows/ci.yml`: automated enforcement of the test suite,
   compileall, and whitespace hygiene already used as manual quality evidence
@@ -75,18 +75,18 @@ design, decision tables, and test evidence:
 
 **Documentation correction:** this section previously described the
 acceptance work above as "driven by Hermes." That was an error — Recollect
-Lines is provider- and host-neutral (see [PRD.md](PRD.md) §1, §3.1);
+Lines is provider- and host-neutral (see [PRD.md](../../design/PRD.md) §1, §3.1);
 Hermes is one possible operator environment among many, never a required
 dependency. The harness this phase actually delivers assumes no specific
 host and requires no Hermes installation to run; see
-[README.md](../README.md) for a generic MCP client configuration example
+[README.md](../../README.md) for a generic MCP client configuration example
 alongside one clearly labeled, optional Hermes example.
 
 This phase does **not** close the codebase's largest remaining gap against
 the original product PRD: at least two heterogeneous runtime adapters
 (Claude Code CLI and Codex CLI are the PRD's preferred initial pair). Only
 one experimental adapter (OpenCode) is implemented. See
-[PRD.md](PRD.md) §9 and [RFC-001.md](RFC-001.md) §8 for the full, honest
+[PRD.md](../../design/PRD.md) §9 and [RFC-001.md](../../design/RFC-001.md) §8 for the full, honest
 capability accounting — that gap remained open and unscheduled at the end
 of this PR's original scope; see Phase 6 below for the roadmap decision
 made after.
@@ -116,5 +116,5 @@ Recollect Lines remains provider- and host-neutral throughout: a runtime
 adapter (supervises a concrete CLI) and a provider configuration (names a
 model endpoint and its declared capabilities) stay distinct concepts, and
 no phase above is a hard-coded vendor branch. See
-[RFC-001.md](RFC-001.md) §10 for the full design constraints and
-[PRD.md](PRD.md) §9 for the product-level framing.
+[RFC-001.md](../../design/RFC-001.md) §10 for the full design constraints and
+[PRD.md](../../design/PRD.md) §9 for the product-level framing.

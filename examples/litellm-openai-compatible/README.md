@@ -46,4 +46,4 @@ recollect-lines --home ~/.recollect \
 ```
 
 `estimated_cost_usd_upper_bound` is declared for future live opt-in; dry-run does not call the gateway.
-See [`docs/phase-7b.md`](../../docs/phase-7b.md) for live and fixture modes.
+See [`docs/history/phases/phase-7b.md`](../../docs/history/phases/phase-7b.md) for live and fixture modes.
