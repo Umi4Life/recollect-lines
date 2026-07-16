@@ -19,7 +19,7 @@ from . import __version__
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
-from .discovery import discover_providers, discover_runtimes, probe_cli_version
+from .discovery import discover_providers, discover_runtimes, probe_cli_version, provider_config_lifecycle
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
@@ -245,7 +245,7 @@ def _check_providers_config(
             details={"path": str(providers_config)},
         )], None
 
-    runtime = OpenAiCompatibleDirectRuntime(providers, environ=environ)
+    runtime = OpenAiCompatibleDirectRuntime(providers, environ=environ, config_source=providers_config)
     findings: list[Finding] = [
         _finding(
             "PROVIDERS_CONFIG_VALID",
@@ -308,6 +308,24 @@ def _check_providers_config(
             ))
 
     return findings, runtime
+
+
+def _check_provider_config_lifecycle(runtime: OpenAiCompatibleDirectRuntime | None) -> Finding:
+    lifecycle = provider_config_lifecycle(runtime)
+    configured = lifecycle["source"] != "not_configured"
+    message = (
+        f"Active provider configuration loaded from {lifecycle['source']} at {lifecycle['loaded_at']}"
+        if configured
+        else "No provider configuration file is active for this process (source: not_configured)"
+    )
+    return _finding(
+        "PROVIDER_CONFIG_LIFECYCLE",
+        severity="info",
+        status="ok" if configured else "not_checked",
+        message=message,
+        remediation=lifecycle["note"],
+        details=lifecycle,
+    )
 
 
 def _check_inventory_consistency(broker: Broker, environ: dict[str, str]) -> list[Finding]:
@@ -500,6 +518,7 @@ def run_doctor(
 
     provider_findings, direct_runtime = _check_providers_config(providers_config, env)
     findings.extend(provider_findings)
+    findings.append(_check_provider_config_lifecycle(direct_runtime))
 
     broker = Broker(
         home,

@@ -107,6 +107,8 @@ class DiscoveryTests(unittest.TestCase):
         output = self.broker.discover_capabilities()
         self.assertIn("runtimes", output)
         self.assertIn("providers", output)
+        self.assertIn("provider_config", output)
+        self.assertEqual(output["provider_config"]["source"], "not_configured")
 
 
 class CouncilValidationTests(unittest.TestCase):

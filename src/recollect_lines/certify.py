@@ -272,7 +272,9 @@ def _load_provider(
             remediation="Use a provider name declared in --providers-config.",
         ))
         return None, None, "blocked"
-    runtime = request.fixture_runtime or OpenAiCompatibleDirectRuntime(providers, environ=env)
+    runtime = request.fixture_runtime or OpenAiCompatibleDirectRuntime(
+        providers, environ=env, config_source=request.providers_config,
+    )
     checks.append(_check(
         "PROVIDER_CONFIG_VALID",
         status="ok",

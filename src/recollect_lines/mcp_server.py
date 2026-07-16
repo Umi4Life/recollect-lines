@@ -731,7 +731,13 @@ TOOLS = {
         "handler": handle_reconcile,
     },
     "discover_capabilities": {
-        "description": "Return a machine-readable inventory of registered runtime profiles and named provider configurations with declared/observed capabilities and availability (no credentials or raw endpoints).",
+        "description": (
+            "Return a machine-readable inventory of registered runtime profiles and named provider "
+            "configurations with declared/observed capabilities and availability (no credentials or "
+            "raw endpoints). Includes provider_config: the active providers.json source path (or "
+            "not_configured) and when this process loaded it — a startup snapshot; edits to the file "
+            "on disk require restarting the broker/MCP server to take effect."
+        ),
         "inputSchema": DISCOVER_CAPABILITIES_INPUT_SCHEMA,
         "handler": handle_discover_capabilities,
     },
