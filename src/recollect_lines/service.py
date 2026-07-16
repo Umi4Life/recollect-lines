@@ -161,7 +161,9 @@ class Broker:
         if direct_api_runtime is not None:
             self.direct_api_runtime = direct_api_runtime
         elif providers_config is not None:
-            self.direct_api_runtime = OpenAiCompatibleDirectRuntime(load_providers_config(providers_config), environ=environ)
+            self.direct_api_runtime = OpenAiCompatibleDirectRuntime(
+                load_providers_config(providers_config), environ=environ, config_source=providers_config,
+            )
         else:
             self.direct_api_runtime = None
         custom_profiles = {}
@@ -1458,7 +1460,7 @@ class Broker:
         return payload
 
     def discover_capabilities(self) -> dict:
-        from .discovery import discover_providers, discover_runtimes
+        from .discovery import discover_providers, discover_runtimes, provider_config_lifecycle
         from .recovery_contract import RECOVERY_CONTRACT_SCHEMA_VERSION
 
         environ = self._environ if self._environ is not None else os.environ
@@ -1474,6 +1476,7 @@ class Broker:
                 direct_api_runtime=self.direct_api_runtime,
                 environ=environ,
             ),
+            "provider_config": provider_config_lifecycle(self.direct_api_runtime),
             "agent_profiles": list_agent_profiles(self.agent_profiles),
         }
 

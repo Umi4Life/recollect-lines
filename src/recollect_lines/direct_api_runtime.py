@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -77,11 +78,21 @@ class OpenAiCompatibleDirectRuntime:
         recovery_control=DIRECT_API_RECOVERY_CONTROL,
     )
 
-    def __init__(self, providers: dict[str, ProviderConfig], environ: dict[str, str] | None = None):
+    def __init__(
+        self,
+        providers: dict[str, ProviderConfig],
+        environ: dict[str, str] | None = None,
+        config_source: Path | None = None,
+    ):
         if not providers:
             raise ProviderConfigError("At least one provider configuration is required")
         self.providers = providers
         self.environ = environ
+        # Startup snapshot: this object is built once when the broker/MCP process
+        # starts. config_source/loaded_at exist so diagnostics can truthfully say
+        # a later on-disk edit to that file has not (yet) reached this process.
+        self.config_source = config_source
+        self.loaded_at = datetime.now(timezone.utc)
 
     @property
     def runtime_label(self) -> str:

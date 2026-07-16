@@ -85,6 +85,21 @@ Successful tool calls return MCP `content` with JSON:
 
 Errors use `"ok": false` and `"error": { "code", "message" }` at the envelope level (business errors), distinct from JSON-RPC protocol errors.
 
+## Provider configuration is a startup snapshot
+
+`discover_capabilities` includes a `provider_config` object:
+
+```json
+{
+  "source": "/path/to/providers.json",
+  "loaded_at": "2026-07-16T13:59:41.475052+00:00",
+  "restart_required_for_changes": true,
+  "note": "Provider configuration is a startup snapshot: providers.json (if any) is read once when the broker/MCP process starts. Editing the file on disk afterward does not change the running process — restart the broker/MCP server to load changes."
+}
+```
+
+`source` is `"not_configured"` when no `--providers-config` was passed. `loaded_at` is when *this* process read the file — not when it was last modified on disk. There is no hot reload: if you edit providers.json, this MCP server will keep serving the old snapshot until it is restarted. Never contains credential values.
+
 ## Host configuration example
 
 ```json

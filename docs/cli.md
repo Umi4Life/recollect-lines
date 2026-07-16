@@ -79,6 +79,10 @@ Runtimes and modes are validated against broker policy before queueing. Legacy `
 
 `certify` live execution requires `--execute-live --i-accept-billed-remote-calls` (HTTP providers). CLI adapter certification uses fixture or live modes documented in [history/phases/phase-7b.md](history/phases/phase-7b.md).
 
+### Provider configuration is a startup snapshot
+
+`--providers-config` (providers.json) is read **once**, when the broker/MCP process starts. Editing that file while a broker/MCP server is already running has no effect until you restart it. `doctor` reports the active snapshot as a `PROVIDER_CONFIG_LIFECYCLE` finding — the resolved source path (or `not_configured` if no file is in use), the UTC timestamp the running process loaded it, and a `restart_required_for_changes: true` flag with a reminder in `remediation`. The same data is available over MCP; see [mcp.md](mcp.md#provider-configuration-is-a-startup-snapshot).
+
 ## Help output (verified)
 
 ```text
