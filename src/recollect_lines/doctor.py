@@ -23,7 +23,13 @@ from .discovery import discover_providers, discover_runtimes, probe_cli_version,
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
-from .providers import MissingCredentialReference, ProviderConfigError, load_providers_config, resolve_api_key
+from .providers import (
+    MissingCredentialReference,
+    ProviderConfigError,
+    load_providers_config,
+    provider_config_format,
+    resolve_api_key,
+)
 from .recovery_contract import ControlAction, RecoveryLevel
 from .service import Broker
 
@@ -213,14 +219,20 @@ def _check_runtime_adapters(broker: Broker) -> list[Finding]:
 def _check_providers_config(
     providers_config: Path | None,
     environ: dict[str, str],
+    *,
+    providers_config_origin: str | None = None,
 ) -> tuple[list[Finding], OpenAiCompatibleDirectRuntime | None]:
     if providers_config is None:
         return [_finding(
             "PROVIDERS_CONFIG_NOT_SPECIFIED",
             severity="info",
             status="not_checked",
-            message="No --providers-config was provided; named provider checks were skipped",
-            remediation="Pass --providers-config /path/to/providers.json to validate direct-API providers.",
+            message=(
+                "No provider configuration was found (--providers-config, RECOLLECT_CONFIG, "
+                "repo-local/user-level operator config, and the legacy providers.json default "
+                "were all absent); named provider checks were skipped"
+            ),
+            remediation="Pass --providers-config /path/to/providers.json (or .yaml) to validate direct-API providers.",
         )], None
 
     if not providers_config.exists():
@@ -241,11 +253,14 @@ def _check_providers_config(
             severity="error",
             status="error",
             message=f"Provider configuration is invalid: {error}",
-            remediation="Fix JSON syntax and provider fields; run recollect-lines doctor again.",
+            remediation="Fix the JSON/YAML syntax and provider fields; run recollect-lines doctor again.",
             details={"path": str(providers_config)},
         )], None
 
-    runtime = OpenAiCompatibleDirectRuntime(providers, environ=environ, config_source=providers_config)
+    runtime = OpenAiCompatibleDirectRuntime(
+        providers, environ=environ, config_source=providers_config,
+        config_source_origin=providers_config_origin,
+    )
     findings: list[Finding] = [
         _finding(
             "PROVIDERS_CONFIG_VALID",
@@ -255,6 +270,18 @@ def _check_providers_config(
             details={"path": str(providers_config.resolve()), "provider_count": len(providers)},
         ),
     ]
+    if provider_config_format(providers_config) == "json":
+        findings.append(_finding(
+            "PROVIDERS_CONFIG_LEGACY_JSON_FORMAT",
+            severity="info",
+            status="ok",
+            message=f"Provider configuration {providers_config} uses the legacy JSON format",
+            remediation=(
+                "JSON remains fully supported. Optional: rewrite as YAML (same schema) for "
+                "easier hand-editing."
+            ),
+            details={"path": str(providers_config)},
+        ))
 
     for name, config in sorted(providers.items()):
         try:
@@ -496,6 +523,7 @@ def run_doctor(
     home: Path,
     workspace: Path | None = None,
     providers_config: Path | None = None,
+    providers_config_origin: str | None = None,
     opencode_adapter: OpenCodeAdapter | None = None,
     claude_code_adapter: ClaudeCodeAdapter | None = None,
     codex_adapter: CodexAdapter | None = None,
@@ -516,7 +544,9 @@ def run_doctor(
     findings.extend(_check_home_directory(home))
     findings.extend(_check_workspace(workspace))
 
-    provider_findings, direct_runtime = _check_providers_config(providers_config, env)
+    provider_findings, direct_runtime = _check_providers_config(
+        providers_config, env, providers_config_origin=providers_config_origin,
+    )
     findings.extend(provider_findings)
     findings.append(_check_provider_config_lifecycle(direct_runtime))
 

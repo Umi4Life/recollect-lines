@@ -80,11 +80,21 @@ def _pip_wheel_install(python: Path, tmp_path: Path) -> bool:
         return False
     wheel_dir = tmp_path / "wheels"
     wheel_dir.mkdir()
+    # Build a wheel for this package itself without build isolation (offline-safe:
+    # setuptools/wheel were already bootstrapped above), but do fetch runtime
+    # dependency wheels (e.g. PyYAML) into the same find-links directory so the
+    # --no-index install below can resolve them.
     build = run_optional([
         str(python), "-m", "pip", "wheel", str(ROOT),
         "-w", str(wheel_dir), "--no-deps", "--no-build-isolation",
     ])
     if build.returncode != 0:
+        return False
+    deps = run_optional([
+        str(python), "-m", "pip", "wheel", "PyYAML>=6",
+        "-w", str(wheel_dir),
+    ])
+    if deps.returncode != 0:
         return False
     install = run_optional([
         str(python), "-m", "pip", "install",

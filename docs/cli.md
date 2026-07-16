@@ -11,9 +11,34 @@ Global options:
 | `--claude-command` | `claude` | JSON array overriding Claude Code CLI prefix |
 | `--codex-command` | `codex` | JSON array overriding Codex CLI prefix |
 | `--cursor-command` | `cursor-agent` | JSON array overriding Cursor CLI prefix |
-| `--providers-config` | — | JSON file for `openai_compatible` profile |
+| `--providers-config` | — | JSON or YAML file for `openai_compatible` profile |
 
 There is **no** `recollect` executable (removed in field-readiness work).
+
+### Provider configuration resolution order
+
+`--providers-config` is one of several ways to point at a provider configuration
+file. Exactly one file is selected per process, highest precedence first:
+
+1. `--providers-config PATH` (explicit CLI flag / constructor argument)
+2. `RECOLLECT_CONFIG` environment variable (a path to a specific file)
+3. Repo-local operator config: `./.recollect/config.yaml` (or `.yml`/`.json`), relative to the current working directory
+4. User-level operator config: `~/.recollect/config.yaml` (or `.yml`/`.json`)
+5. Legacy default discovery: `./providers.json`, for zero-flag backward compatibility with existing JSON setups
+
+Tiers 1 and 2 are **configured** sources: if either is set but the file is
+missing or fails to parse, the command fails with that path's error — it
+never silently falls back to a lower-precedence tier. Tiers 3–5 are
+**discovery**: they're skipped (not an error) when absent, but once a file is
+found there, the same rule applies — a malformed file at that tier fails
+rather than falling through to the next one.
+
+Both JSON and YAML are accepted at every tier (detected by extension, or by
+content when the extension is absent/ambiguous). YAML is parsed with a safe
+loader only — no arbitrary Python object construction, tags, or code
+execution. Existing JSON configuration files continue to work unmodified;
+`doctor` reports a non-blocking `PROVIDERS_CONFIG_LEGACY_JSON_FORMAT` info
+finding when the resolved file is JSON, noting that YAML is also supported.
 
 ## Task lifecycle commands
 
@@ -81,7 +106,7 @@ Runtimes and modes are validated against broker policy before queueing. Legacy `
 
 ### Provider configuration is a startup snapshot
 
-`--providers-config` (providers.json) is read **once**, when the broker/MCP process starts. Editing that file while a broker/MCP server is already running has no effect until you restart it. `doctor` reports the active snapshot as a `PROVIDER_CONFIG_LIFECYCLE` finding — the resolved source path (or `not_configured` if no file is in use), the UTC timestamp the running process loaded it, and a `restart_required_for_changes: true` flag with a reminder in `remediation`. The same data is available over MCP; see [mcp.md](mcp.md#provider-configuration-is-a-startup-snapshot).
+The resolved provider configuration file (see [resolution order](#provider-configuration-resolution-order) above) is read **once**, when the broker/MCP process starts. Editing that file while a broker/MCP server is already running has no effect until you restart it. `doctor` reports the active snapshot as a `PROVIDER_CONFIG_LIFECYCLE` finding — the resolved source path (or `not_configured` if no file is in use), which precedence tier selected it (`source_origin`: `explicit`, `env`, `repo_local`, `user_level`, `legacy_default`, or `not_configured`), the UTC timestamp the running process loaded it, and a `restart_required_for_changes: true` flag with a reminder in `remediation`. The same data is available over MCP; see [mcp.md](mcp.md#provider-configuration-is-a-startup-snapshot).
 
 ## Help output (verified)
 

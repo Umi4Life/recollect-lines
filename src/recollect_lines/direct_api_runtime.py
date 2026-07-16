@@ -83,6 +83,7 @@ class OpenAiCompatibleDirectRuntime:
         providers: dict[str, ProviderConfig],
         environ: dict[str, str] | None = None,
         config_source: Path | None = None,
+        config_source_origin: str | None = None,
     ):
         if not providers:
             raise ProviderConfigError("At least one provider configuration is required")
@@ -92,6 +93,12 @@ class OpenAiCompatibleDirectRuntime:
         # starts. config_source/loaded_at exist so diagnostics can truthfully say
         # a later on-disk edit to that file has not (yet) reached this process.
         self.config_source = config_source
+        # Which precedence tier selected config_source (explicit, env,
+        # repo_local, user_level, legacy_default) -- see providers.py
+        # resolve_providers_config_source(). None when the caller constructed
+        # this runtime with a source but did not resolve it through that
+        # precedence order (treated as "explicit" by discovery.py).
+        self.config_source_origin = config_source_origin
         self.loaded_at = datetime.now(timezone.utc)
 
     @property

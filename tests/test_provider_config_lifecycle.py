@@ -18,6 +18,7 @@ from pathlib import Path
 
 from recollect_lines.discovery import provider_config_lifecycle
 from recollect_lines.doctor import run_doctor
+from recollect_lines.providers import provider_config_format
 from recollect_lines.service import Broker
 
 SECRET = "sk-super-secret-value-must-not-appear"
@@ -51,6 +52,7 @@ class ProviderConfigLifecycleTests(unittest.TestCase):
         try:
             lifecycle = provider_config_lifecycle(broker.direct_api_runtime)
             self.assertEqual(lifecycle["source"], "not_configured")
+            self.assertEqual(lifecycle["source_origin"], "not_configured")
             self.assertIsNone(lifecycle["loaded_at"])
             self.assertTrue(lifecycle["restart_required_for_changes"])
             self.assertIn("restart", lifecycle["note"].lower())
@@ -68,6 +70,40 @@ class ProviderConfigLifecycleTests(unittest.TestCase):
             self.assertEqual(lifecycle["loaded_at"], broker.direct_api_runtime.loaded_at.isoformat())
         finally:
             broker.close()
+
+    def test_diagnostic_reports_default_origin_when_unspecified(self):
+        # A Broker constructed the old way (bare providers_config, no origin
+        # kwarg) is indistinguishable from an explicit --providers-config use.
+        broker = Broker(self.tmp / "home-origin-default", providers_config=self.config, environ=self.environ)
+        try:
+            lifecycle = broker.discover_capabilities()["provider_config"]
+            self.assertEqual(lifecycle["source_origin"], "explicit")
+        finally:
+            broker.close()
+
+    def test_diagnostic_reports_resolved_precedence_origin(self):
+        broker = Broker(
+            self.tmp / "home-origin-repo-local",
+            providers_config=self.config,
+            providers_config_origin="repo_local",
+            environ=self.environ,
+        )
+        try:
+            lifecycle = broker.discover_capabilities()["provider_config"]
+            self.assertEqual(lifecycle["source"], str(self.config))
+            self.assertEqual(lifecycle["source_origin"], "repo_local")
+        finally:
+            broker.close()
+
+    def test_doctor_surfaces_resolved_origin(self):
+        report, _ = run_doctor(
+            home=self.tmp / "home-doctor-origin",
+            providers_config=self.config,
+            providers_config_origin="user_level",
+            environ=self.environ,
+        )
+        findings = {f["code"]: f for f in report["findings"]}
+        self.assertEqual(findings["PROVIDER_CONFIG_LIFECYCLE"]["details"]["source_origin"], "user_level")
 
     def test_doctor_surfaces_the_same_lifecycle_finding(self):
         report, _ = run_doctor(home=self.tmp / "home-doctor", providers_config=self.config, environ=self.environ)
@@ -119,6 +155,35 @@ class ProviderConfigLifecycleTests(unittest.TestCase):
 
         report, _ = run_doctor(home=self.tmp / "home-f", providers_config=self.config, environ=self.environ)
         self.assertNotIn(SECRET, json.dumps(report))
+
+    def test_doctor_flags_legacy_json_format_non_blocking(self):
+        report, exit_code = run_doctor(home=self.tmp / "home-legacy-json", providers_config=self.config, environ=self.environ)
+        findings = {f["code"]: f for f in report["findings"]}
+        self.assertIn("PROVIDERS_CONFIG_LEGACY_JSON_FORMAT", findings)
+        legacy = findings["PROVIDERS_CONFIG_LEGACY_JSON_FORMAT"]
+        self.assertEqual(legacy["severity"], "info")
+        self.assertEqual(legacy["status"], "ok")
+        # Legacy JSON is informational only; other doctor checks may still yield degraded.
+        self.assertIn(report["status"], {"degraded", "ok"})
+        self.assertEqual(exit_code, 0)
+
+    def test_doctor_does_not_flag_yaml_as_legacy(self):
+        yaml_config = self.tmp / "config.yaml"
+        yaml_config.write_text(
+            "providers:\n"
+            "  local:\n"
+            "    kind: openai-compatible\n"
+            "    base_url: http://127.0.0.1:8765/v1\n"
+            "    api_key_env: LOCAL_KEY\n"
+            "    default_model: model-a\n"
+            "    allow_insecure_http: true\n"
+        )
+        self.assertEqual(provider_config_format(yaml_config), "yaml")
+        report, _ = run_doctor(home=self.tmp / "home-yaml", providers_config=yaml_config, environ=self.environ)
+        findings = {f["code"]: f for f in report["findings"]}
+        self.assertNotIn("PROVIDERS_CONFIG_LEGACY_JSON_FORMAT", findings)
+        self.assertIn("PROVIDERS_CONFIG_VALID", findings)
+        self.assertEqual(findings["PROVIDERS_CONFIG_VALID"]["details"]["path"], str(yaml_config.resolve()))
 
 
 if __name__ == "__main__":

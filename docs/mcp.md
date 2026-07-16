@@ -92,13 +92,14 @@ Errors use `"ok": false` and `"error": { "code", "message" }` at the envelope le
 ```json
 {
   "source": "/path/to/providers.json",
+  "source_origin": "explicit",
   "loaded_at": "2026-07-16T13:59:41.475052+00:00",
   "restart_required_for_changes": true,
-  "note": "Provider configuration is a startup snapshot: providers.json (if any) is read once when the broker/MCP process starts. Editing the file on disk afterward does not change the running process — restart the broker/MCP server to load changes."
+  "note": "Provider configuration is a startup snapshot: the resolved configuration file (if any) is read once when the broker/MCP process starts. Editing the file on disk afterward does not change the running process — restart the broker/MCP server to load changes."
 }
 ```
 
-`source` is `"not_configured"` when no `--providers-config` was passed. `loaded_at` is when *this* process read the file — not when it was last modified on disk. There is no hot reload: if you edit providers.json, this MCP server will keep serving the old snapshot until it is restarted. Never contains credential values.
+`source` is `"not_configured"` when no provider configuration file was resolved from any tier. `source_origin` names which precedence tier selected `source`: `explicit` (`--providers-config`), `env` (`RECOLLECT_CONFIG`), `repo_local` (`./.recollect/config.{yaml,yml,json}`), `user_level` (`~/.recollect/config.{yaml,yml,json}`), `legacy_default` (`./providers.json`), or `not_configured`. See [cli.md](cli.md#provider-configuration-resolution-order) for the full precedence order and its fail-truthfully rule for configured (explicit/env) sources. `loaded_at` is when *this* process read the file — not when it was last modified on disk. There is no hot reload: if you edit the file, this MCP server will keep serving the old snapshot until it is restarted. Never contains credential values. Both JSON and YAML (safe-loaded only) are supported.
 
 ## Host configuration example
 

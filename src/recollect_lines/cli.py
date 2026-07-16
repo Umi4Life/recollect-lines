@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .claude_code_adapter import ClaudeCodeAdapter
@@ -12,6 +13,7 @@ from .opencode_adapter import OpenCodeAdapter
 from .doctor import format_human_report as format_doctor_report, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .operator_control import OperatorControlRefused
+from .providers import resolve_providers_config_source
 from .service import Broker
 
 
@@ -52,7 +54,12 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--providers-config", type=Path, default=None,
-        help="Path to a JSON provider configuration file (required for openai_compatible profile tasks).",
+        help=(
+            "Path to a JSON or YAML provider configuration file (required for openai_compatible "
+            "profile tasks). Highest-precedence source; see docs/cli.md for the full resolution "
+            "order (RECOLLECT_CONFIG env var, repo-local/user-level operator config, then the "
+            "legacy providers.json default)."
+        ),
     )
     p.add_argument(
         "--agent-profiles-config", type=Path, default=None,
@@ -199,11 +206,18 @@ def main(argv: list[str] | None = None) -> int:
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
     cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
+    resolved_config = resolve_providers_config_source(
+        explicit=args.providers_config,
+        environ=os.environ,
+        repo_root=Path.cwd(),
+        user_home=Path.home(),
+    )
     if args.command == "doctor":
         report, exit_code = run_doctor(
             home=args.home,
             workspace=args.workspace,
-            providers_config=args.providers_config,
+            providers_config=resolved_config.path,
+            providers_config_origin=resolved_config.origin,
             opencode_adapter=opencode_adapter,
             claude_code_adapter=claude_code_adapter,
             codex_adapter=codex_adapter,
@@ -219,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             home=args.home,
             profile=args.profile,
             provider=args.provider,
-            providers_config=args.providers_config,
+            providers_config=resolved_config.path,
             output=args.output,
             max_cost_usd=args.max_cost_usd,
             execute_live=args.execute_live,
@@ -241,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         claude_code_adapter=claude_code_adapter,
         codex_adapter=codex_adapter,
         cursor_adapter=cursor_adapter,
-        providers_config=args.providers_config,
+        providers_config=resolved_config.path,
+        providers_config_origin=resolved_config.origin,
         agent_profiles_config=args.agent_profiles_config,
     )
     try:

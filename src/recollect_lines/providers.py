@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from .cursor_adapter import redact_secrets
@@ -21,6 +21,67 @@ PROVIDER_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 OPENAI_COMPATIBLE_KIND = "openai-compatible"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# Configuration-resolution precedence (Wave 2 / PR 4). Highest first: an
+# explicit --providers-config/constructor argument always wins; RECOLLECT_CONFIG
+# is the next-highest "configured" source. Both are configured sources -- if
+# either points at a missing/invalid file, that failure is reported with its
+# own path rather than silently falling through to a lower-precedence source.
+# The remaining tiers are discovery-based (skipped, not failed, when absent).
+CONFIG_PATH_ENV_VAR = "RECOLLECT_CONFIG"
+OPERATOR_CONFIG_DIRNAME = ".recollect"
+OPERATOR_CONFIG_BASENAMES = ("config.yaml", "config.yml", "config.json")
+LEGACY_DEFAULT_CONFIG_NAME = "providers.json"
+
+ConfigSourceOrigin = Literal["explicit", "env", "repo_local", "user_level", "legacy_default", "not_configured"]
+
+
+@dataclass(frozen=True)
+class ResolvedProviderConfigSource:
+    path: Path | None
+    origin: ConfigSourceOrigin
+
+
+def _first_existing_operator_config(directory: Path) -> Path | None:
+    for name in OPERATOR_CONFIG_BASENAMES:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def resolve_providers_config_source(
+    *,
+    explicit: Path | None,
+    environ: dict[str, str],
+    repo_root: Path,
+    user_home: Path,
+) -> ResolvedProviderConfigSource:
+    """Resolve which provider configuration file governs this process.
+
+    Precedence, highest to lowest: explicit argument, `RECOLLECT_CONFIG` env
+    var, repo-local operator config (`<repo_root>/.recollect/config.{yaml,yml,json}`),
+    user-level operator config (`<user_home>/.recollect/config.{yaml,yml,json}`),
+    then legacy default discovery (`<repo_root>/providers.json`). Does not
+    read or validate file contents -- callers load the resolved path and let
+    a missing/malformed configured (explicit or env) source fail with its own
+    path rather than silently trying the next tier.
+    """
+    if explicit is not None:
+        return ResolvedProviderConfigSource(explicit, "explicit")
+    env_value = environ.get(CONFIG_PATH_ENV_VAR)
+    if env_value:
+        return ResolvedProviderConfigSource(Path(env_value), "env")
+    repo_local = _first_existing_operator_config(repo_root / OPERATOR_CONFIG_DIRNAME)
+    if repo_local is not None:
+        return ResolvedProviderConfigSource(repo_local, "repo_local")
+    user_level = _first_existing_operator_config(user_home / OPERATOR_CONFIG_DIRNAME)
+    if user_level is not None:
+        return ResolvedProviderConfigSource(user_level, "user_level")
+    legacy = repo_root / LEGACY_DEFAULT_CONFIG_NAME
+    if legacy.is_file():
+        return ResolvedProviderConfigSource(legacy, "legacy_default")
+    return ResolvedProviderConfigSource(None, "not_configured")
 
 # Declarable provider capabilities — validation data only, not routing (Phase 6D).
 ALLOWED_CAPABILITY_KEYS = frozenset({
@@ -186,15 +247,60 @@ def validate_providers_document(data: Any) -> dict[str, ProviderConfig]:
     return providers
 
 
+def _sniff_config_format(path: Path, raw_text: str) -> Literal["json", "yaml"]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "json"
+    if suffix in (".yaml", ".yml"):
+        return "yaml"
+    stripped = raw_text.lstrip()
+    return "json" if stripped.startswith(("{", "[")) else "yaml"
+
+
+def provider_config_format(path: Path) -> Literal["json", "yaml"]:
+    """Detect a provider configuration file's format without validating its schema."""
+    try:
+        raw_text = path.read_text()
+    except OSError as error:
+        raise ProviderConfigError(f"Cannot read provider configuration {path}: {error}") from error
+    return _sniff_config_format(path, raw_text)
+
+
+def _parse_yaml_document(path: Path, raw_text: str) -> Any:
+    try:
+        import yaml
+    except ImportError as error:
+        raise ProviderConfigError(
+            f"Provider configuration {path} is YAML but the 'pyyaml' package is not installed; "
+            "install pyyaml, or provide a JSON provider configuration instead."
+        ) from error
+    try:
+        # yaml.safe_load only: no arbitrary Python object construction, tags,
+        # or code execution -- unlike yaml.load with a non-Safe loader.
+        return yaml.safe_load(raw_text)
+    except yaml.YAMLError as error:
+        raise ProviderConfigError(
+            redact_provider_error(f"Provider configuration {path} is not valid YAML: {error}")
+        ) from error
+
+
 def load_providers_config(path: Path) -> dict[str, ProviderConfig]:
     try:
         raw_text = path.read_text()
     except OSError as error:
         raise ProviderConfigError(f"Cannot read provider configuration {path}: {error}") from error
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as error:
-        raise ProviderConfigError(f"Provider configuration {path} is not valid JSON: {error}") from error
+    fmt = _sniff_config_format(path, raw_text)
+    if fmt == "json":
+        try:
+            data = json.loads(raw_text)
+        except json.JSONDecodeError as error:
+            raise ProviderConfigError(
+                redact_provider_error(f"Provider configuration {path} is not valid JSON: {error}")
+            ) from error
+    else:
+        data = _parse_yaml_document(path, raw_text)
+        if data is None:
+            raise ProviderConfigError(f"Provider configuration {path} is empty")
     return validate_providers_document(data)
 
 

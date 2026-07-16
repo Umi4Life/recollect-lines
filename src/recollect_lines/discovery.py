@@ -243,9 +243,9 @@ def discover_runtimes(
 
 
 PROVIDER_CONFIG_LIFECYCLE_NOTE = (
-    "Provider configuration is a startup snapshot: providers.json (if any) is read once when "
-    "the broker/MCP process starts. Editing the file on disk afterward does not change the "
-    "running process — restart the broker/MCP server to load changes."
+    "Provider configuration is a startup snapshot: the resolved configuration file (if any) "
+    "is read once when the broker/MCP process starts. Editing the file on disk afterward does "
+    "not change the running process — restart the broker/MCP server to load changes."
 )
 
 
@@ -257,12 +257,15 @@ def provider_config_lifecycle(direct_api_runtime: OpenAiCompatibleDirectRuntime 
     """
     if direct_api_runtime is None or direct_api_runtime.config_source is None:
         source = "not_configured"
+        source_origin = "not_configured"
         loaded_at = None
     else:
         source = str(direct_api_runtime.config_source)
+        source_origin = direct_api_runtime.config_source_origin or "explicit"
         loaded_at = direct_api_runtime.loaded_at.isoformat()
     return {
         "source": source,
+        "source_origin": source_origin,
         "loaded_at": loaded_at,
         "restart_required_for_changes": True,
         "note": PROVIDER_CONFIG_LIFECYCLE_NOTE,
