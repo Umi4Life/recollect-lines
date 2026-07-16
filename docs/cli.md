@@ -88,8 +88,8 @@ file are still created but the requested mode may not be enforced by the
 OS — treat the generated config as sensitive regardless of platform.
 
 `init` only establishes local state/config; use `provider add` / `provider test`
-to register and diagnose named providers. It does not install an MCP host
-(also a later PR).
+to register and diagnose named providers, and `mcp install` to register
+`recollect-mcp` with a supported parent host (`cursor`, `claude_code`, `codex`).
 
 ### provider list / add / show / test
 

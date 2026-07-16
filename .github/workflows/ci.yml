@@ -34,6 +34,10 @@ jobs:
       - name: Run integrated side-agent fixture acceptance (MR 8.8)
         run: PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
 
+      - name: Run five-minute operator acceptance (Wave 3 / PR 9)
+        if: matrix.python-version == '3.11'
+        run: python3 scripts/five_minute_acceptance.py
+
       - name: Run clean-install acceptance (Phase 7A)
         if: matrix.python-version == '3.11'
         run: python3 scripts/clean_install_acceptance.py

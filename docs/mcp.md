@@ -91,8 +91,8 @@ Errors use `"ok": false` and `"error": { "code", "message" }` at the envelope le
 
 ```json
 {
-  "source": "/path/to/providers.json",
-  "source_origin": "explicit",
+  "source": "/path/to/.recollect/config.yaml",
+  "source_origin": "repo_local",
   "loaded_at": "2026-07-16T13:59:41.475052+00:00",
   "restart_required_for_changes": true,
   "note": "Provider configuration is a startup snapshot: the resolved configuration file (if any) is read once when the broker/MCP process starts. Editing the file on disk afterward does not change the running process — restart the broker/MCP server to load changes."

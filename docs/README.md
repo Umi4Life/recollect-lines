@@ -6,7 +6,8 @@ Recollect Lines is a **local-first delegation broker**: a parent agent (or human
 
 | Document | Purpose |
 |----------|---------|
-| [getting-started.md](getting-started.md) | Install, 5-minute quick start, supported Python versions |
+| [operator-guide.md](operator-guide.md) | Product orientation: roles, boundaries, security, five-minute path |
+| [getting-started.md](getting-started.md) | Install, clean-operator acceptance, mock quick start |
 | [user-flows.md](user-flows.md) | Operator CLI, parent-agent MCP, and runtime-backend roles |
 | [cli.md](cli.md) | `recollect-lines` commands and honest CLI limitations |
 | [mcp.md](mcp.md) | `recollect-mcp` tools, schemas, host configuration |
