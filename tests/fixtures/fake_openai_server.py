@@ -93,11 +93,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._safe_write(b"{not valid completion json")
             return
         if "SLOW_PAST_ATTEMPT_CAP" in prompt:
-            # Deliberately > OpenAiCompatibleDirectRuntime's hardcoded 5s
-            # per-attempt urlopen timeout (direct_api_runtime.py), but well
-            # under a generous provider deadline — see the regression test
-            # this feeds for why that distinction matters.
-            time.sleep(5.4)
+            # Deliberately > the per-attempt urlopen timeout that used to be
+            # hardcoded to 5s in OpenAiCompatibleDirectRuntime
+            # (direct_api_runtime.py), but comfortably within a 7s provider
+            # deadline — see the regression test this feeds: a single
+            # attempt must now be allowed the full remaining deadline
+            # instead of being aborted at a flat 5s ceiling.
+            time.sleep(5.1)
             body = json.dumps(_chat_response("slow but valid response")).encode()
             self.send_response(200)
             self.end_headers()
