@@ -90,6 +90,19 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--agent-profile", dest="agent_profile", default=None, help="Optional behavioral agent profile name.")
     create.add_argument("--result-schema", dest="result_schema", default=None, help="Normalized result schema (plain-summary, evidence-report, review-findings, implementation-report).")
     create.add_argument(
+        "--task-category",
+        dest="task_category",
+        default=None,
+        choices=("prose", "review", "investigation", "implementation", "unknown"),
+        help="Claude Code task category for permission-mode policy (optional; inferred when omitted).",
+    )
+    create.add_argument(
+        "--claude-permission-mode",
+        dest="claude_permission_mode",
+        default=None,
+        help="Explicit Claude Code --permission-mode override (validated per execution mode).",
+    )
+    create.add_argument(
         "--provider", default=None,
         help="Named provider from --providers-config (required when --runtime openai_compatible).",
     )
@@ -531,6 +544,10 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_fields.add("agent_profile")
             if args.result_schema is not None:
                 explicit_fields.add("result_schema")
+            if args.task_category is not None:
+                explicit_fields.add("task_category")
+            if args.claude_permission_mode is not None:
+                explicit_fields.add("claude_permission_mode")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -550,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
                 model=model,
                 agent_profile=agent_profile,
                 result_schema=result_schema,
+                task_category=args.task_category,
+                claude_permission_mode=args.claude_permission_mode,
                 compatibility=compatibility,
                 explicit_fields=frozenset(explicit_fields),
                 parent_task_id=args.parent_task_id,

@@ -19,6 +19,11 @@ from recollect_lines.service import Broker
 FIXTURE = Path(__file__).parent / "fixtures" / "fake_claude.py"
 
 
+def command_only(adapter: ClaudeCodeAdapter, *args, **kwargs) -> list:
+    command, _decision = adapter.build_command(*args, **kwargs)
+    return command
+
+
 def fake_adapter(grace_period_seconds=2.0, model=None):
     return ClaudeCodeAdapter(command_prefix=(sys.executable, str(FIXTURE)), grace_period_seconds=grace_period_seconds, model=model)
 
@@ -41,12 +46,12 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
 
     def test_build_command_places_prompt_immediately_after_dash_p(self):
         adapter = fake_adapter()
-        command = adapter.build_command("do the thing", "read_only")
+        command = command_only(adapter, "do the thing", "read_only")
         self.assertEqual(command[command.index("-p") + 1], "do the thing")
 
-    def test_build_command_read_only_maps_to_plan_and_disallows_edit_tools(self):
+    def test_build_command_unknown_read_only_defaults_to_plan_with_tool_restrictions(self):
         adapter = fake_adapter()
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertIn("--permission-mode", command)
         self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
         self.assertIn("--disallowedTools", command)
@@ -55,13 +60,40 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
         self.assertIn("Write", disallowed)
         self.assertIn("NotebookEdit", disallowed)
 
+    def test_build_command_prose_debate_read_only_uses_dontask_not_plan(self):
+        adapter = fake_adapter()
+        command, decision = adapter.build_command(
+            "Argue for approach A over B",
+            "read_only",
+            result_schema="plain-summary",
+            task_category="prose",
+        )
+        self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
+        self.assertEqual(decision.task_category, "prose")
+
+    def test_build_command_review_read_only_uses_dontask(self):
+        adapter = fake_adapter()
+        command = command_only(adapter, "review module X", "read_only", result_schema="review-findings")
+        self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
+
+    def test_build_command_explicit_permission_mode_override(self):
+        adapter = fake_adapter()
+        command, decision = adapter.build_command(
+            "summarize",
+            "read_only",
+            result_schema="plain-summary",
+            claude_permission_mode="plan",
+        )
+        self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
+        self.assertEqual(decision.source, "caller_override")
+
     def test_build_command_read_only_restricts_tools_to_a_structural_allowlist_excluding_bash(self):
         # --disallowedTools alone leaves Bash nominally available (confirmed
         # against the real CLI during reconciliation, see docs/history/phases/phase-6a.md);
         # --tools is the actual structural guarantee for read_only, since it
         # narrows the tool *set* the model is given, not just a deny-list.
         adapter = fake_adapter()
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertIn("--tools", command)
         allowed = command[command.index("--tools") + 1]
         self.assertIn("Read", allowed)
@@ -71,14 +103,14 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
 
     def test_build_command_isolated_worktree_maps_to_acceptedits_without_disallowed_tools(self):
         adapter = fake_adapter()
-        command = adapter.build_command("edit stuff", "isolated_worktree")
+        command = command_only(adapter, "edit stuff", "isolated_worktree")
         self.assertEqual(command[command.index("--permission-mode") + 1], "acceptEdits")
         self.assertNotIn("--disallowedTools", command)
         self.assertNotIn("--tools", command)
 
     def test_disallowed_tools_flag_is_always_last_so_nothing_positional_trails_a_variadic_flag(self):
         adapter = fake_adapter()
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertEqual(command[-2], "--disallowedTools")
         # --tools is also variadic; it must precede --disallowedTools (both
         # already argv-final) rather than trail it and risk swallowing it.
@@ -91,18 +123,18 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
 
     def test_build_command_includes_model_when_configured(self):
         adapter = fake_adapter(model="sonnet")
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertIn("--model", command)
         self.assertEqual(command[command.index("--model") + 1], "sonnet")
 
     def test_build_command_omits_model_flag_by_default(self):
         adapter = fake_adapter()
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertNotIn("--model", command)
 
     def test_output_format_json_and_no_session_persistence_are_always_present(self):
         adapter = fake_adapter()
-        command = adapter.build_command("inspect", "read_only")
+        command = command_only(adapter, "inspect", "read_only")
         self.assertEqual(command[command.index("--output-format") + 1], "json")
         self.assertIn("--no-session-persistence", command)
 
@@ -189,6 +221,20 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(run_event["metadata"]["runtime_description"], "Claude Code via claude -p")
         launch = self.broker.store.get_launch(record.id)
         self.assertEqual(launch["adapter"], "claude_code")
+        self.broker.collect(record.id)
+
+    def test_start_records_permission_mode_policy_for_prose_tasks(self):
+        record = self.create(
+            task="Debate whether tabs or spaces win",
+            result_schema="plain-summary",
+            task_category="prose",
+        )
+        self.broker.start(record.id)
+        run_event = next(e for e in self.broker.store.events(record.id) if e["type"] == "task.running")
+        policy = run_event["metadata"]["permission_mode_policy"]
+        self.assertEqual(policy["permission_mode"], "dontAsk")
+        self.assertEqual(policy["task_category"], "prose")
+        self.assertEqual(policy["signals"]["task_category_source"], "explicit")
         self.broker.collect(record.id)
 
     def test_cancel_terminates_process_group_read_only(self):
