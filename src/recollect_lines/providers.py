@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -397,6 +398,36 @@ providers:
 """
 
 
+def write_atomic_text(path: Path, text: str, *, mode: int = 0o600) -> Path:
+    """Write `text` to `path` atomically (temp file + rename) at the given mode.
+
+    Shared primitive for every command that mutates a provider config file --
+    a reader never observes a partially written document, and a crash between
+    write and rename leaves the original file (or nothing) rather than a
+    truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+        os.chmod(path, mode)
+    finally:
+        if tmp_path.exists() and not path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return path
+
+
+def existing_file_mode(path: Path, *, default: int = 0o600) -> int:
+    """The current owner/group/other permission bits of `path`, or `default` if absent."""
+    if not path.exists():
+        return default
+    return stat.S_IMODE(path.stat().st_mode)
+
+
 def write_local_config_file(path: Path, *, force: bool = False, content: str | None = None) -> Path:
     """Write a minimal, safe starter provider configuration.
 
@@ -406,17 +437,14 @@ def write_local_config_file(path: Path, *, force: bool = False, content: str | N
     """
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists; pass force=True (--force) to overwrite")
-    path.parent.mkdir(parents=True, exist_ok=True)
     text = content if content is not None else STARTER_CONFIG_YAML
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
-        os.chmod(path, 0o600)
-    finally:
-        if tmp_path.exists() and not path.exists():
-            tmp_path.unlink(missing_ok=True)
-    return path
+    return write_atomic_text(path, text, mode=0o600)
+
+
+def render_providers_document(providers_raw: dict[str, dict[str, Any]], fmt: Literal["json", "yaml"]) -> str:
+    """Render a raw (unvalidated-shape) `{name: entry}` mapping back to config file text."""
+    document = {"providers": providers_raw}
+    if fmt == "json":
+        return json.dumps(document, indent=2, sort_keys=True) + "\n"
+    import yaml
+    return yaml.safe_dump(document, sort_keys=True, default_flow_style=False)
