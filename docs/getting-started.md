@@ -1,5 +1,7 @@
 # Getting started
 
+Start with [operator-guide.md](operator-guide.md) for what Recollect Lines is (and is not), runtime vs parent-host boundaries, the security model, and troubleshooting from real dogfood failures.
+
 ## Product sentence
 
 > Recollect Lines is a local-first delegation broker that lets a parent agent safely hand bounded work to existing AI coding runtimes and receive attributable, evidence-backed results.
@@ -45,7 +47,33 @@ python3 scripts/clean_install_acceptance.py
 
 This builds a disposable venv, installs the package from local artifacts, and checks `recollect-lines` / `recollect-mcp` help output.
 
-## Five-minute quick start (mock, no provider)
+## Five-minute clean operator path
+
+Hermetic acceptance for a fresh operator — no live provider, network login, or credentials.
+CI runs the same script on every pull request.
+
+```bash
+python3 scripts/five_minute_acceptance.py
+```
+
+The script installs into a disposable venv, then runs:
+
+| Step | Command (conceptual) | Evidence |
+|------|----------------------|----------|
+| Install | local wheel / fallback | `recollect-lines` + `recollect-mcp` on `PATH` |
+| Init | `recollect-lines init --json` | `home_created`, starter `config.yaml` |
+| Validate | `recollect-lines config validate --json` | resolved source, redacted diagnostics |
+| Provider | `provider add --api-key-env …` | credential **reference** only, never the value |
+| Doctor | `recollect-lines doctor --json` | stable schema, no secret echo |
+| MCP | `mcp print` → `mcp install` (temp host file) | registration + initialize ping |
+| Delegate ping | `recollect-mcp` + fixture OpenCode adapter | `delegate` → `collect` → `succeeded` |
+
+See [operator-guide.md](operator-guide.md#five-minute-success-path-clean-environment) for the product context.
+
+### Manual mock quick start (CLI only)
+
+The acceptance script above is the canonical five-minute path. For a minimal
+hands-on mock flow without the venv installer:
 
 Uses the deterministic **mock** profile — no external model or CLI.
 
@@ -125,22 +153,34 @@ It never captures or writes a real credential — the starter config
 references a placeholder environment-variable name only — and it never
 touches an existing config file unless you explicitly pass `--force`. The
 printed report tells you exactly what was created vs. already present, the
-active config source/path, and the next step: adding a real provider is
-planned for a later PR, as is MCP host installation; for now, hand-edit the
-generated `config.yaml` and re-run `recollect-lines config validate`.
+active config source/path, and next steps: `provider add` for a named HTTP
+gateway, `mcp install` for a supported parent host, then `config validate`
+and `doctor`.
 
 ## Provider configuration
 
-For `openai_compatible` tasks, start from
-[`config/providers.example.yaml`](../config/providers.example.yaml) (schema:
-[`config/providers.schema.json`](../config/providers.schema.json)), or use
-`recollect-lines config init` directly if you want a starter file at a
-custom `--path` without the full `init` bootstrap:
+`openai_compatible` is a **text/synthesis** runtime over HTTP — it does not
+supervise workspace-mutating CLI adapters. CLI profiles (`codex`, `claude_code`,
+`cursor`, `opencode`) own subprocess supervision and worktree policy; keep a
+long-lived `recollect-mcp` session when collecting their results.
+
+Preferred operator flow (YAML operator config, not legacy repo-root JSON):
 
 ```bash
-recollect-lines config init            # writes ./.recollect/config.yaml, mode 0600
-recollect-lines config validate --json # resolved source + validation result; secrets redacted
+recollect-lines init                   # or: recollect-lines config init
+recollect-lines provider add --name my_gateway \
+  --base-url https://gateway.example.invalid/v1 \
+  --api-key-env MY_GATEWAY_API_KEY --default-model my-model \
+  --path ./.recollect/config.yaml
+export MY_GATEWAY_API_KEY=...          # secret stays in the environment
+recollect-lines config validate --json # resolved source + validation; secrets redacted
+recollect-lines provider test my_gateway --json
 ```
+
+Start from [`config/providers.example.yaml`](../config/providers.example.yaml)
+(schema: [`config/providers.schema.json`](../config/providers.schema.json)).
+Legacy `./providers.json` still resolves at the lowest precedence tier for
+backward compatibility, but new operators should use `./.recollect/config.yaml`.
 
 See [cli.md](cli.md#provider-configuration-resolution-order) for the full
 resolution order and strict-validation rules.

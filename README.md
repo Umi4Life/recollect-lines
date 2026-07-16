@@ -64,7 +64,13 @@ recollect-lines --help
 recollect-mcp --help
 ```
 
-**Offline mock (no provider):** [docs/getting-started.md](docs/getting-started.md#five-minute-quick-start-mock-no-provider)
+**Offline five-minute operator path (no provider):** [docs/operator-guide.md](docs/operator-guide.md#five-minute-success-path-clean-environment)
+
+```bash
+python3 scripts/five_minute_acceptance.py
+```
+
+**Offline mock (CLI only):** [docs/getting-started.md](docs/getting-started.md#manual-mock-quick-start-cli-only)
 
 **Integrated side-agent fixture proof (no provider):** [docs/demos/side-agent-fixture-evidence.json](docs/demos/side-agent-fixture-evidence.json) — reproduce with:
 
@@ -101,6 +107,7 @@ Generic MCP host config:
 ## Documentation
 
 - [docs/README.md](docs/README.md) — documentation index
+- [docs/operator-guide.md](docs/operator-guide.md) — product orientation for fresh operators
 - [docs/getting-started.md](docs/getting-started.md) — install and quick start
 - [docs/user-flows.md](docs/user-flows.md) — operator, parent-agent, and runtime flows
 - [docs/demos/](docs/demos/) — end-to-end proofs
@@ -124,6 +131,7 @@ Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
+python3 scripts/five_minute_acceptance.py
 python3 scripts/mcp_acceptance.py
 python3 scripts/side_agent_fixture_acceptance.py
 python3 scripts/clean_install_acceptance.py
