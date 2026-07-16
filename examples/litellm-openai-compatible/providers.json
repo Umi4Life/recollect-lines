@@ -1,5 +1,4 @@
 {
-  "_comment": "LiteLLM / local OpenAI-compatible gateway example. Secret refs are placeholders — export real values only in your environment, never commit them.",
   "providers": {
     "local_litellm": {
       "kind": "openai-compatible",
