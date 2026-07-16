@@ -6,6 +6,8 @@ message content of the chat-completions JSON body — no outbound network.
 from __future__ import annotations
 
 import json
+import ssl
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,6 +92,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self._safe_write(b"{not valid completion json")
             return
+        if "SLOW_PAST_ATTEMPT_CAP" in prompt:
+            # Deliberately > OpenAiCompatibleDirectRuntime's hardcoded 5s
+            # per-attempt urlopen timeout (direct_api_runtime.py), but well
+            # under a generous provider deadline — see the regression test
+            # this feeds for why that distinction matters.
+            time.sleep(5.4)
+            body = json.dumps(_chat_response("slow but valid response")).encode()
+            self.send_response(200)
+            self.end_headers()
+            self._safe_write(body)
+            return
         if "SLOW" in prompt:
             time.sleep(3)
             body = json.dumps(_chat_response("slow but done")).encode()
@@ -110,16 +123,44 @@ class _Handler(BaseHTTPRequestHandler):
         self._safe_write(body)
 
 
+class _QuietTLSServer(ThreadingHTTPServer):
+    """A client that rejects our (deliberately untrusted) cert aborts the
+    handshake; that's the scenario under test, not a server bug, so don't
+    dump a traceback to stderr for it."""
+
+    def handle_error(self, request, client_address) -> None:
+        if issubclass(sys.exc_info()[0], (ssl.SSLError, OSError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class FakeOpenAiServer:
-    def __init__(self, host: str = "127.0.0.1", port: int = 0):
-        self._httpd = ThreadingHTTPServer((host, port), _Handler)
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        certfile: str | None = None,
+        keyfile: str | None = None,
+    ):
+        server_cls = _QuietTLSServer if certfile is not None else ThreadingHTTPServer
+        self._httpd = server_cls((host, port), _Handler)
+        self._scheme = "http"
+        if certfile is not None:
+            # Wrap the already-bound listening socket (standard idiom for
+            # http.server + ssl): accept() then returns TLS-wrapped client
+            # sockets, no per-connection wiring needed in the handler.
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=certfile, keyfile=keyfile or certfile)
+            self._httpd.socket = context.wrap_socket(self._httpd.socket, server_side=True)
+            self._scheme = "https"
         self.host = host
         self.port = self._httpd.server_address[1]
         self._thread = threading.Thread(target=self._httpd.serve_forever, name="fake-openai", daemon=True)
 
     @property
     def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}/v1"
+        return f"{self._scheme}://{self.host}:{self.port}/v1"
 
     def start(self) -> None:
         self._thread.start()

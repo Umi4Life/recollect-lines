@@ -10,7 +10,8 @@ import warnings
 from contextlib import contextmanager
 from pathlib import Path
 
-from recollect_lines.models import TaskRequest, TaskState
+from recollect_lines.direct_api_runtime import OpenAiCompatibleDirectRuntime
+from recollect_lines.models import TaskRecord, TaskRequest, TaskState
 from recollect_lines.providers import (
     MissingCredentialReference,
     ProviderConfigError,
@@ -20,6 +21,8 @@ from recollect_lines.providers import (
 )
 from recollect_lines.service import Broker
 
+TLS_CERT = Path(__file__).parent / "fixtures" / "tls" / "self_signed_cert.pem"
+TLS_KEY = Path(__file__).parent / "fixtures" / "tls" / "self_signed_key.pem"
 FIXTURE_SERVER = Path(__file__).parent / "fixtures" / "fake_openai_server.py"
 _spec = importlib.util.spec_from_file_location("fake_openai_server", FIXTURE_SERVER)
 assert _spec and _spec.loader
@@ -213,6 +216,65 @@ class DirectApiBrokerTests(unittest.TestCase):
         finally:
             broker.close()
 
+    def test_provider_deadline_exhausts_naturally_without_an_external_timeout_signal(self):
+        # Distinct from test_timeout_transitions_to_timed_out above: that test
+        # exercises the broker's *external* timeout signal (an operator or
+        # liveness component calling broker.timeout()). This one exercises the
+        # runtime's own internal per-request deadline
+        # (direct_api_runtime.py _post_chat_completions' `while
+        # time.monotonic() < deadline` loop) expiring entirely on its own,
+        # with no external intervention — provider deadline exhaustion from
+        # the Wave 0 dogfood findings.
+        doc = provider_document(self.server.base_url, request_timeout_seconds=1)
+        path = Path(self.tempdir.name) / "deadline-exhaustion-providers.json"
+        path.write_text(json.dumps(doc) + "\n")
+        broker = Broker(self.home / "deadline-exhaustion", providers_config=path, environ=self.env)
+        try:
+            record = broker.create(TaskRequest("SLOW request", "/repo", profile="openai_compatible", provider="local"))
+            broker.start(record.id)
+            time.sleep(1.6)
+            collected = broker.collect(record.id)
+            self.assertEqual(collected.state, TaskState.FAILED)
+            result = json.loads(
+                (self.home / "deadline-exhaustion" / "artifacts" / record.id / "result.json").read_text()
+            )
+            self.assertEqual(result["runtime"]["error_category"], "runtime_error")
+            self.assertIn("timed out after 1s", result["runtime"]["error_message"])
+        finally:
+            broker.close()
+
+    def test_response_past_five_second_attempt_cap_but_within_provider_deadline_currently_still_fails(self):
+        # Wave 0 dogfood finding: OpenAiCompatibleDirectRuntime hardcodes
+        # every retry attempt's urlopen timeout to at most 5s
+        # (direct_api_runtime.py _post_chat_completions), regardless of how
+        # much of the overall provider deadline remains. A provider that
+        # legitimately takes just over 5s to respond — but comfortably fits
+        # a larger deadline — gets every attempt aborted at the 5s mark and
+        # retried, so it never actually receives the response that was on
+        # its way. This pins that current (pre-fix) behavior as a
+        # regression baseline, not a target: a fix would let a single
+        # attempt use the full remaining deadline budget instead of a flat
+        # 5s ceiling.
+        doc = provider_document(self.server.base_url, request_timeout_seconds=6)
+        path = Path(self.tempdir.name) / "slow-past-cap-providers.json"
+        path.write_text(json.dumps(doc) + "\n")
+        broker = Broker(self.home / "slow-past-cap", providers_config=path, environ=self.env)
+        try:
+            record = broker.create(TaskRequest(
+                "SLOW_PAST_ATTEMPT_CAP request", "/repo", profile="openai_compatible", provider="local",
+            ))
+            broker.start(record.id)
+            time.sleep(7.2)
+            collected = broker.collect(record.id)
+            self.assertEqual(collected.state, TaskState.FAILED)
+            result = json.loads(
+                (self.home / "slow-past-cap" / "artifacts" / record.id / "result.json").read_text()
+            )
+            self.assertEqual(result["runtime"]["error_category"], "runtime_error")
+            self.assertIn("timed out after 6s", result["runtime"]["error_message"])
+        finally:
+            broker.close()
+
     def test_cancel_running_direct_api_request(self):
         doc = provider_document(self.server.base_url, request_timeout_seconds=30)
         path = Path(self.tempdir.name) / "cancel-providers.json"
@@ -306,6 +368,75 @@ class DirectApiBrokerTests(unittest.TestCase):
             self.assertEqual(reconciled.state, TaskState.FAILED)
         finally:
             broker2.close()
+
+
+class DirectApiTlsCertificateVerificationTests(unittest.TestCase):
+    """A provider whose TLS certificate the client cannot verify (Wave 0
+    dogfood finding, 2026-07-16). The runtime's default SSL context enforces
+    verification (OpenAiCompatibleDirectRuntime._build_ssl_context uses
+    ssl.create_default_context()), so a self-signed cert that never chains to
+    a trusted root must fail the connection. Reproduced fully locally with a
+    fixed, committed self-signed cert (tests/fixtures/tls/) — no LINE
+    endpoint, real credential, or machine CA path involved.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.server = FakeOpenAiServer(certfile=str(TLS_CERT), keyfile=str(TLS_KEY))
+        self.server.start()
+        self.env = {"TEST_OPENAI_API_KEY": "sk-fake-test-key-not-real"}
+        doc = provider_document(self.server.base_url, request_timeout_seconds=1, allow_insecure_http=False)
+        config_path = Path(self.tempdir.name) / "providers.json"
+        config_path.write_text(json.dumps(doc) + "\n")
+        self.broker = Broker(self.home, providers_config=config_path, environ=self.env)
+
+    def tearDown(self):
+        self.broker.close()
+        self.server.stop()
+        self.tempdir.cleanup()
+
+    def test_untrusted_cert_currently_surfaces_as_a_generic_timeout_not_a_tls_error(self):
+        # Pre-fix baseline: every attempt's certificate-verify failure raises
+        # urllib.error.URLError, which the retry loop treats identically to a
+        # transient network blip — it retries until the provider deadline
+        # elapses, then raises a generic TimeoutError whose message never
+        # mentions the real cause. Asserting a TLS-specific error_category
+        # here would assert a product promise the runtime doesn't keep yet;
+        # this pins today's actual, observable failure path instead.
+        record = self.broker.create(TaskRequest("hello", "/repo", profile="openai_compatible", provider="local"))
+        self.broker.start(record.id)
+        time.sleep(1.6)
+        collected = self.broker.collect(record.id)
+        self.assertEqual(collected.state, TaskState.FAILED)
+        result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
+        self.assertEqual(result["runtime"]["error_category"], "runtime_error")
+        self.assertIn("timed out", result["runtime"]["error_message"])
+        self.assertNotIn("sk-fake", result["runtime"]["error_message"])
+
+
+class DirectApiRuntimeExecutionModePolicyTests(unittest.TestCase):
+    """The broker's profile-policy gate (openai_compatible's allowed_modes =
+    {"read_only"}, see models.DEFAULT_PROFILES) already rejects
+    isolated_worktree before any runtime is touched — see
+    DirectApiBrokerTests.test_rejects_isolated_worktree_for_direct_api. This
+    pins the runtime's own defense-in-depth check (direct_api_runtime.py
+    start()) directly, so a future policy misconfiguration can never
+    silently reach a runtime with no honest worktree/tool support.
+    """
+
+    def test_start_rejects_isolated_worktree_even_if_the_policy_gate_is_bypassed(self):
+        providers = validate_providers_document(
+            provider_document("https://api.example.com/v1", allow_insecure_http=False)
+        )
+        runtime = OpenAiCompatibleDirectRuntime(providers, environ={"TEST_OPENAI_API_KEY": "sk-fake-test-key"})
+        request = TaskRequest(
+            "task", "/repo", execution_mode="isolated_worktree", profile="openai_compatible", provider="local",
+        )
+        record = TaskRecord.new(request)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ProviderConfigError, "read_only"):
+                runtime.start(record, Path(tmp))
 
 
 if __name__ == "__main__":

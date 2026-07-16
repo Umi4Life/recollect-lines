@@ -287,6 +287,31 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(result["runtime"]["error_category"], "authentication_error")
         self.assertTrue(result["runtime"]["is_error"])
 
+    def test_missing_noninteractive_auth_currently_classified_as_unparseable_output(self):
+        # Wave 0 dogfood finding (Cursor-as-parent MacBook run, 2026-07-16):
+        # a claude CLI with no stored/non-interactive credentials fails
+        # before it ever reaches a model call — it never prints an
+        # `--output-format json` result object at all, just a stderr hint
+        # and a nonzero exit (see fake_claude.py's NOT_LOGGED_IN branch).
+        # collect() has no result_obj to read an api_error_status from, so
+        # this currently falls through to the generic
+        # process_exit_code-driven "unparseable_output" category rather
+        # than "authentication_error" (contrast with AUTH_ERROR above, an
+        # in-band 401 the CLI *does* get far enough to report structurally).
+        # Asserting "authentication_error" here would assert a product
+        # promise the runtime doesn't keep yet; this pins the actual,
+        # observable failure path — including that the auth hint still
+        # survives in stderr_tail as forensic evidence — as a baseline.
+        record = self.create(task="NOT_LOGGED_IN")
+        self.broker.start(record.id)
+        completed = self.broker.collect(record.id)
+        self.assertEqual(completed.state, TaskState.FAILED)
+        result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
+        self.assertEqual(result["runtime"]["exit_code"], 1)
+        self.assertEqual(result["runtime"]["error_category"], "unparseable_output")
+        self.assertIsNone(result["runtime"]["summary"])
+        self.assertIn("Please run /login", result["runtime"]["stderr_tail"])
+
     def test_rate_limit_error_is_classified_distinctly_from_auth_error(self):
         record = self.create(task="RATE_LIMIT")
         self.broker.start(record.id)

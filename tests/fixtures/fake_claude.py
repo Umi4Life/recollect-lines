@@ -71,6 +71,14 @@ def main():
         result("authentication failed", is_error=True, api_error_status=401)
         return 0
 
+    if "NOT_LOGGED_IN" in prompt:
+        # Missing/non-interactive auth is a launch-time failure, not an
+        # in-band API error: the real CLI never reaches a model call, so it
+        # never prints a `--output-format json` result object at all — just
+        # a stderr hint and a nonzero exit.
+        print("Invalid API key · Please run /login", file=sys.stderr, flush=True)
+        return 1
+
     if "RATE_LIMIT" in prompt:
         result("rate limited", is_error=True, api_error_status=429)
         return 0

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
 from recollect_lines.codex_adapter import CodexAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.result_normalization import (
@@ -22,10 +23,15 @@ from recollect_lines.result_normalization import (
 from recollect_lines.service import Broker
 
 FIXTURE_CODEX = Path(__file__).parent / "fixtures" / "fake_codex.py"
+FIXTURE_CLAUDE = Path(__file__).parent / "fixtures" / "fake_claude.py"
 
 
 def fake_codex_adapter(**kwargs):
     return CodexAdapter(command_prefix=(sys.executable, str(FIXTURE_CODEX)), grace_period_seconds=2.0, **kwargs)
+
+
+def fake_claude_adapter(**kwargs):
+    return ClaudeCodeAdapter(command_prefix=(sys.executable, str(FIXTURE_CLAUDE)), grace_period_seconds=2.0, **kwargs)
 
 
 SCHEMA_FIXTURES = {
@@ -145,6 +151,39 @@ class BrokerNormalizationTests(unittest.TestCase):
         self.assertTrue(envelope["parser"]["warnings"])
         self.assertGreater(envelope["parser"]["malformed_output_lines"], 0)
         self.assertEqual(envelope["runtime_reported"]["summary"], "partial result despite a malformed line")
+
+    def test_claude_code_exit_zero_plain_text_is_fallback_for_a_requested_structured_schema(self):
+        # Wave 0 dogfood finding: a claude -p run that exits 0 with a clean,
+        # well-formed JSON result line (process succeeds, is_error is False)
+        # can still report plain prose in `result` rather than the JSON
+        # object a structured result_schema expects — fake_claude.py's
+        # default branch (no SCHEMA_ prefix) does exactly this. Execution
+        # status and schema-parse status are deliberately asserted
+        # separately here: SUCCEEDED/exit_code 0 is what the runtime
+        # observed; "fallback" parse_status is what the normalizer made of
+        # the *content*, and the two must not be conflated.
+        broker = Broker(self.home / "claude", claude_code_adapter=fake_claude_adapter())
+        try:
+            record = broker.create(TaskRequest(
+                "summarize the incident",
+                str(self.workspace),
+                runtime="claude_code",
+                result_schema="evidence-report",
+                explicit_fields=frozenset({"result_schema"}),
+            ))
+            broker.start(record.id)
+            completed = broker.collect(record.id)
+            self.assertEqual(completed.state, TaskState.SUCCEEDED)
+
+            path = broker.store.artifacts / record.id / NORMALIZED_RESULT_ARTIFACT
+            envelope = json.loads(path.read_text())
+            self.assertEqual(envelope["broker_observed"]["exit_code"], 0)
+            self.assertEqual(envelope["broker_observed"]["terminal_state"], TaskState.SUCCEEDED.value)
+            self.assertEqual(envelope["parser"]["requested_schema"], "evidence-report")
+            self.assertEqual(envelope["parser"]["parse_status"], "fallback")
+            self.assertIn("summarize the incident", envelope["runtime_reported"]["summary"])
+        finally:
+            broker.close()
 
     def test_runtime_commands_are_not_broker_verified(self):
         payload = SCHEMA_FIXTURES["implementation-report"]
