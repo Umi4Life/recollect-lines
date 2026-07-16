@@ -111,6 +111,7 @@ class Broker:
         cursor_adapter: CursorAdapter | None = None,
         fixture_durable_adapter: FixtureDurableAdapter | None = None,
         providers_config: Path | None = None,
+        providers_config_origin: str | None = None,
         agent_profiles_config: Path | None = None,
         agent_profiles: dict | None = None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
@@ -163,6 +164,7 @@ class Broker:
         elif providers_config is not None:
             self.direct_api_runtime = OpenAiCompatibleDirectRuntime(
                 load_providers_config(providers_config), environ=environ, config_source=providers_config,
+                config_source_origin=providers_config_origin,
             )
         else:
             self.direct_api_runtime = None

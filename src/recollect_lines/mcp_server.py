@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -40,6 +41,7 @@ from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VAL
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
+from .providers import resolve_providers_config_source
 from .service import Broker
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -734,9 +736,10 @@ TOOLS = {
         "description": (
             "Return a machine-readable inventory of registered runtime profiles and named provider "
             "configurations with declared/observed capabilities and availability (no credentials or "
-            "raw endpoints). Includes provider_config: the active providers.json source path (or "
-            "not_configured) and when this process loaded it — a startup snapshot; edits to the file "
-            "on disk require restarting the broker/MCP server to take effect."
+            "raw endpoints). Includes provider_config: the active provider configuration source path "
+            "(or not_configured), which precedence tier selected it (source_origin), and when this "
+            "process loaded it — a startup snapshot; edits to the file on disk require restarting "
+            "the broker/MCP server to take effect."
         ),
         "inputSchema": DISCOVER_CAPABILITIES_INPUT_SCHEMA,
         "handler": handle_discover_capabilities,
@@ -928,7 +931,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--providers-config", type=Path, default=None,
-        help="Path to a JSON provider configuration file (required for openai_compatible profile tasks).",
+        help=(
+            "Path to a JSON or YAML provider configuration file (required for openai_compatible "
+            "profile tasks). Highest-precedence source; see docs/mcp.md for the full resolution "
+            "order (RECOLLECT_CONFIG env var, repo-local/user-level operator config, then the "
+            "legacy providers.json default)."
+        ),
     )
     return parser
 
@@ -939,13 +947,20 @@ def main(argv: list[str] | None = None) -> int:
     claude_code_adapter = ClaudeCodeAdapter(command_prefix=tuple(json.loads(args.claude_command))) if args.claude_command else None
     codex_adapter = CodexAdapter(command_prefix=tuple(json.loads(args.codex_command))) if args.codex_command else None
     cursor_adapter = CursorAdapter(command_prefix=tuple(json.loads(args.cursor_command))) if args.cursor_command else None
+    resolved_config = resolve_providers_config_source(
+        explicit=args.providers_config,
+        environ=os.environ,
+        repo_root=Path.cwd(),
+        user_home=Path.home(),
+    )
     broker = Broker(
         args.home,
         opencode_adapter=opencode_adapter,
         claude_code_adapter=claude_code_adapter,
         codex_adapter=codex_adapter,
         cursor_adapter=cursor_adapter,
-        providers_config=args.providers_config,
+        providers_config=resolved_config.path,
+        providers_config_origin=resolved_config.origin,
     )
     try:
         serve(broker, sys.stdin, sys.stdout)
