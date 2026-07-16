@@ -125,6 +125,40 @@ first. Duplicate names fail unless `--force`.
 layer (config, credential reference, capability, TLS, auth, HTTP, connection,
 deadline) rather than collapsed into generic timeouts.
 
+### mcp print / mcp install
+
+Install or preview MCP host registration for parent tools this project
+actually supports as runtimes: `cursor`, `claude_code`, and `codex`. Does
+**not** claim integration for other hosts (Claude Desktop, VS Code, OpenCode,
+etc.).
+
+| Subcommand | Purpose |
+|------------|---------|
+| `mcp print` | Side-effect-free preview of the registration that would be written |
+| `mcp install` | Idempotently merge the registration into the host config, then verify |
+
+```bash
+recollect-lines mcp print --host cursor --scope global
+recollect-lines mcp install --host cursor --scope global --json
+recollect-lines mcp install --host claude_code --scope project --config-path ./.mcp.json
+recollect-lines mcp install --host codex --mcp-command /abs/path/to/recollect-mcp
+```
+
+`--scope global` targets user-level host files (`~/.cursor/mcp.json`,
+`~/.claude.json`, `~/.codex/config.toml`); `--scope project` targets
+`.cursor/mcp.json`, `.mcp.json`, or `.codex/config.toml` under the current
+working directory. Pass `--config-path` to override either default for hermetic
+tests or non-standard layouts.
+
+Generated registrations use absolute `command` paths, optional named
+environment-variable references only (never literal secrets), and the stable
+server name `recollect-lines`. `install` refuses destructive ambiguity when an
+existing entry conflicts, preserves unrelated MCP servers, keeps POSIX file
+modes when practical, and writes an explicit timestamped backup only when the
+target file is actually changed. Post-install verification structurally
+validates the registration, runs offline `doctor` checks, and performs a
+bounded local MCP `initialize` ping against the installed entrypoint.
+
 ### config validate / config init
 
 `config init` is the narrower primitive `init` (above) uses internally to

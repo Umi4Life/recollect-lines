@@ -4,8 +4,8 @@ Establishes the operator home directory (`--home`, default `.recollect`) and
 a minimal starter provider config, creating each only when absent, then runs
 the same offline-safe diagnostic as `config validate` so the reported status
 is truthful (no provider is ever claimed configured unless its file actually
-validates). Provider credential capture (PR 7) and MCP host installation
-(PR 8) are explicitly out of scope here.
+validates). Provider credential capture (PR 7) and MCP host installation (PR 8) live in
+`recollect-lines provider …` and `recollect-lines mcp …` respectively.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ class InitError(RuntimeError):
 
 
 NEXT_STEPS = (
-    "Provider configuration (adding/testing a real provider) is coming in PR 7; "
-    "MCP host installation is coming in PR 8. For now, edit the generated "
+    "Run `recollect-lines mcp install --host <cursor|claude_code|codex>` to register "
+    "recollect-mcp with a supported parent host, or hand-edit the generated "
     "config.yaml with a real endpoint and re-run `recollect-lines config validate`."
 )
 
