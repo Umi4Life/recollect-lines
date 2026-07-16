@@ -110,12 +110,32 @@ recollect-lines --home ~/.recollect doctor
 recollect-lines --home ~/.recollect doctor --json
 ```
 
+## First-time setup
+
+A fresh checkout has no local state yet. `init` is the one safe,
+non-interactive, idempotent command that creates it:
+
+```bash
+recollect-lines init        # creates ./.recollect/ + a starter config.yaml (mode 0600),
+                             # only if either is absent, then runs config validate
+recollect-lines init        # run again any time: no-op if already initialized
+```
+
+It never captures or writes a real credential — the starter config
+references a placeholder environment-variable name only — and it never
+touches an existing config file unless you explicitly pass `--force`. The
+printed report tells you exactly what was created vs. already present, the
+active config source/path, and the next step: adding a real provider is
+planned for a later PR, as is MCP host installation; for now, hand-edit the
+generated `config.yaml` and re-run `recollect-lines config validate`.
+
 ## Provider configuration
 
 For `openai_compatible` tasks, start from
 [`config/providers.example.yaml`](../config/providers.example.yaml) (schema:
-[`config/providers.schema.json`](../config/providers.schema.json)), or generate
-a minimal starter non-interactively:
+[`config/providers.schema.json`](../config/providers.schema.json)), or use
+`recollect-lines config init` directly if you want a starter file at a
+custom `--path` without the full `init` bootstrap:
 
 ```bash
 recollect-lines config init            # writes ./.recollect/config.yaml, mode 0600
