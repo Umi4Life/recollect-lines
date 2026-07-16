@@ -32,6 +32,27 @@ from .providers import (
 RUNTIME_DESCRIPTION = "OpenAI-compatible direct HTTP chat-completions runtime"
 DIRECT_API_PROFILE = "openai_compatible"
 
+# Connection-level errors a subsequent attempt might plausibly clear within
+# the same provider deadline (server mid-restart, transient reset, etc.).
+# Everything else -- TLS/certificate failures, DNS/config errors, malformed
+# URLs -- is deterministic and retrying it only burns the deadline while
+# masking the real cause as a generic timeout.
+_TRANSIENT_CONNECTION_ERRORS = (
+    ConnectionRefusedError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    TimeoutError,
+)
+
+
+class TlsVerificationError(Exception):
+    """A provider's TLS certificate could not be verified against a trusted CA chain. Terminal: never retried."""
+
+
+def _is_transient_url_error(error: urllib.error.URLError) -> bool:
+    return isinstance(error.reason, _TRANSIENT_CONNECTION_ERRORS)
+
 
 @dataclass
 class DirectApiHandle:
@@ -106,7 +127,7 @@ class OpenAiCompatibleDirectRuntime:
             if cancel_event.is_set():
                 return 499, "cancelled", {}
             try:
-                open_timeout = min(5.0, max(0.1, deadline - time.monotonic()))
+                open_timeout = max(0.1, deadline - time.monotonic())
                 if context is None:
                     response_ctx = urllib.request.urlopen(request, timeout=open_timeout)
                 else:
@@ -128,9 +149,18 @@ class OpenAiCompatibleDirectRuntime:
                     parsed = raw
                 return error.code, parsed, headers
             except urllib.error.URLError as error:
-                last_error = error
                 if cancel_event.is_set():
                     return 499, "cancelled", {}
+                if isinstance(error.reason, ssl.SSLError):
+                    raise TlsVerificationError(
+                        redact_provider_error(
+                            f"Provider {config.name!r}: TLS certificate verification failed: {error.reason}",
+                            api_key,
+                        )
+                    ) from error
+                if not _is_transient_url_error(error):
+                    raise
+                last_error = error
                 time.sleep(0.05)
             except TimeoutError as error:
                 last_error = error
@@ -184,6 +214,15 @@ class OpenAiCompatibleDirectRuntime:
                 "summary": None,
                 "error_category": "missing_credential_reference",
                 "error_message": redact_provider_error(str(error)),
+                "runtime_description": RUNTIME_DESCRIPTION,
+            }
+        except TlsVerificationError as error:
+            handle.error = error
+            handle.result = {
+                "exit_code": 1,
+                "summary": None,
+                "error_category": "tls_verification_error",
+                "error_message": redact_provider_error(str(error), api_key),
                 "runtime_description": RUNTIME_DESCRIPTION,
             }
         except Exception as error:

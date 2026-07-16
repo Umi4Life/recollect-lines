@@ -2,15 +2,18 @@ import json
 import importlib.util
 import io
 import os
+import socket
+import ssl
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
 
-from recollect_lines.direct_api_runtime import OpenAiCompatibleDirectRuntime
+from recollect_lines.direct_api_runtime import OpenAiCompatibleDirectRuntime, _is_transient_url_error
 from recollect_lines.models import TaskRecord, TaskRequest, TaskState
 from recollect_lines.providers import (
     MissingCredentialReference,
@@ -224,7 +227,10 @@ class DirectApiBrokerTests(unittest.TestCase):
         # (direct_api_runtime.py _post_chat_completions' `while
         # time.monotonic() < deadline` loop) expiring entirely on its own,
         # with no external intervention — provider deadline exhaustion from
-        # the Wave 0 dogfood findings.
+        # the Wave 0 dogfood findings. This remains a distinct, genuine
+        # failure case after the retry-classification fix: a response that
+        # is truly slower than the whole provider deadline (not just the old
+        # 5s per-attempt cap) must still fail with a truthful timeout.
         doc = provider_document(self.server.base_url, request_timeout_seconds=1)
         path = Path(self.tempdir.name) / "deadline-exhaustion-providers.json"
         path.write_text(json.dumps(doc) + "\n")
@@ -243,19 +249,18 @@ class DirectApiBrokerTests(unittest.TestCase):
         finally:
             broker.close()
 
-    def test_response_past_five_second_attempt_cap_but_within_provider_deadline_currently_still_fails(self):
-        # Wave 0 dogfood finding: OpenAiCompatibleDirectRuntime hardcodes
-        # every retry attempt's urlopen timeout to at most 5s
+    def test_response_past_five_second_attempt_cap_succeeds_within_provider_deadline(self):
+        # Wave 0 dogfood finding, fixed: OpenAiCompatibleDirectRuntime used
+        # to hardcode every retry attempt's urlopen timeout to at most 5s
         # (direct_api_runtime.py _post_chat_completions), regardless of how
-        # much of the overall provider deadline remains. A provider that
+        # much of the overall provider deadline remained. A provider that
         # legitimately takes just over 5s to respond — but comfortably fits
-        # a larger deadline — gets every attempt aborted at the 5s mark and
-        # retried, so it never actually receives the response that was on
-        # its way. This pins that current (pre-fix) behavior as a
-        # regression baseline, not a target: a fix would let a single
-        # attempt use the full remaining deadline budget instead of a flat
-        # 5s ceiling.
-        doc = provider_document(self.server.base_url, request_timeout_seconds=6)
+        # a larger deadline — had every attempt aborted at the 5s mark and
+        # retried, so it never actually received the response that was on
+        # its way. A single attempt is now allowed the full remaining
+        # deadline budget instead of a flat 5s ceiling, so a 5.1s valid
+        # response succeeds well before the 7s provider deadline.
+        doc = provider_document(self.server.base_url, request_timeout_seconds=7)
         path = Path(self.tempdir.name) / "slow-past-cap-providers.json"
         path.write_text(json.dumps(doc) + "\n")
         broker = Broker(self.home / "slow-past-cap", providers_config=path, environ=self.env)
@@ -264,14 +269,13 @@ class DirectApiBrokerTests(unittest.TestCase):
                 "SLOW_PAST_ATTEMPT_CAP request", "/repo", profile="openai_compatible", provider="local",
             ))
             broker.start(record.id)
-            time.sleep(7.2)
+            time.sleep(5.8)
             collected = broker.collect(record.id)
-            self.assertEqual(collected.state, TaskState.FAILED)
+            self.assertEqual(collected.state, TaskState.SUCCEEDED)
             result = json.loads(
                 (self.home / "slow-past-cap" / "artifacts" / record.id / "result.json").read_text()
             )
-            self.assertEqual(result["runtime"]["error_category"], "runtime_error")
-            self.assertIn("timed out after 6s", result["runtime"]["error_message"])
+            self.assertIn("slow but valid response", result["summary"])
         finally:
             broker.close()
 
@@ -370,6 +374,37 @@ class DirectApiBrokerTests(unittest.TestCase):
             broker2.close()
 
 
+class UrlErrorRetryClassificationTests(unittest.TestCase):
+    """Conservative retry classifier (Wave 1 fix): only connection-level
+    blips that a subsequent attempt might clear are retried. TLS/config/DNS
+    errors are deterministic -- retrying them just burns the deadline and
+    masks the real cause as a generic timeout, so they must be terminal.
+    """
+
+    def test_connection_level_errors_are_transient(self):
+        transient_reasons = (
+            ConnectionRefusedError(),
+            ConnectionResetError(),
+            ConnectionAbortedError(),
+            BrokenPipeError(),
+            TimeoutError(),
+        )
+        for reason in transient_reasons:
+            with self.subTest(reason=type(reason).__name__):
+                self.assertTrue(_is_transient_url_error(urllib.error.URLError(reason)))
+
+    def test_tls_and_configuration_errors_are_terminal(self):
+        terminal_reasons = (
+            ssl.SSLCertVerificationError("certificate verify failed"),
+            ssl.SSLError("bad handshake"),
+            socket.gaierror(-2, "Name or service not known"),
+            "unknown url type: ftp",
+        )
+        for reason in terminal_reasons:
+            with self.subTest(reason=reason):
+                self.assertFalse(_is_transient_url_error(urllib.error.URLError(reason)))
+
+
 class DirectApiTlsCertificateVerificationTests(unittest.TestCase):
     """A provider whose TLS certificate the client cannot verify (Wave 0
     dogfood finding, 2026-07-16). The runtime's default SSL context enforces
@@ -386,7 +421,10 @@ class DirectApiTlsCertificateVerificationTests(unittest.TestCase):
         self.server = FakeOpenAiServer(certfile=str(TLS_CERT), keyfile=str(TLS_KEY))
         self.server.start()
         self.env = {"TEST_OPENAI_API_KEY": "sk-fake-test-key-not-real"}
-        doc = provider_document(self.server.base_url, request_timeout_seconds=1, allow_insecure_http=False)
+        # A deliberately generous deadline: the point of this test is that a
+        # certificate-verify failure fails immediately on its own merits, not
+        # because it happened to get timed out by a tight deadline.
+        doc = provider_document(self.server.base_url, request_timeout_seconds=30, allow_insecure_http=False)
         config_path = Path(self.tempdir.name) / "providers.json"
         config_path.write_text(json.dumps(doc) + "\n")
         self.broker = Broker(self.home, providers_config=config_path, environ=self.env)
@@ -396,22 +434,28 @@ class DirectApiTlsCertificateVerificationTests(unittest.TestCase):
         self.server.stop()
         self.tempdir.cleanup()
 
-    def test_untrusted_cert_currently_surfaces_as_a_generic_timeout_not_a_tls_error(self):
-        # Pre-fix baseline: every attempt's certificate-verify failure raises
-        # urllib.error.URLError, which the retry loop treats identically to a
-        # transient network blip — it retries until the provider deadline
-        # elapses, then raises a generic TimeoutError whose message never
-        # mentions the real cause. Asserting a TLS-specific error_category
-        # here would assert a product promise the runtime doesn't keep yet;
-        # this pins today's actual, observable failure path instead.
+    def test_untrusted_cert_fails_rapidly_with_a_truthful_tls_classification(self):
+        # Fixed behavior: a certificate-verify failure raises
+        # urllib.error.URLError wrapping an ssl.SSLCertVerificationError.
+        # OpenAiCompatibleDirectRuntime now recognizes ssl.SSLError as
+        # terminal (never transient) and fails on the first attempt instead
+        # of retrying it until the (here, 30s) provider deadline elapses.
         record = self.broker.create(TaskRequest("hello", "/repo", profile="openai_compatible", provider="local"))
         self.broker.start(record.id)
-        time.sleep(1.6)
+        # Broker.collect() joins the runtime worker thread with no timeout,
+        # so it blocks until the request truly finishes -- timing this call
+        # directly proves the failure is fast, not a lucky early poll of a
+        # still-retrying task.
+        started = time.monotonic()
         collected = self.broker.collect(record.id)
+        elapsed = time.monotonic() - started
         self.assertEqual(collected.state, TaskState.FAILED)
+        # Well under a second, nowhere near the 30s provider deadline.
+        self.assertLess(elapsed, 5.0)
         result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
-        self.assertEqual(result["runtime"]["error_category"], "runtime_error")
-        self.assertIn("timed out", result["runtime"]["error_message"])
+        self.assertEqual(result["runtime"]["error_category"], "tls_verification_error")
+        self.assertIn("certificate verify failed", result["runtime"]["error_message"])
+        self.assertNotIn("timed out", result["runtime"]["error_message"])
         self.assertNotIn("sk-fake", result["runtime"]["error_message"])
 
 
