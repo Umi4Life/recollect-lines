@@ -9,7 +9,9 @@ group cancellation by themselves.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +23,25 @@ PROVIDER_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 OPENAI_COMPATIBLE_KIND = "openai-compatible"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# Strict schema surface (Wave 2 / PR 5): unknown keys are rejected rather than
+# silently ignored, so a misspelled field or a misplaced literal secret is
+# caught at load time instead of silently doing nothing.
+ALLOWED_TOP_LEVEL_KEYS = frozenset({"providers"})
+ALLOWED_PROVIDER_ENTRY_KEYS = frozenset({
+    "kind", "base_url", "api_key_env", "default_model",
+    "request_timeout_seconds", "tls_verify", "allow_insecure_http",
+    "ca_bundle", "capabilities", "estimated_cost_usd_upper_bound",
+})
+# Key names that suggest an operator pasted a literal credential/secret value
+# into the document instead of referencing it via api_key_env. These get a
+# dedicated, more actionable error than a generic "unknown key".
+SECRET_LIKE_KEY_HINTS = frozenset({
+    "api_key", "apikey", "api_secret", "secret", "secrets", "token", "tokens",
+    "password", "passwd", "auth", "authorization", "bearer", "bearer_token",
+    "credential", "credentials", "access_token", "client_secret", "private_key",
+})
+_CA_BUNDLE_INLINE_MARKERS = ("BEGIN CERTIFICATE", "BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "BEGIN EC PRIVATE KEY")
 
 # Configuration-resolution precedence (Wave 2 / PR 4). Highest first: an
 # explicit --providers-config/constructor argument always wins; RECOLLECT_CONFIG
@@ -183,6 +204,18 @@ def _parse_provider_entry(name: str, raw: Any) -> ProviderConfig:
     _validate_provider_name(name)
     if not isinstance(raw, dict):
         raise ProviderConfigError(f"Provider {name!r} must be an object")
+    unknown_keys = set(raw) - ALLOWED_PROVIDER_ENTRY_KEYS
+    if unknown_keys:
+        secret_like = sorted(k for k in unknown_keys if k.lower() in SECRET_LIKE_KEY_HINTS)
+        if secret_like:
+            raise ProviderConfigError(
+                f"Provider {name!r}: field(s) {', '.join(secret_like)} look like a literal "
+                "credential/secret value; provider entries must reference credentials via "
+                "api_key_env (the name of an environment variable), never an inline secret"
+            )
+        raise ProviderConfigError(
+            f"Provider {name!r}: unknown key(s) {', '.join(sorted(unknown_keys))}"
+        )
     kind = raw.get("kind")
     if kind != OPENAI_COMPATIBLE_KIND:
         raise ProviderConfigError(f"Provider {name!r}: kind must be {OPENAI_COMPATIBLE_KIND!r}")
@@ -207,8 +240,14 @@ def _parse_provider_entry(name: str, raw: Any) -> ProviderConfig:
     if not isinstance(allow_insecure_http, bool):
         raise ProviderConfigError(f"Provider {name!r}: allow_insecure_http must be a boolean")
     ca_bundle = raw.get("ca_bundle")
-    if ca_bundle is not None and (not isinstance(ca_bundle, str) or not ca_bundle.strip()):
-        raise ProviderConfigError(f"Provider {name!r}: ca_bundle must be a non-empty string when set")
+    if ca_bundle is not None:
+        if not isinstance(ca_bundle, str) or not ca_bundle.strip():
+            raise ProviderConfigError(f"Provider {name!r}: ca_bundle must be a non-empty string when set")
+        if any(marker in ca_bundle for marker in _CA_BUNDLE_INLINE_MARKERS):
+            raise ProviderConfigError(
+                f"Provider {name!r}: ca_bundle must be a filesystem path to a CA bundle file, "
+                "not inline certificate/key content"
+            )
     _validate_base_url(base_url, allow_insecure_http=allow_insecure_http)
     capabilities = ProviderCapabilities.from_mapping(raw.get("capabilities"))
     estimated_cost = raw.get("estimated_cost_usd_upper_bound")
@@ -236,6 +275,12 @@ def _parse_provider_entry(name: str, raw: Any) -> ProviderConfig:
 def validate_providers_document(data: Any) -> dict[str, ProviderConfig]:
     if not isinstance(data, dict):
         raise ProviderConfigError("Provider configuration must be a top-level object")
+    unknown_top_level = set(data) - ALLOWED_TOP_LEVEL_KEYS
+    if unknown_top_level:
+        raise ProviderConfigError(
+            f"Unknown top-level key(s) {', '.join(sorted(unknown_top_level))}; "
+            "only 'providers' is supported"
+        )
     providers_raw = data.get("providers")
     if not isinstance(providers_raw, dict) or not providers_raw:
         raise ProviderConfigError("'providers' must be a non-empty object")
@@ -301,7 +346,10 @@ def load_providers_config(path: Path) -> dict[str, ProviderConfig]:
         data = _parse_yaml_document(path, raw_text)
         if data is None:
             raise ProviderConfigError(f"Provider configuration {path} is empty")
-    return validate_providers_document(data)
+    try:
+        return validate_providers_document(data)
+    except ProviderConfigError as error:
+        raise ProviderConfigError(f"Provider configuration {path}: {error}") from error
 
 
 def resolve_api_key(config: ProviderConfig, environ: dict[str, str] | None = None) -> str:
@@ -309,7 +357,7 @@ def resolve_api_key(config: ProviderConfig, environ: dict[str, str] | None = Non
 
     Fail closed when the reference is missing, empty, or malformed.
     """
-    env = environ if environ is not None else __import__("os").environ
+    env = environ if environ is not None else os.environ
     value = env.get(config.api_key_env)
     if value is None:
         raise MissingCredentialReference(
@@ -327,3 +375,48 @@ def redact_provider_error(message: str, secret: str | None = None) -> str:
     if secret:
         redacted = redacted.replace(secret, "***REDACTED***")
     return redacted
+
+
+# A minimal, immediately-valid starter config: loopback-only, a placeholder
+# credential-reference name, no real secret. Written non-interactively by
+# `recollect-lines config init`; see config/providers.example.yaml for a
+# fuller annotated reference.
+STARTER_CONFIG_YAML = """\
+# Local provider configuration written by `recollect-lines config init`.
+# Safe to edit. Never put a real API key/token/secret in this file --
+# api_key_env names an environment variable to read the credential from.
+# Full schema: config/providers.example.yaml, config/providers.schema.json,
+# docs/cli.md. CA bundle guidance (incl. macOS): docs/getting-started.md.
+providers:
+  local:
+    kind: openai-compatible
+    base_url: http://127.0.0.1:8000/v1
+    api_key_env: LOCAL_PROVIDER_API_KEY
+    default_model: local-model
+    allow_insecure_http: true
+"""
+
+
+def write_local_config_file(path: Path, *, force: bool = False, content: str | None = None) -> Path:
+    """Write a minimal, safe starter provider configuration.
+
+    Non-interactive (no prompts) and contains no real credentials -- only a
+    placeholder `api_key_env` name. Owner-private (mode 0600) on POSIX;
+    written atomically via a temp file + rename in the destination directory.
+    """
+    if path.exists() and not force:
+        raise FileExistsError(f"{path} already exists; pass force=True (--force) to overwrite")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = content if content is not None else STARTER_CONFIG_YAML
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    finally:
+        if tmp_path.exists() and not path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return path

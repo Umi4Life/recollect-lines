@@ -135,6 +135,50 @@ class ValidateProvidersDocumentTests(unittest.TestCase):
         providers = validate_providers_document(VALID_PROVIDERS_DOCUMENT)
         self.assertEqual(providers["local"].default_model, "local-coder")
 
+    def test_unknown_top_level_key_rejected(self):
+        with self.assertRaises(ProviderConfigError) as ctx:
+            validate_providers_document({**VALID_PROVIDERS_DOCUMENT, "_comment": "hi"})
+        self.assertIn("_comment", str(ctx.exception))
+
+    def test_unknown_provider_entry_key_rejected(self):
+        doc = json.loads(json.dumps(VALID_PROVIDERS_DOCUMENT))
+        doc["providers"]["local"]["notes"] = "extra"
+        with self.assertRaises(ProviderConfigError) as ctx:
+            validate_providers_document(doc)
+        self.assertIn("notes", str(ctx.exception))
+
+    def test_literal_secret_field_rejected_with_actionable_message(self):
+        doc = json.loads(json.dumps(VALID_PROVIDERS_DOCUMENT))
+        doc["providers"]["local"]["api_key"] = "sk-not-allowed-here"
+        with self.assertRaises(ProviderConfigError) as ctx:
+            validate_providers_document(doc)
+        message = str(ctx.exception)
+        self.assertIn("api_key_env", message)
+        self.assertNotIn("sk-not-allowed-here", message)
+
+    def test_ca_bundle_inline_certificate_content_rejected(self):
+        doc = json.loads(json.dumps(VALID_PROVIDERS_DOCUMENT))
+        doc["providers"]["local"]["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----"
+        with self.assertRaises(ProviderConfigError) as ctx:
+            validate_providers_document(doc)
+        self.assertIn("ca_bundle", str(ctx.exception))
+
+    def test_ca_bundle_path_string_accepted(self):
+        doc = json.loads(json.dumps(VALID_PROVIDERS_DOCUMENT))
+        doc["providers"]["local"]["ca_bundle"] = "/etc/ssl/certs/ca-certificates.crt"
+        providers = validate_providers_document(doc)
+        self.assertEqual(providers["local"].ca_bundle, "/etc/ssl/certs/ca-certificates.crt")
+
+
+class LoadProvidersConfigPathContextTests(unittest.TestCase):
+    def test_schema_validation_error_includes_source_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text("providers:\n  Bad-Name:\n    kind: openai-compatible\n")
+            with self.assertRaises(ProviderConfigError) as ctx:
+                load_providers_config(path)
+            self.assertIn(str(path), str(ctx.exception))
+
 
 class ResolveProvidersConfigSourceTests(unittest.TestCase):
     def setUp(self):

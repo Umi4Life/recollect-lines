@@ -110,6 +110,44 @@ recollect-lines --home ~/.recollect doctor
 recollect-lines --home ~/.recollect doctor --json
 ```
 
+## Provider configuration
+
+For `openai_compatible` tasks, start from
+[`config/providers.example.yaml`](../config/providers.example.yaml) (schema:
+[`config/providers.schema.json`](../config/providers.schema.json)), or generate
+a minimal starter non-interactively:
+
+```bash
+recollect-lines config init            # writes ./.recollect/config.yaml, mode 0600
+recollect-lines config validate --json # resolved source + validation result; secrets redacted
+```
+
+See [cli.md](cli.md#provider-configuration-resolution-order) for the full
+resolution order and strict-validation rules.
+
+### CA bundles / custom certificates
+
+A provider's `ca_bundle` field, when set, must be a filesystem path to a CA
+bundle file — never inline certificate/key content. When unset, the system
+default trust store is used. That default differs by platform:
+
+- **Linux**: the distribution's system CA bundle is used automatically
+  (commonly `/etc/ssl/certs/ca-certificates.crt` or
+  `/etc/pki/tls/certs/ca-bundle.crt` depending on distro — you normally don't
+  need to set `ca_bundle` at all).
+- **macOS with the python.org installer**: this Python build does **not**
+  ship with the system trust store wired up. Either run the installer's
+  `Install Certificates.command` (in `/Applications/Python <version>/`) once,
+  or install [`certifi`](https://pypi.org/project/certifi/) and point
+  `ca_bundle` at it: `python3 -c "import certifi; print(certifi.where())"`.
+- **Any platform, explicit override**: install `certifi` and set
+  `ca_bundle` to `certifi.where()`, or point it at any other CA bundle file
+  your organization provides (e.g. a corporate proxy's root CA).
+
+Do not hard-code `/etc/ssl/cert.pem` or any single path as a universal
+default — it does not exist on most Linux distributions and is not the
+right answer on macOS/Windows.
+
 ## Next steps
 
 - [user-flows.md](user-flows.md) — roles, boundaries, runtime matrix

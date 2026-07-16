@@ -1,5 +1,4 @@
 {
-  "_comment": "Mixed inventory: subprocess CLI adapters plus one direct-API provider. Placeholder secret refs only.",
   "providers": {
     "docs_gateway": {
       "kind": "openai-compatible",

@@ -10,10 +10,10 @@ from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
 from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest, translate_delegate_fields
 from .opencode_adapter import OpenCodeAdapter
-from .doctor import format_human_report as format_doctor_report, run_doctor
+from .doctor import format_human_report as format_doctor_report, run_config_validate, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .operator_control import OperatorControlRefused
-from .providers import resolve_providers_config_source
+from .providers import OPERATOR_CONFIG_DIRNAME, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
 
@@ -172,6 +172,22 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Offline-safe operational diagnostics")
     doctor.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
     doctor.add_argument("--workspace", type=Path, default=None, help="Optional workspace path to validate")
+    config_cmd = sub.add_parser("config", help="Provider configuration validation and local file generation")
+    config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
+    config_validate = config_sub.add_parser(
+        "validate",
+        help="Validate the resolved provider configuration (secrets redacted; values are never printed)",
+    )
+    config_validate.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    config_init = config_sub.add_parser(
+        "init",
+        help="Write a minimal starter provider config (mode 0600 on POSIX); non-interactive, no real secrets",
+    )
+    config_init.add_argument(
+        "--path", type=Path, default=None,
+        help=f"Destination file (default: ./{OPERATOR_CONFIG_DIRNAME}/config.yaml)",
+    )
+    config_init.add_argument("--force", action="store_true", help="Overwrite an existing file")
     certify = sub.add_parser("certify", help="Integration certification with explicit target selection")
     certify.add_argument("--profile", required=True, help="Target profile (required; no default)")
     certify.add_argument("--provider", default=None, help="Named provider (required when --profile openai_compatible)")
@@ -227,6 +243,25 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
             print(format_doctor_report(report))
+        return exit_code
+    if args.command == "config":
+        if args.config_command == "init":
+            dest = args.path if args.path is not None else Path.cwd() / OPERATOR_CONFIG_DIRNAME / "config.yaml"
+            try:
+                written = write_local_config_file(dest, force=args.force)
+            except FileExistsError as error:
+                print(json.dumps({"error": {"code": "FileExistsError", "message": str(error)}}, sort_keys=True))
+                return 2
+            print(json.dumps({"written": str(written)}, sort_keys=True))
+            return 0
+        report, exit_code = run_config_validate(
+            providers_config=resolved_config.path,
+            providers_config_origin=resolved_config.origin,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_doctor_report(report, command="config validate"))
         return exit_code
     if args.command == "certify":
         report, exit_code = run_certify(CertifyRequest(

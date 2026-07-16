@@ -216,7 +216,7 @@ def _check_runtime_adapters(broker: Broker) -> list[Finding]:
     return findings
 
 
-def _check_providers_config(
+def check_providers_config(
     providers_config: Path | None,
     environ: dict[str, str],
     *,
@@ -544,7 +544,7 @@ def run_doctor(
     findings.extend(_check_home_directory(home))
     findings.extend(_check_workspace(workspace))
 
-    provider_findings, direct_runtime = _check_providers_config(
+    provider_findings, direct_runtime = check_providers_config(
         providers_config, env, providers_config_origin=providers_config_origin,
     )
     findings.extend(provider_findings)
@@ -588,9 +588,38 @@ def run_doctor(
     return report, exit_code
 
 
-def format_human_report(report: dict[str, Any]) -> str:
+def run_config_validate(
+    *,
+    providers_config: Path | None,
+    providers_config_origin: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Focused, offline-safe provider-config validation/inspection.
+
+    Reports the resolved source and validation result only (no runtime
+    adapter probing). Never prints credential values -- only whether each
+    provider's credential reference is present in the environment.
+    """
+    env = dict(environ if environ is not None else os.environ)
+    provider_findings, direct_runtime = check_providers_config(
+        providers_config, env, providers_config_origin=providers_config_origin,
+    )
+    findings = list(provider_findings)
+    findings.append(_check_provider_config_lifecycle(direct_runtime))
+    overall, exit_code, counts = _aggregate_status(findings)
+    report = {
+        "doctor_schema_version": DOCTOR_SCHEMA_VERSION,
+        "package": {"name": "recollect-lines", "version": __version__},
+        "status": overall,
+        "summary": counts,
+        "findings": [finding.to_dict() for finding in findings],
+    }
+    return report, exit_code
+
+
+def format_human_report(report: dict[str, Any], *, command: str = "doctor") -> str:
     lines = [
-        f"recollect-lines doctor — status: {report['status']}",
+        f"recollect-lines {command} — status: {report['status']}",
         f"package: {report['package']['name']} {report['package']['version']}",
         "",
     ]

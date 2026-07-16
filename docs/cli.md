@@ -40,6 +40,45 @@ execution. Existing JSON configuration files continue to work unmodified;
 `doctor` reports a non-blocking `PROVIDERS_CONFIG_LEGACY_JSON_FORMAT` info
 finding when the resolved file is JSON, noting that YAML is also supported.
 
+### Schema, examples, and strict validation
+
+- [`config/providers.example.yaml`](../config/providers.example.yaml) — an
+  annotated, illustrative starting point (placeholder `api_key_env` names,
+  no real credentials).
+- [`config/providers.schema.json`](../config/providers.schema.json) — a JSON
+  Schema describing the contract (for editor/IDE integration; the
+  authoritative validator is `recollect_lines.providers.validate_providers_document`).
+
+Both the top-level document and each provider entry reject unknown keys —
+a typo or a field that looks like a literal credential (`api_key`, `token`,
+`secret`, `password`, `authorization`, …) fails fast with an actionable
+error rather than being silently ignored. `ca_bundle` must be a filesystem
+path, not inline certificate/key content. Credentials are always referenced
+by `api_key_env` (an environment-variable *name*); no config field ever
+holds a credential value.
+
+Local/operator config files (`.recollect/config.{yaml,yml,json}` and the
+legacy repo-root `providers.json`) are gitignored so they can't be
+accidentally committed; the tracked example and fixture files under
+`config/` and `examples/` are explicitly unaffected.
+
+### config validate / config init
+
+| Subcommand | Purpose |
+|------------|---------|
+| `config validate` | Validate the resolved provider configuration; reports source + result, secrets redacted (values never printed) |
+| `config init` | Write a minimal starter config (default `./.recollect/config.yaml`); non-interactive, no real secrets, mode `0600` on POSIX |
+
+```bash
+recollect-lines config init                       # writes ./.recollect/config.yaml
+recollect-lines config init --path my.yaml --force # overwrite an existing file
+recollect-lines --providers-config my.yaml config validate --json
+```
+
+`config validate` is a focused subset of `doctor` (provider config only, no
+CLI adapter probing); it shares the same `PROVIDERS_CONFIG_*` / `PROVIDER_*`
+findings documented below.
+
 ## Task lifecycle commands
 
 | Command | Purpose |
@@ -100,6 +139,7 @@ Runtimes and modes are validated against broker policy before queueing. Legacy `
 | Command | Purpose |
 |---------|---------|
 | `doctor` | Offline diagnostics (`--json`, optional `--workspace`) |
+| `config validate` / `config init` | Provider config validation (redacted) / local file generation — see [above](#config-validate--config-init) |
 | `certify` | Integration certification (`--profile` required; dry-run default) |
 
 `certify` live execution requires `--execute-live --i-accept-billed-remote-calls` (HTTP providers). CLI adapter certification uses fixture or live modes documented in [history/phases/phase-7b.md](history/phases/phase-7b.md).
@@ -112,7 +152,7 @@ The resolved provider configuration file (see [resolution order](#provider-confi
 
 ```text
 usage: recollect-lines [-h] [--home HOME] ...
-  {create,start,status,complete,collect,cancel,timeout,reconcile,control,verify,list,reconcile-all,discover,select,council,doctor,certify} ...
+  {create,start,status,complete,collect,cancel,timeout,reconcile,control,verify,list,reconcile-all,discover,select,council,doctor,config,certify} ...
 ```
 
 ## Subprocess collection note
