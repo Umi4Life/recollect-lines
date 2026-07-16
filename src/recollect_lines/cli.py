@@ -14,7 +14,14 @@ from .doctor import format_human_report as format_doctor_report, run_config_vali
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .init import InitError, format_human_report as format_init_report, run_init
 from .operator_control import OperatorControlRefused
-from .providers import OPERATOR_CONFIG_DIRNAME, resolve_providers_config_source, write_local_config_file
+from .provider_commands import (
+    format_human_report as format_provider_report,
+    run_provider_add,
+    run_provider_list,
+    run_provider_show,
+    run_provider_test,
+)
+from .providers import OPERATOR_CONFIG_DIRNAME, ProviderConfigError, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
 
@@ -198,6 +205,54 @@ def parser() -> argparse.ArgumentParser:
         help=f"Destination file (default: ./{OPERATOR_CONFIG_DIRNAME}/config.yaml)",
     )
     config_init.add_argument("--force", action="store_true", help="Overwrite an existing file")
+    provider_cmd = sub.add_parser("provider", help="Provider identity management: list, add, show, test (secrets never captured/printed)")
+    provider_sub = provider_cmd.add_subparsers(dest="provider_command", required=True)
+    provider_list = provider_sub.add_parser("list", help="List configured providers (redacted; no secrets)")
+    provider_list.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    provider_show = provider_sub.add_parser("show", help="Show one configured provider (always fully redacted)")
+    provider_show.add_argument("name")
+    provider_show.add_argument(
+        "--redacted", action="store_true",
+        help="Explicit acknowledgement that output is always redacted; no raw secret is ever stored or shown",
+    )
+    provider_show.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    provider_add = provider_sub.add_parser(
+        "add",
+        help="Add a provider entry to a writable local/operator config (never accepts a raw secret value)",
+    )
+    provider_add.add_argument("--name", required=True, help="Provider name (lowercase, matches an existing entry only with --force)")
+    provider_add.add_argument("--base-url", required=True, help="OpenAI-compatible base URL (https, or http for loopback with --allow-insecure-http)")
+    provider_add.add_argument(
+        "--api-key-env", required=True,
+        help="Name of an environment variable holding the credential -- never a raw secret value",
+    )
+    provider_add.add_argument("--default-model", required=True)
+    provider_add.add_argument("--request-timeout-seconds", type=int, default=None)
+    provider_add.add_argument("--allow-insecure-http", action="store_true", help="Required to use an http:// loopback base_url")
+    provider_add.add_argument("--ca-bundle", default=None, help="Filesystem path to a custom CA bundle (never inline cert/key content)")
+    provider_add.add_argument(
+        "--capability", dest="capabilities", action="append", default=None,
+        help="KEY=true|false, repeatable (e.g. --capability streaming=true)",
+    )
+    provider_add.add_argument("--estimated-cost-usd-upper-bound", type=float, default=None)
+    provider_add.add_argument(
+        "--path", type=Path, default=None,
+        help="Explicit destination config file, bypassing precedence resolution",
+    )
+    provider_add.add_argument("--force", action="store_true", help="Overwrite an existing provider entry with the same name")
+    provider_add.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    provider_test = provider_sub.add_parser(
+        "test",
+        help="Layered provider diagnostics (config, credential reference, capability); remote probe is opt-in only",
+    )
+    provider_test.add_argument("name")
+    provider_test.add_argument("--live", action="store_true", help="Opt in to sending one real minimal chat-completions request")
+    provider_test.add_argument(
+        "--i-accept-billed-remote-calls", action="store_true",
+        help="Required with --live: acknowledge a real, possibly billed remote model call",
+    )
+    provider_test.add_argument("--timeout", type=int, default=None, help="Override request_timeout_seconds for the remote probe only")
+    provider_test.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
     certify = sub.add_parser("certify", help="Integration certification with explicit target selection")
     certify.add_argument("--profile", required=True, help="Target profile (required; no default)")
     certify.add_argument("--provider", default=None, help="Named provider (required when --profile openai_compatible)")
@@ -224,6 +279,18 @@ def _merge_capability_flags(fragments: list[str] | None) -> dict[str, bool] | No
             raise ValueError("capability requirements must be JSON objects")
         merged.update(parsed)
     return merged
+
+
+def _parse_provider_capability_flags(fragments: list[str] | None) -> dict[str, bool] | None:
+    if not fragments:
+        return None
+    parsed: dict[str, bool] = {}
+    for fragment in fragments:
+        key, sep, raw_value = fragment.partition("=")
+        if not sep or raw_value.strip().lower() not in ("true", "false"):
+            raise ValueError(f"--capability must be KEY=true|false, got {fragment!r}")
+        parsed[key.strip()] = raw_value.strip().lower() == "true"
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,6 +357,52 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
             print(format_doctor_report(report, command="config validate"))
+        return exit_code
+    if args.command == "provider":
+        try:
+            if args.provider_command == "list":
+                report, exit_code = run_provider_list(
+                    providers_config=resolved_config.path,
+                    providers_config_origin=resolved_config.origin,
+                )
+            elif args.provider_command == "show":
+                report, exit_code = run_provider_show(
+                    providers_config=resolved_config.path,
+                    providers_config_origin=resolved_config.origin,
+                    name=args.name,
+                )
+            elif args.provider_command == "add":
+                report, exit_code = run_provider_add(
+                    name=args.name,
+                    base_url=args.base_url,
+                    api_key_env=args.api_key_env,
+                    default_model=args.default_model,
+                    request_timeout_seconds=args.request_timeout_seconds,
+                    allow_insecure_http=args.allow_insecure_http,
+                    ca_bundle=args.ca_bundle,
+                    capabilities=_parse_provider_capability_flags(args.capabilities),
+                    estimated_cost_usd_upper_bound=args.estimated_cost_usd_upper_bound,
+                    explicit_path=args.path,
+                    resolved_source_path=resolved_config.path,
+                    resolved_source_origin=resolved_config.origin,
+                    force=args.force,
+                )
+            else:
+                report, exit_code = run_provider_test(
+                    name=args.name,
+                    providers_config=resolved_config.path,
+                    providers_config_origin=resolved_config.origin,
+                    live=args.live,
+                    acknowledge_billed_remote_calls=args.i_accept_billed_remote_calls,
+                    timeout_override=args.timeout,
+                )
+        except (ProviderConfigError, ValueError, OSError) as error:
+            print(json.dumps({"error": {"code": type(error).__name__, "message": str(error)}}, sort_keys=True))
+            return 2
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_provider_report(report, command=f"provider {args.provider_command}"))
         return exit_code
     if args.command == "certify":
         report, exit_code = run_certify(CertifyRequest(

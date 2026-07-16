@@ -87,8 +87,43 @@ passed. On non-POSIX platforms (no `os.chmod` semantics), the directory and
 file are still created but the requested mode may not be enforced by the
 OS — treat the generated config as sensitive regardless of platform.
 
-`init` only establishes local state/config; it does not add or test a real
-provider (planned for a later PR) or install an MCP host (also a later PR).
+`init` only establishes local state/config; use `provider add` / `provider test`
+to register and diagnose named providers. It does not install an MCP host
+(also a later PR).
+
+### provider list / add / show / test
+
+Safe provider identity management on the resolved configuration file. Secrets
+are never captured or printed — `provider add` accepts only `--api-key-env`
+(the name of an environment variable), never a raw key/token value.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `provider list` | Configured provider identities, runtime/model metadata, source/origin, and configuration health (redacted) |
+| `provider add` | Append or overwrite one provider entry in a writable local/operator config (atomic write; refuses legacy `providers.json` unless `--path` is explicit) |
+| `provider show --redacted NAME` | One provider entry, fully redacted (`--redacted` is required syntax; output is always redacted) |
+| `provider test NAME` | Layered offline diagnostics (config schema, credential reference, declared capability); remote probe is opt-in only |
+
+```bash
+recollect-lines provider list --json
+recollect-lines provider add --name litellm --base-url https://api.example.com/v1 \
+  --api-key-env LITELLM_API_KEY --default-model gpt-4o-mini --path ./.recollect/config.yaml
+recollect-lines provider show --redacted litellm --json
+recollect-lines provider test litellm --json
+recollect-lines provider test litellm --live --i-accept-billed-remote-calls --json
+```
+
+`provider add` writes to the resolved writable source (`explicit`, `env`,
+`repo_local`, `user_level`) or creates `./.recollect/config.yaml` when nothing
+is configured. It refuses to mutate the legacy repo-root `providers.json`
+discovery tier automatically — pass `--path` explicitly or run `config init`
+first. Duplicate names fail unless `--force`.
+
+`provider test` without `--live` never sends provider network traffic. With
+`--live`, one minimal chat-completions probe is sent only when
+`--i-accept-billed-remote-calls` is also passed. Failures are classified by
+layer (config, credential reference, capability, TLS, auth, HTTP, connection,
+deadline) rather than collapsed into generic timeouts.
 
 ### config validate / config init
 
