@@ -14,6 +14,12 @@ from .doctor import format_human_report as format_doctor_report, run_config_vali
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .init import InitError, format_human_report as format_init_report, run_init
 from .operator_control import OperatorControlRefused
+from .mcp_commands import (
+    McpCommandError,
+    format_human_report as format_mcp_report,
+    run_mcp_install,
+    run_mcp_print,
+)
 from .provider_commands import (
     format_human_report as format_provider_report,
     run_provider_add,
@@ -253,6 +259,46 @@ def parser() -> argparse.ArgumentParser:
     )
     provider_test.add_argument("--timeout", type=int, default=None, help="Override request_timeout_seconds for the remote probe only")
     provider_test.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+    mcp_cmd = sub.add_parser(
+        "mcp",
+        help="Print or install MCP host registration for supported parent tools (cursor, claude_code, codex)",
+    )
+    mcp_sub = mcp_cmd.add_subparsers(dest="mcp_action", required=True)
+    for name, help_text in (
+        ("print", "Side-effect-free preview of the MCP registration for a supported host"),
+        ("install", "Idempotently install the MCP registration into a supported host config file"),
+    ):
+        parser = mcp_sub.add_parser(name, help=help_text)
+        parser.add_argument(
+            "--host",
+            required=True,
+            choices=("cursor", "claude_code", "codex"),
+            help="Parent host to target (only hosts supported as runtimes in this project)",
+        )
+        parser.add_argument(
+            "--scope",
+            default="global",
+            choices=("global", "project"),
+            help="global (user-level) or project-scoped config location",
+        )
+        parser.add_argument(
+            "--config-path",
+            type=Path,
+            default=None,
+            help="Override the host config file path (for hermetic tests or non-default layouts)",
+        )
+        parser.add_argument(
+            "--mcp-command",
+            default=None,
+            help="Override the recollect-mcp executable or module entrypoint (absolute path recommended)",
+        )
+        parser.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
+        if name == "install":
+            parser.add_argument(
+                "--no-verify",
+                action="store_true",
+                help="Skip post-install structural/doctor/delegate verification",
+            )
     certify = sub.add_parser("certify", help="Integration certification with explicit target selection")
     certify.add_argument("--profile", required=True, help="Target profile (required; no default)")
     certify.add_argument("--provider", default=None, help="Named provider (required when --profile openai_compatible)")
@@ -357,6 +403,41 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
             print(format_doctor_report(report, command="config validate"))
+        return exit_code
+    if args.command == "mcp":
+        try:
+            common = {
+                "host": args.host,
+                "scope": args.scope,
+                "home": args.home,
+                "config_path": args.config_path,
+                "mcp_command": args.mcp_command,
+                "repo_root": Path.cwd(),
+                "user_home": Path.home(),
+            }
+            if args.mcp_action == "print":
+                report, exit_code = run_mcp_print(**common)
+                command_label = "mcp print"
+            else:
+                report, exit_code = run_mcp_install(
+                    **common,
+                    verify=not args.no_verify,
+                )
+                command_label = "mcp install"
+        except McpCommandError as error:
+            print(json.dumps({
+                "error": {"code": error.code, "message": error.message, **(
+                    {"remediation": error.remediation} if error.remediation else {}
+                )},
+            }, sort_keys=True))
+            return 2
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            if args.mcp_action == "print":
+                print(report["rendered"].rstrip())
+            else:
+                print(format_mcp_report(report, command=command_label))
         return exit_code
     if args.command == "provider":
         try:

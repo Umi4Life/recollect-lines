@@ -184,8 +184,7 @@ class InitCliTests(unittest.TestCase):
                 cli.main(["--home", str(home), "init"])
             output = buf.getvalue()
             self.assertNotIn(SECRET, output)
-            self.assertIn("PR 7", output)
-            self.assertIn("PR 8", output)
+            self.assertIn("mcp install", output)
 
     def test_cli_init_default_home_under_cwd(self):
         with tempfile.TemporaryDirectory() as tmp:
