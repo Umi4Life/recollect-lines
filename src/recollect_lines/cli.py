@@ -12,6 +12,7 @@ from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest, trans
 from .opencode_adapter import OpenCodeAdapter
 from .doctor import format_human_report as format_doctor_report, run_config_validate, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
+from .init import InitError, format_human_report as format_init_report, run_init
 from .operator_control import OperatorControlRefused
 from .providers import OPERATOR_CONFIG_DIRNAME, resolve_providers_config_source, write_local_config_file
 from .service import Broker
@@ -169,6 +170,15 @@ def parser() -> argparse.ArgumentParser:
     council_validate.add_argument("--plan", required=True, help="JSON council plan")
     council_execute = council_sub.add_parser("execute")
     council_execute.add_argument("--plan", required=True, help="JSON council plan")
+    init_cmd = sub.add_parser(
+        "init",
+        help=(
+            "One-shot local setup: create the --home directory and a starter provider config "
+            "only if absent (mode 0600 on POSIX), then run config validate"
+        ),
+    )
+    init_cmd.add_argument("--force", action="store_true", help="Overwrite an existing operator config file")
+    init_cmd.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
     doctor = sub.add_parser("doctor", help="Offline-safe operational diagnostics")
     doctor.add_argument("--json", action="store_true", help="Emit stable machine-readable JSON")
     doctor.add_argument("--workspace", type=Path, default=None, help="Optional workspace path to validate")
@@ -228,6 +238,24 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=Path.cwd(),
         user_home=Path.home(),
     )
+    if args.command == "init":
+        try:
+            result, exit_code = run_init(
+                home=args.home,
+                force=args.force,
+                explicit_providers_config=args.providers_config,
+                environ=os.environ,
+                repo_root=Path.cwd(),
+                user_home=Path.home(),
+            )
+        except InitError as error:
+            print(json.dumps({"error": {"code": "InitError", "message": str(error)}}, sort_keys=True))
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(format_init_report(result))
+        return exit_code
     if args.command == "doctor":
         report, exit_code = run_doctor(
             home=args.home,

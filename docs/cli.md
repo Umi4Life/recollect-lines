@@ -62,7 +62,39 @@ legacy repo-root `providers.json`) are gitignored so they can't be
 accidentally committed; the tracked example and fixture files under
 `config/` and `examples/` are explicitly unaffected.
 
+### init
+
+`init` is the one-shot bootstrap for a fresh operator: it creates the
+`--home` directory (default `./.recollect`) and a starter provider config
+only if either is absent, then runs the same checks as `config validate` so
+the reported status is truthful — it never claims a provider is configured
+unless its file actually validates.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `init` | Create `--home` + a starter operator config if absent (mode `0600`/`0700` on POSIX), then validate; `--force` to deliberately overwrite an existing config |
+
+```bash
+recollect-lines init               # first run: creates ./.recollect/{,config.yaml}
+recollect-lines init                # second run: idempotent no-op, reports "preserved"
+recollect-lines init --force        # deliberately overwrite an existing operator config
+recollect-lines init --json         # machine-readable report (home/config actions, diagnostics, next steps)
+```
+
+Idempotent and overwrite-safe: a config file already present under `--home`
+(`config.yaml`, `.yml`, or `.json`) is left untouched unless `--force` is
+passed. On non-POSIX platforms (no `os.chmod` semantics), the directory and
+file are still created but the requested mode may not be enforced by the
+OS — treat the generated config as sensitive regardless of platform.
+
+`init` only establishes local state/config; it does not add or test a real
+provider (planned for a later PR) or install an MCP host (also a later PR).
+
 ### config validate / config init
+
+`config init` is the narrower primitive `init` (above) uses internally to
+write the starter file; use it directly when you want a config file at a
+custom `--path` without touching `--home` or running full diagnostics.
 
 | Subcommand | Purpose |
 |------------|---------|
@@ -138,6 +170,7 @@ Runtimes and modes are validated against broker policy before queueing. Legacy `
 
 | Command | Purpose |
 |---------|---------|
+| `init` | One-shot local state/config bootstrap for a fresh operator — see [above](#init) |
 | `doctor` | Offline diagnostics (`--json`, optional `--workspace`) |
 | `config validate` / `config init` | Provider config validation (redacted) / local file generation — see [above](#config-validate--config-init) |
 | `certify` | Integration certification (`--profile` required; dry-run default) |
@@ -152,7 +185,7 @@ The resolved provider configuration file (see [resolution order](#provider-confi
 
 ```text
 usage: recollect-lines [-h] [--home HOME] ...
-  {create,start,status,complete,collect,cancel,timeout,reconcile,control,verify,list,reconcile-all,discover,select,council,doctor,config,certify} ...
+  {create,start,status,complete,collect,cancel,timeout,reconcile,control,verify,list,reconcile-all,discover,select,council,init,doctor,config,certify} ...
 ```
 
 ## Subprocess collection note
