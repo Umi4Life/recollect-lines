@@ -125,7 +125,7 @@ Generic MCP host config:
 | In-flight message steering | Not supported (explicit refusal) |
 | PyPI package | Not published yet |
 
-Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001.md](docs/design/RFC-001.md).
+Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001.md](docs/design/RFC-001.md), [docs/design/RFC-002.md](docs/design/RFC-002.md).
 
 ## Tests and CI
 
@@ -142,4 +142,5 @@ python3 -m compileall -q src tests scripts
 
 - Product requirements: [docs/design/PRD.md](docs/design/PRD.md)
 - Implementation RFC: [docs/design/RFC-001.md](docs/design/RFC-001.md)
+- Completion integrity RFC: [docs/design/RFC-002.md](docs/design/RFC-002.md)
 - Phase implementation records: [docs/history/phases/](docs/history/phases/) (not the user guide)
