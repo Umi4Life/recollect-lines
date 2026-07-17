@@ -28,6 +28,15 @@ jobs:
       - name: Run test suite
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 
+      - name: Run pytest import-path contract (no PYTHONPATH override)
+        run: |
+          python3 -m pip install pytest pytest-subtests
+          env -u PYTHONPATH pytest -q \
+            tests/test_completion_events.py::CompletionEventsTests::test_mcp_completion_events_tool \
+            tests/test_completion_events.py::CompletionEventsTests::test_mcp_delegate_and_delegate_batch_return_completion_cursor \
+            tests/test_task_lineage.py::TaskLineageTests::test_writer_lease_still_blocks_second_isolated_writer \
+            tests/test_task_lineage.py::HostProvenanceDefaultTests::test_origin_kind_does_not_bypass_writer_lease
+
       - name: Run generic MCP-host acceptance harness
         run: python3 scripts/mcp_acceptance.py
 
