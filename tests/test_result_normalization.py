@@ -13,6 +13,7 @@ from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
 from recollect_lines.codex_adapter import CodexAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.result_normalization import (
+    CONTRACT_STATUS_VALUES,
     NORMALIZED_RESULT_ARTIFACT,
     RAW_OUTPUT_ARTIFACT,
     SUPPORTED_RESULT_SCHEMAS,
@@ -182,8 +183,93 @@ class BrokerNormalizationTests(unittest.TestCase):
             self.assertEqual(envelope["parser"]["requested_schema"], "evidence-report")
             self.assertEqual(envelope["parser"]["parse_status"], "fallback")
             self.assertIn("summarize the incident", envelope["runtime_reported"]["summary"])
+            # PR 11: execution success must never be conflated with contract
+            # satisfaction — the state is succeeded, but the contract was not.
+            self.assertEqual(envelope["parser"]["contract_status"], "unsatisfied_fallback")
         finally:
             broker.close()
+
+    def test_meta_response_asking_for_output_format_is_unsatisfied_fallback_not_a_runtime_failure(self):
+        # Literal Wave 4 / PR 11 dogfood incident: Claude exited 0 with a
+        # clean is_error:false result, but the "result" text was a
+        # meta-response asking the parent to choose an output format instead
+        # of the requested structured JSON. The broker must report this
+        # truthfully on three distinct dimensions: execution succeeded
+        # (exit 0, state succeeded), parsing fell back to plain text
+        # (parse_status "fallback"), and the requested contract was not
+        # satisfied (contract_status "unsatisfied_fallback") — never a
+        # runtime failure, and never silently reported as plain success.
+        broker = Broker(self.home / "claude-meta", claude_code_adapter=fake_claude_adapter())
+        try:
+            record = broker.create(TaskRequest(
+                "META_FORMAT_CHOICE summarize the incident",
+                str(self.workspace),
+                runtime="claude_code",
+                result_schema="review-findings",
+                explicit_fields=frozenset({"result_schema"}),
+            ))
+            broker.start(record.id)
+            completed = broker.collect(record.id)
+            self.assertEqual(completed.state, TaskState.SUCCEEDED)
+
+            path = broker.store.artifacts / record.id / NORMALIZED_RESULT_ARTIFACT
+            envelope = json.loads(path.read_text())
+            self.assertEqual(envelope["broker_observed"]["exit_code"], 0)
+            self.assertEqual(envelope["parser"]["requested_schema"], "review-findings")
+            self.assertEqual(envelope["parser"]["parse_status"], "fallback")
+            self.assertEqual(envelope["parser"]["contract_status"], "unsatisfied_fallback")
+
+            status = broker.status(record.id)
+            self.assertEqual(status["normalized_result"]["contract_status"], "unsatisfied_fallback")
+        finally:
+            broker.close()
+
+    def test_contract_status_not_requested_when_no_structured_schema(self):
+        record = self._collect_mock("plain answer")
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["parser"]["requested_schema"], "plain-summary")
+        self.assertEqual(envelope["parser"]["contract_status"], "not_requested")
+
+    def test_contract_status_satisfied_for_valid_structured_result(self):
+        payload = SCHEMA_FIXTURES["review-findings"]
+        record = self._collect_codex(f"SCHEMA_review-findings {payload}", result_schema="review-findings")
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["parser"]["parse_status"], "ok")
+        self.assertEqual(envelope["parser"]["contract_status"], "satisfied")
+
+    def test_contract_status_malformed_for_missing_required_field(self):
+        # review-findings requires both summary and findings; this payload
+        # only has a summary, so the JSON parses but the contract is unmet.
+        record = self._collect_codex(
+            "SCHEMA_review-findings " + json.dumps({"summary": "no findings included"}),
+            result_schema="review-findings",
+        )
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["parser"]["contract_status"], "unsatisfied_malformed")
+
+    def test_contract_status_unavailable_when_child_process_fails(self):
+        record = self.broker.create(TaskRequest(
+            "NONZERO_EXIT do the thing",
+            str(self.workspace),
+            runtime="codex",
+            result_schema="evidence-report",
+            explicit_fields=frozenset({"result_schema"}),
+        ))
+        self.broker.start(record.id)
+        completed = self.broker.collect(record.id)
+        self.assertEqual(completed.state, TaskState.FAILED)
+        envelope = self._normalized(record.id)
+        self.assertEqual(envelope["parser"]["contract_status"], "unavailable")
+
+    def test_contract_status_values_are_closed(self):
+        for schema, payload in SCHEMA_FIXTURES.items():
+            with self.subTest(schema=schema):
+                if schema == "plain-summary":
+                    record = self._collect_mock(payload, result_schema=schema)
+                else:
+                    record = self._collect_codex(f"SCHEMA_{schema} {payload}", result_schema=schema)
+                envelope = self._normalized(record.id)
+                self.assertIn(envelope["parser"]["contract_status"], CONTRACT_STATUS_VALUES)
 
     def test_runtime_commands_are_not_broker_verified(self):
         payload = SCHEMA_FIXTURES["implementation-report"]

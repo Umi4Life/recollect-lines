@@ -72,6 +72,7 @@ from .result_normalization import (
 )
 from .result_schema_prompt import RESULT_SCHEMA_PROMPT_VERSION, compose_launch_prompt
 from .completion_events import completion_events_page
+from .contract_conflict import detect_schema_prose_conflict
 from .store import TaskStore
 from .task_lineage import (
     DEFAULT_LINEAGE_POLICY,
@@ -435,7 +436,25 @@ class Broker:
             )
         if verify_commands is not None:
             self.store.write_artifact(record.id, "verify_commands.json", json.dumps(verify_commands, indent=2) + "\n")
+        conflict = detect_schema_prose_conflict(record.task, effective_result_schema(record))
+        if conflict is not None:
+            self.store.write_artifact(
+                record.id, "schema_conflict_warning.json", json.dumps(conflict, indent=2, sort_keys=True) + "\n",
+            )
+            self.store.event(
+                record.id, "task.schema_conflict_warning", record.state, record.state,
+                "Task prose may not satisfy the requested result_schema contract", conflict,
+            )
         return self.store.transition(record.id, TaskState.QUEUED, "Task queued", {})
+
+    def schema_conflict_warning(self, task_id: str) -> dict[str, str] | None:
+        """Read back the advisory, deterministic pre-delegate signal `create()` may
+        have recorded (see contract_conflict.py): never blocks task creation,
+        so this is purely informational for a caller deciding whether to
+        retry with a different result_schema.
+        """
+        path = self.store.artifacts / task_id / "schema_conflict_warning.json"
+        return json.loads(path.read_text()) if path.is_file() else None
 
     def start(self, task_id: str) -> TaskRecord:
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
@@ -1292,6 +1311,9 @@ class Broker:
         if normalized_path.is_file():
             envelope = json.loads(normalized_path.read_text())
             payload["normalized_result"] = concise_normalized_view(envelope)
+        warning = self.schema_conflict_warning(task_id)
+        if warning is not None:
+            payload["schema_conflict_warning"] = warning
         return payload
 
     def _finalize_workspace(self, task_id: str) -> None:

@@ -196,6 +196,9 @@ def _task_summary(record, broker: Broker | None = None) -> dict:
         compatibility = _read_json_artifact(broker, record.id, "request.json")
         if isinstance(compatibility, dict) and "compatibility" in compatibility:
             summary["compatibility"] = compatibility["compatibility"]
+        warning = broker.schema_conflict_warning(record.id)
+        if warning is not None:
+            summary["schema_conflict_warning"] = warning
         detail = broker.reconcile_detail(record.id)
         if detail is not None:
             summary["reconciliation"] = detail

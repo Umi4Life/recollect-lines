@@ -1,8 +1,28 @@
-"""Provenance-aware structured result normalization (MR 8.6).
+"""Provenance-aware structured result normalization (MR 8.6, extended Wave 4 / PR 11).
 
 Parses runtime-reported output into a versioned envelope with explicit trust
 zones. Unknown result_schema values are rejected before launch; they are never
 silently reinterpreted.
+
+Three outcome dimensions are kept deliberately distinct and never collapsed
+into one another (see the Wave 0 dogfood incident this module exists to make
+un-repeatable: a `claude -p` run exited 0 with a clean meta-response asking
+which output format to use, and the only signal available was a buried
+`parse_status: fallback` next to a top-level task success):
+
+- Execution (`TaskState` / `broker_observed.exit_code`): did the child
+  process/runtime actually run and exit successfully? Purely a function of
+  the runtime's exit code and broker-observed process lifecycle. Never
+  downgraded because parsing or contract satisfaction failed.
+- Parsing (`parser.parse_status`): could the broker extract a summary, and
+  (if structured JSON was expected) did it parse? One of "ok", "partial",
+  "fallback", "failed" — unchanged, existing semantics.
+- Contract (`parser.contract_status`): did the *requested* result_schema
+  contract actually get satisfied? A deterministic function of
+  (requested schema, parse_status, execution outcome) — see
+  `CONTRACT_STATUS_VALUES` below. This is the field a parent should check
+  before trusting `runtime_reported.findings` etc.; `state: succeeded` alone
+  never implies it.
 """
 
 from __future__ import annotations
@@ -31,6 +51,31 @@ SCHEMA_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
     "review-findings": frozenset({"summary", "findings"}),
     "implementation-report": frozenset({"summary"}),
 }
+
+# Stable, documented values for the third outcome dimension (contract
+# satisfaction). Backward compatible: this is an additive field alongside the
+# pre-existing `state` and `parse_status`, never a replacement for either.
+#   "not_requested"          — effective schema is plain-summary (no
+#                               structured contract was asked for); there is
+#                               nothing to satisfy.
+#   "satisfied"               — a structured schema was requested and the
+#                               runtime's output fully satisfied it.
+#   "unsatisfied_fallback"     — a structured schema was requested but the
+#                               runtime returned plain prose instead (no JSON
+#                               payload at all) — the exact dogfood incident.
+#   "unsatisfied_malformed"    — a structured schema was requested and some
+#                               JSON/summary was returned, but it was
+#                               malformed or missing required fields.
+#   "unavailable"              — the child process/runtime did not reach a
+#                               successful terminal state, so there is no
+#                               result to evaluate against any contract.
+CONTRACT_STATUS_VALUES = frozenset({
+    "not_requested",
+    "satisfied",
+    "unsatisfied_fallback",
+    "unsatisfied_malformed",
+    "unavailable",
+})
 
 
 class UnknownResultSchemaError(ValueError):
@@ -160,6 +205,24 @@ def _parse_status_and_warnings(
     return "ok", warnings
 
 
+def _contract_status(schema: str, parse_status: str, final_state: TaskState) -> str:
+    """Deterministic third outcome dimension — see CONTRACT_STATUS_VALUES.
+
+    Never invents information: it is purely a function of values already
+    computed for `state` and `parse_status`, so it can never disagree with
+    them or require its own heuristics.
+    """
+    if final_state not in (TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS):
+        return "unavailable"
+    if schema == DEFAULT_RESULT_SCHEMA:
+        return "not_requested"
+    if parse_status == "ok":
+        return "satisfied"
+    if parse_status == "fallback":
+        return "unsatisfied_fallback"
+    return "unsatisfied_malformed"
+
+
 def _field_present(field: str, runtime_reported: dict[str, Any], structured: dict[str, Any] | None) -> bool:
     if field == "summary":
         value = runtime_reported.get("summary")
@@ -273,6 +336,7 @@ def build_normalized_envelope(
         "parser": {
             "requested_schema": schema,
             "parse_status": parse_status,
+            "contract_status": _contract_status(schema, parse_status, final_state),
             "warnings": warnings,
             "raw_output_artifact": raw_output_artifact,
             "malformed_output_lines": collected.get("malformed_output_lines", 0)
@@ -293,6 +357,7 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
         "state": envelope.get("state"),
         "requested_schema": parser.get("requested_schema"),
         "parse_status": parser.get("parse_status"),
+        "contract_status": parser.get("contract_status"),
         "summary": summary if isinstance(summary, str) else None,
         "warnings": parser.get("warnings") or [],
         "raw_output_artifact": parser.get("raw_output_artifact"),

@@ -210,7 +210,7 @@ findings documented below.
 --profile NAME         (deprecated alias for --runtime)
 --model NAME           (optional; persisted only)
 --agent-profile NAME   (optional behavioral role; persisted only)
---result-schema NAME   (optional result contract; persisted only)
+--result-schema NAME   (optional result contract; see below)
 --task-category prose|review|investigation|implementation|unknown
                        (optional Claude Code permission policy hint; inferred when omitted)
 --claude-permission-mode MODE
@@ -227,6 +227,22 @@ findings documented below.
 ```
 
 Runtimes and modes are validated against broker policy before queueing. Legacy `--profile` follows the same translation rules as MCP; see [migration-runtime-profile.md](migration-runtime-profile.md).
+
+### Result outcome dimensions: execution, parsing, contract
+
+`status` and `collect` (MCP; see [mcp.md](mcp.md#result-outcome-dimensions-execution-parsing-contract)) expose a task's outcome along three deliberately distinct, backward-compatible dimensions that are never collapsed into one another:
+
+| Dimension | Field | Meaning |
+|-----------|-------|---------|
+| Execution | `state` | Did the child process/runtime actually run and exit successfully? Purely the runtime's exit code and process lifecycle. |
+| Parsing | `normalized_result.parse_status` | Could the broker extract a summary and, if structured JSON was expected, parse it? `ok`, `partial`, `fallback`, `failed`. |
+| Contract | `normalized_result.contract_status` | Did the *requested* `--result-schema` contract actually get satisfied? `not_requested`, `satisfied`, `unsatisfied_fallback`, `unsatisfied_malformed`, `unavailable`. |
+
+A `state: succeeded` task can still have `contract_status: unsatisfied_fallback` — e.g. a runtime that exits 0 with a clean, well-formed response but returns plain prose (or a meta-response asking which output format to use) instead of the requested structured JSON. Execution success is never recast as a runtime failure just because parsing or contract satisfaction failed, and a parse/contract failure is never silently reported as a plain success either — check `contract_status` before trusting structured fields like `findings`. `unavailable` means the child process itself did not reach a successful terminal state, so there is nothing to evaluate a contract against; check `state` first in that case.
+
+### Schema/prose conflict warning
+
+`create` (and MCP `delegate`) run a deterministic, advisory check on the task text against a requested structured `--result-schema`: if the task prose reads as an open-ended, unstructured request (e.g. "debate...", "write a story...") that cannot naturally produce a `summary`+`findings` shape, the response and `status` include a `schema_conflict_warning` object (`code`, `requested_schema`, `matched_signal`, `message`). This never blocks or rejects task creation — ambiguous or unmatched text is never flagged — and only a fixed keyword name is ever recorded, never the task text itself.
 
 ### Claude Code permission-mode policy (`claude_code` runtime only)
 

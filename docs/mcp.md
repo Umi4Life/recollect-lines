@@ -66,9 +66,36 @@ Optional:
 
 `root_task_id` and `delegation_depth` are broker-derived and rejected if callers supply them.
 
-`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent and lineage fields, and `compatibility` when a legacy `profile` was translated — not a fabricated completion.
+`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
 
 See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
+
+## Result outcome dimensions: execution, parsing, contract
+
+`status` and `collect` expose a task's outcome along three deliberately distinct, backward-compatible dimensions — none of them is ever inferred from another:
+
+| Dimension | Field | Meaning |
+|-----------|-------|---------|
+| Execution | `state` | Did the child process/runtime actually run and exit successfully? Purely the runtime's exit code and process lifecycle; never downgraded because parsing or contract satisfaction failed. |
+| Parsing | `normalized_result`/`normalized_summary.parse_status` | Could the broker extract a summary and, if structured JSON was expected, parse it? One of `ok`, `partial`, `fallback`, `failed`. |
+| Contract | `normalized_result`/`normalized_summary.contract_status` | Did the *requested* `result_schema` contract actually get satisfied? One of `not_requested` (effective schema is `plain-summary`), `satisfied`, `unsatisfied_fallback` (structured schema requested, runtime returned plain prose — no JSON payload at all), `unsatisfied_malformed` (JSON/summary present but malformed or missing required fields), `unavailable` (the child did not reach a successful terminal state, so there is nothing to evaluate). |
+
+This is what makes the Wave 0 dogfood incident un-repeatable: a `claude -p` run can exit 0 with a clean `is_error: false` result whose text is a meta-response asking which output format to use, rather than the requested JSON. `collect`/`status` then report `state: succeeded` (the process really did succeed) *and* `contract_status: unsatisfied_fallback` (the requested contract was not honored) as separate, equally authoritative fields — a caller must check `contract_status`, not just `state`, before trusting structured fields like `findings`.
+
+## Schema/prose conflict warning
+
+`delegate`/`delegate_batch` run a deterministic, advisory check at create time: if the task text reads as an open-ended, unstructured request (matching a small fixed vocabulary — e.g. "debate", "essay", "story") while a structured `result_schema` (`evidence-report`, `review-findings`, `implementation-report`) was requested, the response and later `status` calls include a `schema_conflict_warning` object:
+
+```json
+{
+  "code": "prose_genre_vs_structured_schema",
+  "requested_schema": "review-findings",
+  "matched_signal": "debate",
+  "message": "Task prose matches an open-ended prose signal ('debate') while result_schema='review-findings' requires a structured JSON contract; the runtime may return plain prose that cannot satisfy it."
+}
+```
+
+This never blocks or rejects task creation, and ambiguous or unmatched task text is never flagged — it exists so a parent can decide to retry with a different `result_schema` *before* spending a runtime call, not to gate delegation. Only the matched keyword name is ever recorded; the task text itself is never inspected beyond that static match or stored in the warning.
 
 ## Tool result envelope
 
