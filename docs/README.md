@@ -19,6 +19,7 @@ Recollect Lines is a **local-first delegation broker**: a parent agent (or human
 |----------|---------|
 | [design/PRD.md](design/PRD.md) | Canonical product requirements |
 | [design/RFC-001.md](design/RFC-001.md) | Implementation architecture, evidence model, known limits |
+| [design/RFC-002.md](design/RFC-002.md) | Completion integrity and capability-warning visibility (accepted) |
 
 ## History (not the user guide)
 
