@@ -237,7 +237,10 @@ def handle_delegate(broker: Broker, args: dict) -> dict:
     record, start_error = _create_and_start(broker, args)
     if start_error is not None:
         raise ValueError(f"Task {record.id} was created but start() raised unexpectedly: {start_error}")
-    return _task_summary(record, broker)
+    return {
+        **_task_summary(record, broker),
+        "completion_cursor": broker.store.event_high_water_mark(),
+    }
 
 
 def handle_delegate_batch(broker: Broker, args: dict) -> dict:
@@ -264,7 +267,10 @@ def handle_delegate_batch(broker: Broker, args: dict) -> dict:
             })
         else:
             outcomes.append({"index": index, "accepted": True, **_task_summary(record, broker)})
-    return {"outcomes": outcomes}
+    return {
+        "outcomes": outcomes,
+        "completion_cursor": broker.store.event_high_water_mark(),
+    }
 
 
 def handle_status(broker: Broker, args: dict) -> dict:
@@ -716,12 +722,23 @@ COMPLETION_EVENTS_INPUT_SCHEMA = {
 
 TOOLS = {
     "delegate": {
-        "description": "Create and start one bounded delegated task. Returns the task id, resulting state, and workspace context — never a fabricated completion.",
+        "description": (
+            "Create and start one bounded delegated task. Returns the task id, resulting state, workspace "
+            "context, and completion_cursor (the global event high-water mark at dispatch time) — never a "
+            "fabricated completion. Poll completion_events with after_event_id=completion_cursor to observe "
+            "this task finish without a guessed sleep."
+        ),
         "inputSchema": DELEGATE_INPUT_SCHEMA,
         "handler": handle_delegate,
     },
     "delegate_batch": {
-        "description": "Create and start a batch of delegated tasks independently. Each item is validated and started on its own; one rejected item does not affect the others.",
+        "description": (
+            "Create and start a batch of delegated tasks independently. Each item is validated and started "
+            "on its own; one rejected item does not affect the others. Returns completion_cursor (the global "
+            "event high-water mark captured once, after the whole batch is dispatched) — poll completion_events "
+            "with after_event_id=completion_cursor to observe this batch's tasks finish, then collect each, "
+            "instead of sleeping a guessed duration between rounds."
+        ),
         "inputSchema": DELEGATE_BATCH_INPUT_SCHEMA,
         "handler": handle_delegate_batch,
     },
@@ -809,8 +826,12 @@ TOOLS = {
     },
     "completion_events": {
         "description": (
-            "Poll durable completion signals from the global append-only event cursor. "
-            "Returns compact terminal/recovery summaries with lineage and normalized result hints — never raw logs."
+            "Poll durable completion signals from the global append-only event cursor. Returns compact "
+            "terminal/recovery summaries with lineage and normalized result hints — never raw logs, never "
+            "the full result (call collect for that). Each call also opportunistically finalizes (non-blocking) "
+            "any task this server process itself launched and still holds a live handle for that has already "
+            "finished, so a parent can poll this in a tight loop instead of sleeping a guessed duration — it "
+            "never blocks on a still-running task and never pushes; the caller always initiates."
         ),
         "inputSchema": COMPLETION_EVENTS_INPUT_SCHEMA,
         "handler": handle_completion_events,

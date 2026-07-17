@@ -41,7 +41,7 @@ Recollect Lines is designed for **parent-directed** delegation:
 
 - The parent chooses runtime, execution mode, timeout, and optional verification.
 - Work is **bounded** (time limits, read-only or isolated worktree modes, explicit refusal of in-flight steering).
-- Multiple children can run under one host operation via `external_root_id`, `parent_task_id`, and `task_tree` — the parent polls completion events and collects normalized results.
+- Multiple children can run under one host operation via `external_root_id`, `parent_task_id`, and `task_tree` — the parent polls `completion_events` (never a fixed sleep between rounds — see [Completion-driven orchestration](#completion-driven-orchestration-no-sleep-loops) below) and collects normalized results.
 - `openai_compatible` is a **text/synthesis** runtime over HTTP; CLI adapters are **workspace-mutating supervisors** when not in `read_only` mode.
 
 When mid-task steering is required, expect an explicit refusal — create a follow-up task with `relationship=continues` instead of session resume.
@@ -83,9 +83,41 @@ Claude Desktop, VS Code, OpenCode-as-host, and other MCP parents are **not** cla
 | Credential model | `api_key_env` names an environment variable | Provider credentials irrelevant; runtime uses its own CLI auth |
 | Collect path | In-process HTTP collect | Subprocess `collect` on the **same** broker/MCP instance that started the task |
 
-**Parent-side materialization:** the parent (MCP host or orchestration script) must keep one long-lived `recollect-mcp` process for subprocess runtimes, call `delegate`, poll `status` or `completion_events`, then `collect`. Short-lived `recollect-lines start` followed by a new-shell `collect` loses the process handle — see [user-flows.md](user-flows.md#cli-limitation-subprocess-collection).
+**Parent-side materialization:** the parent (MCP host or orchestration script) must keep one long-lived `recollect-mcp` process for subprocess runtimes, call `delegate`, poll `completion_events` (a plain `status` call is a passive point read — it never on its own drives a task toward a terminal state), then `collect`. Short-lived `recollect-lines start` followed by a new-shell `collect` loses the process handle — see [user-flows.md](user-flows.md#cli-limitation-subprocess-collection).
 
 For HTTP tasks, the parent supplies `runtime=openai_compatible` and `provider=<name>`; the broker validates config at startup and performs the HTTP call — still no inline secrets in task arguments.
+
+### Completion-driven orchestration (no sleep loops)
+
+The dogfood problem this closes (Wave 5 / PR 13): a parent running several
+delegate rounds (e.g. a bounded model-council comparison, [PRD §3.1](design/PRD.md#31-delegation-shape-dynamic-not-fixed))
+used to sleep a guessed duration between dispatching one round and checking
+whether it finished. That guess is either too short (the parent checks too
+early and has to guess again) or wastefully long. The fix is a poll loop, not
+a bigger guess:
+
+1. **Dispatch** — `delegate`/`delegate_batch`. The response includes
+   `completion_cursor`, the global event high-water mark at that exact
+   moment — the baseline for step 2, with no extra round-trip needed.
+2. **Poll for completions** — call `completion_events` with
+   `after_event_id=completion_cursor` (filtered by `task_id`/`root_task_id`
+   for this round) on a short interval of the parent's own choosing. Each
+   call opportunistically finalizes (non-blocking) any of this round's tasks
+   that have already finished on the same long-lived `recollect-mcp`
+   process, and returns immediately either way — it never blocks behind a
+   task that is still running.
+3. **Collect** — once a task id appears in a completion event, `collect` it
+   for the full artifact-backed result (the event itself is a compact
+   notification only — see [mcp.md](mcp.md#completion-events-polling-contract-wave-5--pr-13)).
+4. **Advance** — start the next round once this round's expected task ids
+   are all accounted for.
+
+This is deliberately bounded observation, not a workflow engine: there is no
+push notification (the parent always initiates each check), no built-in
+retry/backoff or round scheduler, and no automatic winner selection or
+recursive council scheduling — the parent still decides the graph, the round
+count, and when a comparison is "enough" (see [council.py](../src/recollect_lines/council.py)'s
+same non-goals for the bounded council primitive).
 
 ### Runtime capability contract
 
