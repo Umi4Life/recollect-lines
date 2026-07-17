@@ -151,7 +151,13 @@ def parser() -> argparse.ArgumentParser:
     children = sub.add_parser("children", help="List direct child task summaries for a parent task")
     children.add_argument("task_id")
     task_tree = sub.add_parser("task-tree", help="Show bounded task tree for a root task id")
-    task_tree.add_argument("root_task_id")
+    task_tree.add_argument("root_task_id", nargs="?", default=None, help="Broker root_task_id (mutually exclusive with --external-root-id)")
+    task_tree.add_argument(
+        "--external-root-id",
+        dest="external_root_id",
+        default=None,
+        help="Audit lookup: all tasks tagged with this caller-supplied grouping key, across any root_task_id tree",
+    )
     completion_events = sub.add_parser(
         "completion-events",
         help="Poll durable completion signals from the global event cursor",
@@ -630,7 +636,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "children":
             output = {"parent_task_id": args.task_id, "children": broker.children(args.task_id)}
         elif args.command == "task-tree":
-            output = broker.task_tree(args.root_task_id)
+            if bool(args.root_task_id) == bool(args.external_root_id):
+                raise ValueError("task-tree requires exactly one of root_task_id or --external-root-id")
+            if args.external_root_id:
+                output = broker.task_tree_by_external_root(args.external_root_id)
+            else:
+                output = broker.task_tree(args.root_task_id)
         elif args.command == "completion-events":
             states = frozenset(args.states) if args.states else None
             output = broker.completion_events_since(

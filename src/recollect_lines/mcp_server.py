@@ -421,8 +421,13 @@ def handle_task_children(broker: Broker, args: dict) -> dict:
 
 def handle_task_tree(broker: Broker, args: dict) -> dict:
     root_task_id = args.get("root_task_id")
-    if not isinstance(root_task_id, str) or not root_task_id.strip():
-        raise ValueError("'root_task_id' must be a non-empty string")
+    external_root_id = args.get("external_root_id")
+    has_root = isinstance(root_task_id, str) and root_task_id.strip()
+    has_external = isinstance(external_root_id, str) and external_root_id.strip()
+    if bool(has_root) == bool(has_external):
+        raise ValueError("exactly one of 'root_task_id' or 'external_root_id' must be a non-empty string")
+    if has_external:
+        return broker.task_tree_by_external_root(external_root_id.strip())
     return broker.task_tree(root_task_id.strip())
 
 
@@ -684,10 +689,15 @@ TASK_TREE_INPUT_SCHEMA = {
     "properties": {
         "root_task_id": {
             "type": "string",
-            "description": "Broker-tree root task id (must match the task's persisted root_task_id).",
+            "description": "Broker-tree root task id (must match the task's persisted root_task_id). "
+            "Mutually exclusive with external_root_id; exactly one is required.",
+        },
+        "external_root_id": {
+            "type": "string",
+            "description": "Audit lookup: all tasks tagged with this caller-supplied grouping key, across "
+            "any root_task_id tree. Mutually exclusive with root_task_id; exactly one is required.",
         },
     },
-    "required": ["root_task_id"],
 }
 COMPLETION_EVENTS_INPUT_SCHEMA = {
     "type": "object",
@@ -820,7 +830,9 @@ TOOLS = {
         "handler": handle_task_children,
     },
     "task_tree": {
-        "description": "Return a deterministic bounded task tree for a broker root_task_id (concise summaries only).",
+        "description": "Return a deterministic bounded task tree for a broker root_task_id, or an audit lookup "
+        "of all tasks sharing a caller-supplied external_root_id (concise summaries only; exactly one of the two "
+        "filters is required).",
         "inputSchema": TASK_TREE_INPUT_SCHEMA,
         "handler": handle_task_tree,
     },

@@ -197,7 +197,7 @@ findings documented below.
 | `verify` | Run broker-verified commands on a task |
 | `list` | List all tasks |
 | `children` | Direct child task summaries for a parent |
-| `task-tree` | Bounded tree for a broker `root_task_id` |
+| `task-tree` | Bounded tree for a broker `root_task_id`, or an audit lookup by `--external-root-id` |
 | `completion-events` | Poll durable completion signals from the global event cursor |
 
 ### `create` flags
@@ -294,6 +294,15 @@ never observes that task complete on its own (each CLI invocation is a fresh
 process with no in-memory handle); use `recollect-mcp` (one long-lived
 process) or a script driving `Broker` directly for a real no-sleep polling
 loop against real subprocess/API runtimes.
+
+### `task-tree` (`root_task_id` vs `--external-root-id`, Wave 5 / PR 14)
+
+```
+task-tree ROOT_TASK_ID
+task-tree --external-root-id KEY
+```
+
+Exactly one of the positional `ROOT_TASK_ID` or `--external-root-id` is required; both return the same `{truncated, tasks}` shape. `ROOT_TASK_ID` must itself be a tree root (unknown or non-root ids are rejected) and returns that task's full parent-directed delegation tree. `--external-root-id` is an audit lookup: it returns every task explicitly created with that caller-supplied `--external-root-id` tag, across any broker tree, and an unmatched key returns an empty list rather than an error. Unlike `root_task_id`, the tag is not inherited by children automatically — only tasks that were themselves created with it match. Audit trail visibility only; it does not authorize or automate anything.
 
 ## Discovery and routing
 

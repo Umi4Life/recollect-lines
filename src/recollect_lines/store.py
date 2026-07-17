@@ -125,6 +125,10 @@ class TaskStore:
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS tasks_root_task_id ON tasks(root_task_id) WHERE root_task_id IS NOT NULL"
         )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS tasks_external_root_id ON tasks(external_root_id) "
+            "WHERE external_root_id IS NOT NULL"
+        )
         self.connection.execute("UPDATE tasks SET runtime = profile WHERE runtime IS NULL")
         self.connection.executescript(
             """
@@ -242,6 +246,13 @@ class TaskStore:
         rows = self.connection.execute(
             "SELECT * FROM tasks WHERE root_task_id = ? ORDER BY delegation_depth, created_at, id LIMIT ?",
             (root_task_id, limit),
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
+    def list_tasks_by_external_root(self, external_root_id: str, *, limit: int) -> list[TaskRecord]:
+        rows = self.connection.execute(
+            "SELECT * FROM tasks WHERE external_root_id = ? ORDER BY delegation_depth, created_at, id LIMIT ?",
+            (external_root_id, limit),
         ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
