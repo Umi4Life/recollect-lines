@@ -27,6 +27,7 @@ from .provider_commands import (
     run_provider_show,
     run_provider_test,
 )
+from .required_capabilities import RequiredCapabilityValidationError, normalize_required_capabilities
 from .providers import OPERATOR_CONFIG_DIRNAME, ProviderConfigError, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
@@ -101,6 +102,14 @@ def parser() -> argparse.ArgumentParser:
         dest="claude_permission_mode",
         default=None,
         help="Explicit Claude Code --permission-mode override (validated per execution mode).",
+    )
+    create.add_argument(
+        "--required-capability",
+        dest="required_capabilities",
+        action="append",
+        default=None,
+        choices=("workspace.read", "repository.remote.read"),
+        help="Semantic capability required before launch; may be repeated.",
     )
     create.add_argument(
         "--provider", default=None,
@@ -554,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_fields.add("task_category")
             if args.claude_permission_mode is not None:
                 explicit_fields.add("claude_permission_mode")
+            if args.required_capabilities is not None:
+                explicit_fields.add("required_capabilities")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -561,6 +572,14 @@ def main(argv: list[str] | None = None) -> int:
                 agent_profile=args.agent_profile,
                 result_schema=args.result_schema,
             )
+            try:
+                required_capabilities = (
+                    normalize_required_capabilities(args.required_capabilities)
+                    if args.required_capabilities is not None
+                    else ()
+                )
+            except RequiredCapabilityValidationError as error:
+                raise SystemExit(str(error)) from error
             request = TaskRequest(
                 args.task,
                 args.workspace,
@@ -582,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
                 relationship=args.relationship,
                 origin_kind=args.origin_kind,
                 origin_ref=args.origin_ref,
+                required_capabilities=required_capabilities,
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)

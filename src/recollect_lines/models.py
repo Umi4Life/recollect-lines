@@ -213,6 +213,7 @@ class TaskRequest:
     relationship: str | None = None
     origin_kind: str | None = None
     origin_ref: str | None = None
+    required_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -309,6 +310,8 @@ def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
         payload["origin_kind"] = request.origin_kind
     if request.origin_ref is not None:
         payload["origin_ref"] = request.origin_ref
+    if request.required_capabilities:
+        payload["required_capabilities"] = list(request.required_capabilities)
     return payload
 
 
