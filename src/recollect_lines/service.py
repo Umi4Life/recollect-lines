@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -402,6 +403,45 @@ class Broker:
             "tasks": [concise_task_summary(task) for task in tasks],
         }
 
+    def _pump_finished_handles(self) -> None:
+        """Opportunistically finalize any locally-held runtime handle whose
+        process/request has already finished, without ever blocking on one
+        that is still in flight (MR 8.7 follow-up / Wave 5 PR 13).
+
+        `collect()` is the only thing that ever records a terminal completion
+        event, and `collect()` blocks until the runtime actually finishes --
+        fine for a caller that wants exactly one task's result, useless for a
+        parent that wants to observe *which* of several in-flight tasks just
+        finished without stalling behind whichever one is slowest. This is
+        the one place that gap is closed: a cheap, non-blocking liveness
+        check (`Popen.poll()` / `Thread.is_alive()`, never `.wait()`/`.join()`
+        with no timeout) on every handle this exact broker instance still
+        holds, and `collect()` only for the ones that already finished --
+        `collect()` on an already-exited process/thread returns immediately,
+        it does not introduce a second wait.
+
+        This only ever sees handles this same live broker process launched
+        and still holds in memory. It never reaches into another process's
+        or another broker instance's launches (that is reconcile()'s job,
+        after a restart) and it never runs on its own -- it only executes as
+        a side effect of a caller explicitly polling (completion_events_since()),
+        matching the documented polling-only, no-push-notification contract.
+        """
+        for task_id, handle in list(self._process_handles.items()):
+            popen = getattr(handle, "popen", None)
+            if popen is not None and popen.poll() is not None:
+                self._pump_collect(task_id)
+        for task_id, handle in list(self._direct_api_handles.items()):
+            thread = getattr(handle, "thread", None)
+            if thread is None or not thread.is_alive():
+                self._pump_collect(task_id)
+
+    def _pump_collect(self, task_id: str) -> None:
+        try:
+            self.collect(task_id)
+        except Exception as error:
+            print(f"recollect_lines.service: pump collect failed for {task_id}: {error!r}", file=sys.stderr)
+
     def completion_events_since(
         self,
         after_event_id: int = 0,
@@ -412,7 +452,16 @@ class Broker:
         completion_only: bool = True,
         states: frozenset[str] | None = None,
     ) -> dict:
-        """Poll durable completion signals in global event-id order."""
+        """Poll durable completion signals in global event-id order.
+
+        Before reading, this opportunistically finalizes (non-blocking) any
+        runtime this broker instance itself launched and still holds a
+        handle for that has already finished -- see _pump_finished_handles().
+        A task still genuinely running is left alone; this call never blocks
+        waiting for one to finish and never observes a task launched by a
+        different broker instance/process.
+        """
+        self._pump_finished_handles()
         return completion_events_page(
             self.store,
             after_event_id=after_event_id,

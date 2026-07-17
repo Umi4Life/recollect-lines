@@ -21,8 +21,8 @@ Adapter override flags match `recollect-lines` (`--codex-command`, etc.).
 
 | Tool | Purpose |
 |------|---------|
-| `delegate` | Create + start one task |
-| `delegate_batch` | Create + start many tasks independently |
+| `delegate` | Create + start one task (returns `completion_cursor`) |
+| `delegate_batch` | Create + start many tasks independently (returns `completion_cursor`) |
 | `status` | Task state, events, artifacts |
 | `collect` | Runtime result + broker verification |
 | `cancel` | Cancellation with evidence |
@@ -35,7 +35,7 @@ Adapter override flags match `recollect-lines` (`--codex-command`, etc.).
 | `council_execute` | Execute bounded council plan |
 | `task_children` | Direct child task summaries for a parent |
 | `task_tree` | Bounded tree for a `root_task_id` |
-| `completion_events` | Poll durable completion signals from the global event cursor |
+| `completion_events` | Poll durable completion signals from the global event cursor (see below) |
 
 ## `delegate` input (schema summary)
 
@@ -66,7 +66,7 @@ Optional:
 
 `root_task_id` and `delegation_depth` are broker-derived and rejected if callers supply them.
 
-`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
+`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), `completion_cursor` (see [Completion-events polling contract](#completion-events-polling-contract-wave-5--pr-13) below), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
 
 See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
 
@@ -96,6 +96,85 @@ This is what makes the Wave 0 dogfood incident un-repeatable: a `claude -p` run 
 ```
 
 This never blocks or rejects task creation, and ambiguous or unmatched task text is never flagged — it exists so a parent can decide to retry with a different `result_schema` *before* spending a runtime call, not to gate delegation. Only the matched keyword name is ever recorded; the task text itself is never inspected beyond that static match or stored in the warning.
+
+## Completion-events polling contract (Wave 5 / PR 13)
+
+The dogfood problem this closes: a parent orchestrating several delegate
+rounds used to sleep a guessed duration between dispatch and the next round
+because there was no reliable way to know a batch had actually finished
+without blocking on each task's `collect` one at a time. `completion_events`
+is the primitive that replaces the guess with a real, cheap poll — and
+`delegate`/`delegate_batch` now return a `completion_cursor` (the global
+event high-water mark at dispatch time) so the parent never has to make a
+separate round-trip to establish a baseline first:
+
+```
+delegate_batch(tasks) -> completion_cursor
+loop:
+  page = completion_events(after_event_id=completion_cursor, task_id=... )
+  completion_cursor = page.next_cursor
+  record any newly-seen task ids from page.events
+  stop when every dispatched task id has been seen (or a bounded retry budget is spent)
+collect(task_id) for each -> advance to the next round
+```
+
+No `sleep(guessed_seconds)` appears anywhere in that loop; the caller decides
+its own retry cadence (a short poll interval, exponential backoff, whatever
+fits), and `completion_events` never blocks behind a task that is still
+running.
+
+Contract details:
+
+- **Cursor is exclusive**: `after_event_id` is a strict lower bound — only
+  events with `event_id > after_event_id` are returned. `after_event_id=0`
+  (the default) returns from the beginning.
+- **Ordering**: events are returned in strictly increasing global `event_id`
+  order — one monotonic sequence shared by every task this broker instance
+  has ever recorded a terminal/`recovery_required` transition for, not a
+  per-task sequence.
+- **Page limits**: `limit` defaults to 64 and is clamped to at most 256;
+  `has_more: true` means call again with `next_cursor` to continue. `next_cursor`
+  never regresses and equals `after_event_id` unchanged when the page is empty.
+- **Filtering**: optional `task_id` or `root_task_id` narrow the same cursor
+  sequence to one task or one lineage; `completion_only` (default `true`)
+  restricts to terminal states plus `recovery_required` (which is actionable,
+  not strictly terminal, but hosts must still observe it); an explicit `states`
+  array overrides `completion_only` with an exact state set.
+- **Idempotency**: polling the same `(after_event_id, filters)` twice without
+  any new completions in between returns byte-identical pages. A task's
+  terminal transition is recorded exactly once, ever — repolling never
+  duplicates it and never invents a phantom completion for a task whose
+  process this broker instance restarted without (see below).
+- **Retention**: the broker never prunes the events table — it is
+  append-only for the lifetime of the `.recollect` home, the same
+  manual-cleanup posture as artifacts (see [operator-guide.md](operator-guide.md)).
+  A cursor recorded at any point in the past remains valid indefinitely; there
+  is no "cursor too old" failure mode.
+- **Non-blocking, same-process pump**: every `completion_events` call also
+  opportunistically finalizes (never blocks) any task *this exact broker/MCP
+  server process* itself launched via `delegate`/`delegate_batch` and still
+  holds a live process/request handle for, if that process has already
+  exited (a plain non-blocking liveness check — `Popen.poll()` /
+  `Thread.is_alive()` — never a bare wait). A task that is still genuinely
+  running is left alone and simply does not appear yet. This is *not* a
+  background watcher: it only ever runs as a direct side effect of a caller
+  polling, and it only ever sees handles this process itself is holding — a
+  task launched by a different broker/MCP process (e.g. before a restart)
+  is untouched here and requires `reconcile`/`reconcile_pending` instead,
+  which is a separate, already-documented restart-recovery path.
+- **completion_events vs collect**: an event payload is a compact
+  notification — `state`, lineage fields, `result_summary`, `artifact_count`,
+  and `verification_gate.label` — never raw logs and never the full
+  `runtime_result`/`normalized_result`. `collect` remains the only way to
+  fetch the full, artifact-backed result; call it once a task's id has shown
+  up here.
+
+Non-goals: this is bounded, polling-only completion observation, not a
+workflow engine or a general event bus. There is no push notification —
+the caller always initiates every check — and no built-in retry/backoff
+policy, round scheduler, or multi-round debate/synthesis orchestration; the
+parent decides its own round structure and retry cadence using this and
+`delegate_batch` as primitives (see [PRD.md §3.1](design/PRD.md#31-delegation-shape-dynamic-not-fixed)).
 
 ## Tool result envelope
 

@@ -1,19 +1,50 @@
-"""MR 8.7: durable global completion-event cursor."""
+"""MR 8.7: durable global completion-event cursor.
+
+Wave 5 / PR 13 extends this with event-driven completion collection: a
+non-blocking pump (Broker._pump_finished_handles(), exercised only through
+completion_events_since()) that lets a parent observe a real child process
+finishing without ever calling collect() first and without a guessed sleep.
+"""
 
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState
+from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState, TERMINAL_STATES
+from recollect_lines.opencode_adapter import OpenCodeAdapter
 from recollect_lines.service import Broker
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
+
+
+def fake_opencode_adapter(grace_period_seconds: float = 2.0) -> OpenCodeAdapter:
+    """Deterministic stand-in CLI (tests/fixtures/fake_opencode.py) so these tests
+    exercise a real OS child process lifecycle, not the synchronous mock adapter.
+    """
+    return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)), grace_period_seconds=grace_period_seconds)
+
+
+def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> bool:
+    """Tight bounded poll loop -- the hermetic-test analogue of the no-guessed-sleep
+    pattern this PR gives real callers: keep checking, never sleep for a guessed
+    task duration and check once.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 class CompletionEventsTests(unittest.TestCase):
@@ -224,6 +255,184 @@ class CompletionEventsTests(unittest.TestCase):
             self.assertTrue(any(event["state"] == "succeeded" for event in data["events"]))
         finally:
             client.close()
+
+    def test_mcp_delegate_and_delegate_batch_return_completion_cursor(self):
+        """delegate/delegate_batch fold "record the cursor" into dispatch itself:
+        the returned completion_cursor is exactly the baseline a parent should
+        pass to completion_events(after_event_id=...) to observe this dispatch's
+        tasks finish, no separate round-trip needed.
+        """
+        from tests.test_mcp_server import McpStdioClient
+
+        client = McpStdioClient(self.home)
+        try:
+            client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+            client.notify("notifications/initialized")
+
+            delegated = client.call_tool("delegate", {"task": "one", "workspace": str(self.workspace)})
+            body = json.loads(delegated["result"]["content"][0]["text"])
+            self.assertTrue(body["ok"])
+            self.assertIn("completion_cursor", body["data"])
+            single_cursor = body["data"]["completion_cursor"]
+            self.assertIsInstance(single_cursor, int)
+
+            batched = client.call_tool(
+                "delegate_batch",
+                {"tasks": [{"task": "two", "workspace": str(self.workspace)}, {"task": "three", "workspace": str(self.workspace)}]},
+            )
+            batch_body = json.loads(batched["result"]["content"][0]["text"])
+            self.assertTrue(batch_body["ok"])
+            self.assertIn("completion_cursor", batch_body["data"])
+            batch_cursor = batch_body["data"]["completion_cursor"]
+            self.assertIsInstance(batch_cursor, int)
+            self.assertGreaterEqual(batch_cursor, single_cursor)
+
+            # Nothing dispatched here has completed yet (mock tasks require an
+            # explicit complete() call this MCP surface never makes on delegate),
+            # so polling from the freshly recorded cursor must be empty, not an
+            # error and not a fabricated completion.
+            page = client.call_tool("completion_events", {"after_event_id": batch_cursor, "limit": 5})
+            page_body = json.loads(page["result"]["content"][0]["text"])
+            self.assertTrue(page_body["ok"])
+            self.assertEqual(page_body["data"]["events"], [])
+        finally:
+            client.close()
+
+
+def kill_and_reap(popen: subprocess.Popen) -> None:
+    try:
+        os.killpg(os.getpgid(popen.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        popen.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+class CompletionEventsPumpTests(unittest.TestCase):
+    """Wave 5 / PR 13: event-driven completion collection.
+
+    completion_events_since() opportunistically finalizes (non-blocking) any
+    real child process this broker instance itself launched and still holds a
+    handle for. These tests exercise that pump against tests/fixtures/fake_opencode.py
+    -- a real, bounded set of OS child-process lifecycle transitions -- never
+    the synchronous mock adapter, and never a fixed sleep-then-check-once.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _broker(self, grace_period_seconds: float = 2.0) -> Broker:
+        return Broker(self.home, opencode_adapter=fake_opencode_adapter(grace_period_seconds))
+
+    def test_real_child_process_completion_observed_without_ever_calling_collect(self):
+        broker = self._broker()
+        try:
+            record = broker.create(TaskRequest("quick task", str(self.workspace), execution_mode="read_only", profile="opencode"))
+            broker.start(record.id)
+            observed = wait_until(
+                lambda: any(event["task_id"] == record.id for event in broker.completion_events_since(0)["events"])
+            )
+            self.assertTrue(observed, "completion_events never observed the finished child process")
+            self.assertIn(broker.store.get(record.id).state, TERMINAL_STATES)
+        finally:
+            broker.close()
+
+    def test_pump_never_blocks_on_a_still_running_task(self):
+        broker = self._broker()
+        record = broker.create(TaskRequest("SLEEP", str(self.workspace), execution_mode="read_only", profile="opencode"))
+        broker.start(record.id)
+        popen = broker._process_handles[record.id].popen
+        try:
+            started_at = time.monotonic()
+            page = broker.completion_events_since(0)
+            elapsed = time.monotonic() - started_at
+            self.assertLess(elapsed, 2.0, "completion_events_since blocked behind a still-running task")
+            self.assertEqual(page["events"], [])
+            self.assertEqual(broker.store.get(record.id).state, TaskState.RUNNING)
+        finally:
+            kill_and_reap(popen)
+            broker.close()
+
+    def test_pump_is_idempotent_across_repeated_polls(self):
+        broker = self._broker()
+        try:
+            record = broker.create(TaskRequest("quick", str(self.workspace), execution_mode="read_only", profile="opencode"))
+            broker.start(record.id)
+
+            def finished() -> bool:
+                broker.completion_events_since(0)  # each check is itself a pumping poll, never a blind sleep
+                return broker.store.get(record.id).state in TERMINAL_STATES
+
+            self.assertTrue(wait_until(finished), "task never reached a terminal state via polling")
+            event_count_after_first_terminal = len(broker.store.events(record.id))
+
+            first = broker.completion_events_since(0)
+            second = broker.completion_events_since(0)
+            self.assertEqual(first, second)
+            self.assertEqual(
+                len(broker.store.events(record.id)),
+                event_count_after_first_terminal,
+                "repeated polling must not append duplicate events for an already-terminal task",
+            )
+        finally:
+            broker.close()
+
+    def test_dispatch_record_cursor_poll_collect_multiple_real_tasks_no_sleep_guessing(self):
+        """The exact round-trip this PR delivers: dispatch several tasks, record
+        the cursor, poll completion_events until every task id has appeared,
+        collect each -- no fixed sleep between dispatch and collection.
+        """
+        broker = self._broker()
+        try:
+            records = [
+                broker.create(TaskRequest(f"round-1-task-{i}", str(self.workspace), execution_mode="read_only", profile="opencode"))
+                for i in range(2)  # default opencode policy max_concurrency is 2
+            ]
+            cursor = broker.store.event_high_water_mark()
+            for record in records:
+                broker.start(record.id)
+            expected_ids = {record.id for record in records}
+            seen_ids: set[str] = set()
+
+            def poll() -> bool:
+                nonlocal cursor
+                page = broker.completion_events_since(cursor)
+                seen_ids.update(event["task_id"] for event in page["events"] if event["task_id"] in expected_ids)
+                cursor = page["next_cursor"]
+                return seen_ids == expected_ids
+
+            self.assertTrue(wait_until(poll, timeout=5.0), "not all dispatched tasks were observed via completion_events")
+            for record in records:
+                collected = broker.collect(record.id)
+                self.assertIn(collected.state, TERMINAL_STATES)
+        finally:
+            broker.close()
+
+    def test_restart_never_fabricates_a_completion_for_a_lost_in_memory_handle(self):
+        broker1 = self._broker()
+        record = broker1.create(TaskRequest("SLEEP", str(self.workspace), execution_mode="read_only", profile="opencode"))
+        broker1.start(record.id)
+        popen = broker1._process_handles[record.id].popen
+        try:
+            broker1.close()  # models the broker process disappearing; the detached child keeps running
+
+            broker2 = self._broker()
+            try:
+                page = broker2.completion_events_since(0)
+                self.assertEqual(page["events"], [])
+                self.assertEqual(broker2.store.get(record.id).state, TaskState.RUNNING)
+            finally:
+                broker2.close()
+        finally:
+            kill_and_reap(popen)
 
 
 if __name__ == "__main__":
