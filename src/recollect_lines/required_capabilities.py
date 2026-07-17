@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .claude_permission_mode_policy import resolve_claude_permission_mode
+from .tool_access_profile import ToolAccessProfileValidationError, resolve_tool_access_profile
 
 WORKSPACE_READ = "workspace.read"
 REPOSITORY_REMOTE_READ = "repository.remote.read"
@@ -34,6 +35,7 @@ class CapabilityPreflightContext:
     agent_profile: str | None = None
     task_category: str | None = None
     claude_permission_mode: str | None = None
+    tool_access_profile: str | None = None
 
 
 def normalize_required_capabilities(raw: Any) -> tuple[str, ...]:
@@ -76,10 +78,19 @@ def _claude_code_advertised_capabilities(ctx: CapabilityPreflightContext) -> fro
         )
     except ValueError:
         return frozenset()
-    advertised = {WORKSPACE_READ}
-    # ponytail: repository.remote.read needs an explicit MCP allowlist map per adapter;
-    # Claude Code read_only/isolated_worktree policies never enable remote MCP tools.
-    return frozenset(advertised)
+    try:
+        profile = resolve_tool_access_profile(
+            runtime=ctx.runtime,
+            execution_mode=ctx.execution_mode,
+            requested_profile=ctx.tool_access_profile,
+        )
+    except ToolAccessProfileValidationError:
+        return frozenset()
+    if profile is None:
+        return frozenset()
+    # repository.remote.read needs an explicit MCP allowlist map per adapter; no
+    # tool_access_profile defined today grants it (see tool_access_profile.py).
+    return profile.semantic_capabilities
 
 
 _RUNTIME_ADVERTISERS = {

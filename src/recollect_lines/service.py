@@ -71,6 +71,11 @@ from .required_capabilities import (
     evaluate_capability_preflight,
     normalize_required_capabilities,
 )
+from .tool_access_profile import (
+    ToolAccessProfileValidationError,
+    evaluate_tool_access_profile_preflight,
+    normalize_tool_access_profile,
+)
 from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
@@ -264,6 +269,10 @@ class Broker:
             normalize_required_capabilities(list(request.required_capabilities) if request.required_capabilities else None)
         except RequiredCapabilityValidationError as error:
             raise ValueError(str(error)) from error
+        try:
+            normalize_tool_access_profile(request.tool_access_profile)
+        except ToolAccessProfileValidationError as error:
+            raise ValueError(str(error)) from error
         if runtime == DIRECT_API_PROFILE:
             if self.direct_api_runtime is None:
                 raise ValueError(
@@ -320,24 +329,30 @@ class Broker:
             origin_kind=request.origin_kind,
             origin_ref=request.origin_ref,
             required_capabilities=request.required_capabilities,
+            tool_access_profile=request.tool_access_profile,
         )
         return effective, resolved
 
-    def _capability_preflight_context(self, record: TaskRecord) -> CapabilityPreflightContext:
+    def _request_payload_for_record(self, record: TaskRecord) -> dict[str, Any]:
         request_path = self.store.artifacts / record.id / "request.json"
-        task_category = None
-        claude_permission_mode = None
-        if request_path.is_file():
-            try:
-                payload = json.loads(request_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                payload = {}
-            task_category = payload.get("task_category")
-            claude_permission_mode = payload.get("claude_permission_mode")
-            if task_category is not None and not isinstance(task_category, str):
-                task_category = None
-            if claude_permission_mode is not None and not isinstance(claude_permission_mode, str):
-                claude_permission_mode = None
+        if not request_path.is_file():
+            return {}
+        try:
+            return json.loads(request_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _capability_preflight_context(self, record: TaskRecord) -> CapabilityPreflightContext:
+        payload = self._request_payload_for_record(record)
+        task_category = payload.get("task_category")
+        claude_permission_mode = payload.get("claude_permission_mode")
+        tool_access_profile = payload.get("tool_access_profile")
+        if task_category is not None and not isinstance(task_category, str):
+            task_category = None
+        if claude_permission_mode is not None and not isinstance(claude_permission_mode, str):
+            claude_permission_mode = None
+        if tool_access_profile is not None and not isinstance(tool_access_profile, str):
+            tool_access_profile = None
         return CapabilityPreflightContext(
             runtime=record.runtime,
             execution_mode=record.execution_mode,
@@ -345,17 +360,29 @@ class Broker:
             agent_profile=record.agent_profile,
             task_category=task_category,
             claude_permission_mode=claude_permission_mode,
+            tool_access_profile=tool_access_profile,
         )
 
     def _required_capabilities_for_record(self, record: TaskRecord) -> tuple[str, ...]:
-        request_path = self.store.artifacts / record.id / "request.json"
-        if not request_path.is_file():
-            return ()
-        try:
-            payload = json.loads(request_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return ()
-        return normalize_required_capabilities(payload.get("required_capabilities"))
+        return normalize_required_capabilities(self._request_payload_for_record(record).get("required_capabilities"))
+
+    def _tool_access_profile_for_record(self, record: TaskRecord) -> str | None:
+        value = self._request_payload_for_record(record).get("tool_access_profile")
+        return value if isinstance(value, str) else None
+
+    def _reject_invalid_tool_access_profile(self, record: TaskRecord) -> TaskRecord | None:
+        requested = self._tool_access_profile_for_record(record)
+        rejection = evaluate_tool_access_profile_preflight(
+            runtime=record.runtime, execution_mode=record.execution_mode, requested_profile=requested,
+        )
+        if rejection is None:
+            return None
+        return self.store.transition(
+            record.id,
+            TaskState.REJECTED,
+            "Requested tool_access_profile is not available for this runtime/execution_mode",
+            rejection,
+        )
 
     def _reject_unsatisfied_capabilities(self, record: TaskRecord) -> TaskRecord | None:
         required = self._required_capabilities_for_record(record)
@@ -593,6 +620,9 @@ class Broker:
 
     def start(self, task_id: str) -> TaskRecord:
         record = self.store.get(task_id)
+        rejected = self._reject_invalid_tool_access_profile(record)
+        if rejected is not None:
+            return rejected
         rejected = self._reject_unsatisfied_capabilities(record)
         if rejected is not None:
             return rejected

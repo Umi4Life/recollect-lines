@@ -37,6 +37,11 @@ from .models import (
     verification_gate_label,
 )
 from .required_capabilities import RequiredCapabilityValidationError, normalize_required_capabilities
+from .tool_access_profile import (
+    KNOWN_TOOL_ACCESS_PROFILE_IDS,
+    ToolAccessProfileValidationError,
+    normalize_tool_access_profile,
+)
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
@@ -125,6 +130,8 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         explicit_fields.add("claude_permission_mode")
     if "required_capabilities" in item:
         explicit_fields.add("required_capabilities")
+    if "tool_access_profile" in item:
+        explicit_fields.add("tool_access_profile")
     effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
         runtime=runtime,
         profile=profile,
@@ -162,6 +169,10 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
             raise ValueError(str(error)) from error
     else:
         required_capabilities = ()
+    try:
+        tool_access_profile = normalize_tool_access_profile(item.get("tool_access_profile"))
+    except ToolAccessProfileValidationError as error:
+        raise ValueError(str(error)) from error
     parent_task_id = item.get("parent_task_id")
     external_root_id = item.get("external_root_id")
     relationship = item.get("relationship")
@@ -192,6 +203,7 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         origin_kind=origin_kind,
         origin_ref=origin_ref,
         required_capabilities=required_capabilities,
+        tool_access_profile=tool_access_profile,
     ), verify_commands
 
 
@@ -558,6 +570,17 @@ DELEGATE_INPUT_SCHEMA = {
             "description": (
                 "Optional semantic capabilities the task needs before launch. Unknown ids are rejected "
                 "at delegate time. When omitted, no capability preflight is applied."
+            ),
+        },
+        "tool_access_profile": {
+            "type": "string",
+            "enum": sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS),
+            "description": (
+                "Optional explicit runtime tool-access profile, separate from execution_mode (which "
+                "governs workspace-mutation authority only). Unknown, incompatible, or unavailable-for-"
+                "runtime selections are rejected at preflight before launch. When omitted, resolves "
+                "deterministically to the profile that reproduces today's default tool policy for the "
+                "selected runtime and execution_mode -- no behavior change for existing callers."
             ),
         },
         "provider": {

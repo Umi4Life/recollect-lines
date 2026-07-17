@@ -41,6 +41,7 @@ from .claude_permission_mode_policy import (
 from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
+from .tool_access_profile import ToolAccessProfileValidationError, resolve_tool_access_profile
 
 DEFAULT_COMMAND_PREFIX = ("claude",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
@@ -69,8 +70,10 @@ RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 # ponytail: read_only write-safety is structural (--tools/--disallowedTools), not
 # permission-mode alone; task-aware policy picks plan vs dontAsk for read_only
 # (see claude_permission_mode_policy.py). isolated_worktree always acceptEdits.
-READ_ONLY_DISALLOWED_TOOLS = ("Edit", "Write", "NotebookEdit")
-READ_ONLY_TOOLS = ("Read", "Grep", "Glob")
+#
+# The actual --tools/--disallowedTools allowlists are owned by
+# tool_access_profile.py (RFC-002 PR 4), which resolves the tool-access profile
+# for execution_mode separately from the permission-mode decision above.
 
 REDACTED_VALUE = "***REDACTED***"
 # Best-effort scrub applied only to the *concise* fields the broker folds into
@@ -91,21 +94,24 @@ def redact_secrets(text: str) -> str:
     return text
 
 
-def _read_launch_policy_overrides(artifacts_dir: Path) -> tuple[str | None, str | None]:
+def _read_launch_policy_overrides(artifacts_dir: Path) -> tuple[str | None, str | None, str | None]:
     request_path = artifacts_dir / "request.json"
     if not request_path.is_file():
-        return None, None
+        return None, None, None
     try:
         payload = json.loads(request_path.read_text())
     except (OSError, json.JSONDecodeError):
-        return None, None
+        return None, None, None
     task_category = payload.get("task_category")
     claude_permission_mode = payload.get("claude_permission_mode")
+    tool_access_profile = payload.get("tool_access_profile")
     if task_category is not None and not isinstance(task_category, str):
         task_category = None
     if claude_permission_mode is not None and not isinstance(claude_permission_mode, str):
         claude_permission_mode = None
-    return task_category, claude_permission_mode
+    if tool_access_profile is not None and not isinstance(tool_access_profile, str):
+        tool_access_profile = None
+    return task_category, claude_permission_mode, tool_access_profile
 
 
 class ClaudeCodeUnsupportedPolicy(ClaudePermissionModePolicyError):
@@ -193,6 +199,7 @@ class ClaudeCodeAdapter:
         agent_profile: str | None = None,
         task_category: str | None = None,
         claude_permission_mode: str | None = None,
+        tool_access_profile: str | None = None,
     ) -> tuple[list, ClaudePermissionModeDecision]:
         try:
             decision = resolve_claude_permission_mode(
@@ -203,6 +210,12 @@ class ClaudeCodeAdapter:
                 claude_permission_mode=claude_permission_mode,
             )
         except ClaudePermissionModePolicyError as error:
+            raise ClaudeCodeUnsupportedPolicy(str(error)) from error
+        try:
+            profile = resolve_tool_access_profile(
+                runtime=self.name, execution_mode=execution_mode, requested_profile=tool_access_profile,
+            )
+        except ToolAccessProfileValidationError as error:
             raise ClaudeCodeUnsupportedPolicy(str(error)) from error
         # Prompt goes immediately after -p, before any flag — see module
         # docstring for why order matters with commander's variadic options.
@@ -215,9 +228,11 @@ class ClaudeCodeAdapter:
         effective_model = model if model is not None else self.model
         if effective_model:
             command += ["--model", effective_model]
-        if execution_mode == "read_only":
-            command += ["--tools", ",".join(READ_ONLY_TOOLS)]
-            command += ["--disallowedTools", ",".join(READ_ONLY_DISALLOWED_TOOLS)]
+        if profile is not None:
+            if profile.allowed_tools is not None:
+                command += ["--tools", ",".join(profile.allowed_tools)]
+            if profile.disallowed_tools:
+                command += ["--disallowedTools", ",".join(profile.disallowed_tools)]
         return command, decision
 
     def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, ProcessHandle]:
@@ -225,7 +240,7 @@ class ClaudeCodeAdapter:
         stdout_path = artifacts_dir / "stdout.log"
         stderr_path = artifacts_dir / "stderr.log"
         effective_workspace = workspace or record.workspace
-        task_category, claude_permission_mode = _read_launch_policy_overrides(artifacts_dir)
+        task_category, claude_permission_mode, tool_access_profile = _read_launch_policy_overrides(artifacts_dir)
         # Claude Code has no --dir/--workspace flag (unlike OpenCode); tool
         # access is scoped to the process's own cwd, so isolation depends on
         # launching in effective_workspace, not on an argument.
@@ -237,6 +252,7 @@ class ClaudeCodeAdapter:
             agent_profile=record.agent_profile,
             task_category=task_category,
             claude_permission_mode=claude_permission_mode,
+            tool_access_profile=tool_access_profile,
         )
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
