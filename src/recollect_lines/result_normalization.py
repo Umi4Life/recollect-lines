@@ -36,6 +36,15 @@ from .models import TaskRecord, TaskState
 NORMALIZED_RESULT_ARTIFACT = "normalized_result.json"
 RAW_OUTPUT_ARTIFACT = "runtime_raw_output.txt"
 ENVELOPE_VERSION = 1
+CAPABILITY_ENVELOPE_VERSION = 2
+
+CAPABILITY_OBSERVATION_SOURCE = "runtime_permission_denial"
+DISPLAYED_DENIED_TOOLS_CAP = 16
+
+# Adapter-specific structured-denial field carrying the exact tool identifier.
+_ADAPTER_DENIAL_TOOL_FIELDS: dict[str, str] = {
+    "claude_code": "tool_name",
+}
 
 SUPPORTED_RESULT_SCHEMAS = frozenset({
     "plain-summary",
@@ -223,6 +232,70 @@ def _contract_status(schema: str, parse_status: str, final_state: TaskState) -> 
     return "unsatisfied_malformed"
 
 
+def _denied_tool_identifier(entry: Any, *, adapter: str) -> str | None:
+    field = _ADAPTER_DENIAL_TOOL_FIELDS.get(adapter)
+    if field is None or not isinstance(entry, dict):
+        return None
+    value = entry.get(field)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+def normalize_permission_denials(
+    permission_denials: Any,
+    *,
+    adapter: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[str]]:
+    """Map structured runtime permission denials to capability observations.
+
+    Returns (observations, compact_capability_warning, parser_warnings).
+    Malformed metadata fails soft: valid sibling entries are preserved.
+    """
+    warnings: list[str] = []
+    if permission_denials is None:
+        return [], None, warnings
+    if not isinstance(permission_denials, list):
+        warnings.append(
+            "permission_denials was not a list; partial capability observations preserved"
+        )
+        return [], None, warnings
+
+    observations: list[dict[str, Any]] = []
+    malformed = 0
+    for entry in permission_denials:
+        tool_identifier = _denied_tool_identifier(entry, adapter=adapter)
+        if tool_identifier is None:
+            malformed += 1
+            continue
+        observations.append({
+            "tool_identifier": tool_identifier,
+            "source": CAPABILITY_OBSERVATION_SOURCE,
+            "adapter": adapter,
+        })
+
+    if malformed:
+        entry_word = "entry" if malformed == 1 else "entries"
+        warnings.append(
+            f"permission_denials contained {malformed} malformed {entry_word}; "
+            "partial capability observations preserved"
+        )
+
+    if not observations:
+        return [], None, warnings
+
+    identifiers = [item["tool_identifier"] for item in observations]
+    distinct = sorted(set(identifiers))
+    truncated = len(distinct) > DISPLAYED_DENIED_TOOLS_CAP
+    capability_warning = {
+        "denial_attempt_count": len(identifiers),
+        "distinct_denied_tool_count": len(distinct),
+        "denied_tool_identifiers": distinct[:DISPLAYED_DENIED_TOOLS_CAP],
+        "truncated": truncated,
+    }
+    return observations, capability_warning, warnings
+
+
 def _field_present(field: str, runtime_reported: dict[str, Any], structured: dict[str, Any] | None) -> bool:
     if field == "summary":
         value = runtime_reported.get("summary")
@@ -308,6 +381,23 @@ def build_normalized_envelope(
         collected=collected,
     )
 
+    adapter = collected.get("adapter")
+    capability_warning = None
+    if isinstance(adapter, str) and adapter:
+        observations, capability_warning, denial_warnings = normalize_permission_denials(
+            collected.get("permission_denials"),
+            adapter=adapter,
+        )
+        if observations:
+            runtime_reported["capability_observations"] = observations
+        warnings.extend(denial_warnings)
+
+    envelope_version = (
+        CAPABILITY_ENVELOPE_VERSION
+        if capability_warning is not None
+        else ENVELOPE_VERSION
+    )
+
     broker_verification = None
     if verification is not None:
         broker_verification = {
@@ -317,7 +407,7 @@ def build_normalized_envelope(
         }
 
     return {
-        "envelope_version": ENVELOPE_VERSION,
+        "envelope_version": envelope_version,
         "task_id": record.id,
         "state": final_state.value,
         "runtime_reported": runtime_reported,
@@ -368,4 +458,32 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
     verification = broker.get("verification")
     if verification is not None:
         view["broker_verification_present"] = True
+    observations = runtime.get("capability_observations")
+    if isinstance(observations, list) and observations:
+        capability_warning = _capability_warning_from_observations(observations)
+        if capability_warning is not None:
+            view["has_capability_warning"] = True
+            view["capability_warning"] = capability_warning
     return view
+
+
+def _capability_warning_from_observations(
+    observations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    identifiers = [
+        item["tool_identifier"]
+        for item in observations
+        if isinstance(item, dict)
+        and isinstance(item.get("tool_identifier"), str)
+        and item["tool_identifier"]
+    ]
+    if not identifiers:
+        return None
+    distinct = sorted(set(identifiers))
+    truncated = len(distinct) > DISPLAYED_DENIED_TOOLS_CAP
+    return {
+        "denial_attempt_count": len(identifiers),
+        "distinct_denied_tool_count": len(distinct),
+        "denied_tool_identifiers": distinct[:DISPLAYED_DENIED_TOOLS_CAP],
+        "truncated": truncated,
+    }
