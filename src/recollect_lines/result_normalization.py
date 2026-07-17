@@ -31,12 +31,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .capability_contract_result import STATUS_NO_REQUIREMENTS, evaluate_capability_contract
 from .models import TaskRecord, TaskState
 
 NORMALIZED_RESULT_ARTIFACT = "normalized_result.json"
 RAW_OUTPUT_ARTIFACT = "runtime_raw_output.txt"
 ENVELOPE_VERSION = 1
 CAPABILITY_ENVELOPE_VERSION = 2
+CAPABILITY_CONTRACT_ENVELOPE_VERSION = 3
 
 CAPABILITY_OBSERVATION_SOURCE = "runtime_permission_denial"
 DISPLAYED_DENIED_TOOLS_CAP = 16
@@ -366,6 +368,7 @@ def build_normalized_envelope(
     launch: dict[str, Any] | None,
     raw_output_artifact: str | None,
     final_state: TaskState,
+    required_capabilities: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     schema = effective_result_schema(record)
     summary = collected.get("summary")
@@ -383,6 +386,7 @@ def build_normalized_envelope(
 
     adapter = collected.get("adapter")
     capability_warning = None
+    capability_contract = None
     if isinstance(adapter, str) and adapter:
         observations, capability_warning, denial_warnings = normalize_permission_denials(
             collected.get("permission_denials"),
@@ -391,12 +395,26 @@ def build_normalized_envelope(
         if observations:
             runtime_reported["capability_observations"] = observations
         warnings.extend(denial_warnings)
+        if required_capabilities:
+            capability_contract = evaluate_capability_contract(
+                required_capabilities,
+                adapter=adapter,
+                capability_observations=observations,
+                denial_metadata_malformed=bool(denial_warnings),
+            )
+    elif required_capabilities:
+        capability_contract = evaluate_capability_contract(
+            required_capabilities,
+            adapter=None,
+            capability_observations=[],
+            denial_metadata_malformed=False,
+        )
 
-    envelope_version = (
-        CAPABILITY_ENVELOPE_VERSION
-        if capability_warning is not None
-        else ENVELOPE_VERSION
-    )
+    envelope_version = ENVELOPE_VERSION
+    if capability_warning is not None:
+        envelope_version = CAPABILITY_ENVELOPE_VERSION
+    if capability_contract is not None:
+        envelope_version = CAPABILITY_CONTRACT_ENVELOPE_VERSION
 
     broker_verification = None
     if verification is not None:
@@ -406,7 +424,7 @@ def build_normalized_envelope(
             "commands": verification.get("commands"),
         }
 
-    return {
+    envelope: dict[str, Any] = {
         "envelope_version": envelope_version,
         "task_id": record.id,
         "state": final_state.value,
@@ -433,6 +451,9 @@ def build_normalized_envelope(
             or collected.get("malformed_event_lines", 0),
         },
     }
+    if capability_contract is not None:
+        envelope["capability_contract"] = capability_contract
+    return envelope
 
 
 def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -464,6 +485,16 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
         if capability_warning is not None:
             view["has_capability_warning"] = True
             view["capability_warning"] = capability_warning
+    contract = envelope.get("capability_contract")
+    if isinstance(contract, dict) and contract.get("status") != STATUS_NO_REQUIREMENTS:
+        view["has_capability_contract"] = True
+        view["capability_contract"] = {
+            "status": contract.get("status"),
+            "required_capabilities": contract.get("required_capabilities", []),
+            "unsatisfied_capabilities": contract.get("unsatisfied_capabilities", []),
+            "unknown_capabilities": contract.get("unknown_capabilities", []),
+            "reasons": contract.get("reasons", []),
+        }
     return view
 
 

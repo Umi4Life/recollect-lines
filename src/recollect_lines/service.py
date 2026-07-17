@@ -12,6 +12,7 @@ from typing import Any
 
 from .adapters import AdapterCapabilities
 from .capability_contract import describe_unsupported_execution_mode, materialization_prompt_notice
+from .capability_contract_result import STATUS_UNSATISFIED, evaluate_capability_contract
 from .durable_reconciliation import (
     AdoptedDurableHandle,
     LAUNCH_KIND_DURABLE,
@@ -75,6 +76,7 @@ from .result_normalization import (
     build_normalized_envelope,
     concise_normalized_view,
     effective_result_schema,
+    normalize_permission_denials,
     persist_raw_runtime_output_if_needed,
     validate_result_schema,
 )
@@ -723,6 +725,60 @@ class Broker:
         path = self.store.artifacts / task_id / "verification.json"
         return json.loads(path.read_text()) if path.is_file() else None
 
+    def _capability_contract_for_collection(
+        self, record: TaskRecord, collected: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Post-run capability-contract verdict, or None when nothing was declared.
+
+        Reuses PR 1's `normalize_permission_denials` so this never reasons
+        about raw `permission_denials`/`tool_input` directly -- see
+        `capability_contract_result.evaluate_capability_contract`.
+        """
+        required = self._required_capabilities_for_record(record)
+        if not required:
+            return None
+        adapter = collected.get("adapter")
+        observations, _warning, denial_warnings = normalize_permission_denials(
+            collected.get("permission_denials"),
+            adapter=adapter if isinstance(adapter, str) else "",
+        )
+        return evaluate_capability_contract(
+            required,
+            adapter=adapter if isinstance(adapter, str) else None,
+            capability_observations=observations,
+            denial_metadata_malformed=bool(denial_warnings),
+        )
+
+    def _apply_capability_contract_gate(
+        self,
+        record: TaskRecord,
+        collected: dict[str, Any],
+        final_state: TaskState,
+        gate: dict[str, Any],
+    ) -> tuple[TaskState, dict[str, Any]]:
+        """Fold an unsatisfied declared capability contract into `final_state`,
+        but only when the task explicitly opted into `verification_policy="required"`.
+        Default/advisory policy leaves state untouched -- the contract stays
+        visible (via the normalized envelope/concise view) rather than
+        silently failing the task. Never introduces a new lifecycle state:
+        an unsatisfied contract under "required" policy resolves to the
+        existing `TaskState.FAILED`, exactly like a failed/missing
+        verify_commands gate under the same policy.
+        """
+        if record.verification_policy != "required":
+            return final_state, gate
+        if final_state not in (TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS):
+            return final_state, gate
+        contract = self._capability_contract_for_collection(record, collected)
+        if contract is None or contract["status"] != STATUS_UNSATISFIED:
+            return final_state, gate
+        gate = {
+            **gate,
+            "outcome": "blocked_unsatisfied_capability",
+            "unsatisfied_capabilities": contract["unsatisfied_capabilities"],
+        }
+        return TaskState.FAILED, gate
+
     def _persist_normalized_result(
         self,
         record: TaskRecord,
@@ -747,6 +803,7 @@ class Broker:
             launch=launch,
             raw_output_artifact=raw_ref,
             final_state=final_state,
+            required_capabilities=self._required_capabilities_for_record(record),
         )
         self.store.write_artifact(
             record.id,
@@ -769,6 +826,7 @@ class Broker:
         if candidate_state in (TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS):
             validate_result(result, record.id)
         final_state, gate = self._apply_verification_gate(record.id, record, candidate_state)
+        final_state, gate = self._apply_capability_contract_gate(record, collected, final_state, gate)
         self._write_gate_artifact(record.id, gate)
         self._persist_normalized_result(record, result, collected, gate, final_state)
         self._finalize_workspace(record.id)
