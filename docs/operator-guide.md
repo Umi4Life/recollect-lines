@@ -119,6 +119,11 @@ recursive council scheduling — the parent still decides the graph, the round
 count, and when a comparison is "enough" (see [council.py](../src/recollect_lines/council.py)'s
 same non-goals for the bounded council primitive).
 
+Wave 5 / PR 15 adds a copy-pasteable reference for the full dogfood debate
+pattern (opening positions → rebuttals → synthesis → validation → optional
+parent materialization) in [bounded-debate-workflow.md](bounded-debate-workflow.md)
+— still caller-controlled, not an autonomous council.
+
 ### Runtime capability contract
 
 Every runtime exposes one `capability_contract` (see `discover_capabilities` / `discover` output, `capability_contract.py`) instead of scattered per-adapter conditionals:

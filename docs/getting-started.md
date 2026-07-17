@@ -112,7 +112,7 @@ Proves heterogeneous concurrent children, completion-event polling, normalized r
 PYTHONPATH=src python3 scripts/side_agent_fixture_acceptance.py
 ```
 
-Evidence: [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json). Live multi-runtime dogfood is a separate opt-in runbook: [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md).
+Evidence: [demos/side-agent-fixture-evidence.json](demos/side-agent-fixture-evidence.json). Live multi-runtime dogfood is a separate opt-in runbook: [demos/live-two-runtime-dogfood-runbook.md](demos/live-two-runtime-dogfood-runbook.md). For a bounded multi-phase debate reference (openings → rebuttals → synthesis → validation), see [bounded-debate-workflow.md](bounded-debate-workflow.md) and `examples/bounded-debate-workflow/`.
 
 ## MCP quick start
 
