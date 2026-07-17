@@ -26,7 +26,12 @@ class DetectSchemaProseConflictTests(unittest.TestCase):
         self.assertEqual(warning["matched_signal"], "debate")
 
     def test_conflict_detected_for_each_structured_schema(self):
-        for schema in ("evidence-report", "review-findings", "implementation-report"):
+        for schema in (
+            "evidence-report",
+            "review-findings",
+            "implementation-report",
+            "verified-investigation-report",
+        ):
             with self.subTest(schema=schema):
                 warning = detect_schema_prose_conflict("write a short story about a dragon", schema)
                 self.assertIsNotNone(warning)

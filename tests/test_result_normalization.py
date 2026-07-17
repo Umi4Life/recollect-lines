@@ -60,7 +60,13 @@ class ResultSchemaPolicyTests(unittest.TestCase):
     def test_supported_schemas_are_explicit(self):
         self.assertEqual(
             SUPPORTED_RESULT_SCHEMAS,
-            frozenset({"plain-summary", "evidence-report", "review-findings", "implementation-report"}),
+            frozenset({
+                "plain-summary",
+                "evidence-report",
+                "review-findings",
+                "implementation-report",
+                "verified-investigation-report",
+            }),
         )
 
     def test_unknown_schema_is_rejected(self):

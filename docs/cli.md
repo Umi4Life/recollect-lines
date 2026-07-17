@@ -258,7 +258,7 @@ always forcing `plan` for every `read_only` task:
 |-------------------|-----------------|--------------|----------------------|
 | `prose` | `plain-summary`, debate/summarization | `dontAsk` | `--tools Read,Grep,Glob` + disallowed edits |
 | `review` | `review-findings`, `architecture-reviewer` | `dontAsk` | same structural allowlist |
-| `investigation` | `evidence-report`, `repository-investigator` | `plan` | same structural allowlist |
+| `investigation` | `evidence-report`, `verified-investigation-report`, `repository-investigator` | `plan` | same structural allowlist |
 | `implementation` | `isolated_worktree`, `implementation-report` | `acceptEdits` | none (worktree isolation) |
 | `unknown` | no confident match | `plan` (conservative) | same structural allowlist |
 

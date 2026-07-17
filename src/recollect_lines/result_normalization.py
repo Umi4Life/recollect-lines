@@ -33,6 +33,11 @@ from typing import Any
 
 from .capability_contract_result import STATUS_NO_REQUIREMENTS, evaluate_capability_contract
 from .models import TaskRecord, TaskState
+from .verified_investigation_report import (
+    VERIFIED_INVESTIGATION_REPORT_SCHEMA,
+    validate_verified_investigation_report,
+    verified_investigation_summary,
+)
 
 NORMALIZED_RESULT_ARTIFACT = "normalized_result.json"
 RAW_OUTPUT_ARTIFACT = "runtime_raw_output.txt"
@@ -53,6 +58,7 @@ SUPPORTED_RESULT_SCHEMAS = frozenset({
     "evidence-report",
     "review-findings",
     "implementation-report",
+    VERIFIED_INVESTIGATION_REPORT_SCHEMA,
 })
 DEFAULT_RESULT_SCHEMA = "plain-summary"
 
@@ -61,6 +67,13 @@ SCHEMA_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
     "evidence-report": frozenset({"summary"}),
     "review-findings": frozenset({"summary", "findings"}),
     "implementation-report": frozenset({"summary"}),
+    VERIFIED_INVESTIGATION_REPORT_SCHEMA: frozenset({
+        "summary",
+        "findings",
+        "evidence",
+        "unverified_claims",
+        "blocked_capabilities",
+    }),
 }
 
 # Stable, documented values for the third outcome dimension (contract
@@ -140,6 +153,7 @@ def _try_parse_structured_text(text: str | None) -> tuple[dict[str, Any] | None,
 def _runtime_reported_from_structured(
     structured: dict[str, Any] | None,
     *,
+    schema: str,
     summary: str | None,
     collected: dict[str, Any],
 ) -> dict[str, Any]:
@@ -162,6 +176,10 @@ def _runtime_reported_from_structured(
 
     if isinstance(structured.get("summary"), str) and structured["summary"].strip():
         payload["summary"] = structured["summary"].strip()
+
+    if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
+        return payload
+
     for key, target in (
         ("findings", "findings"),
         ("claimed_evidence", "claimed_evidence"),
@@ -207,12 +225,24 @@ def _parse_status_and_warnings(
         return "fallback", warnings
 
     required = SCHEMA_REQUIRED_FIELDS[schema]
-    missing = [field for field in required if not _field_present(field, runtime_reported, structured)]
+    missing = [field for field in required if not _field_present(field, runtime_reported, structured, schema)]
     if missing:
         warnings.append(f"missing required field(s) for {schema}: {', '.join(sorted(missing))}")
         if schema == "plain-summary":
             return "partial", warnings
         return "partial" if structured is not None else "fallback", warnings
+
+    if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
+        assert structured is not None
+        ok, contract_warnings, normalized = validate_verified_investigation_report(structured)
+        warnings.extend(contract_warnings)
+        if not ok or normalized is None:
+            if not any("verified-investigation-report" in w for w in warnings):
+                warnings.append("verified-investigation-report contract validation failed")
+            return "partial", warnings
+        runtime_reported["verified_investigation"] = normalized
+        return "ok", warnings
+
     return "ok", warnings
 
 
@@ -298,13 +328,23 @@ def normalize_permission_denials(
     return observations, capability_warning, warnings
 
 
-def _field_present(field: str, runtime_reported: dict[str, Any], structured: dict[str, Any] | None) -> bool:
+def _field_present(
+    field: str,
+    runtime_reported: dict[str, Any],
+    structured: dict[str, Any] | None,
+    schema: str,
+) -> bool:
     if field == "summary":
         value = runtime_reported.get("summary")
         return isinstance(value, str) and bool(value.strip())
     if field == "findings":
+        if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
+            return isinstance(structured, dict) and isinstance(structured.get("findings"), list)
         findings = runtime_reported.get("findings")
         return isinstance(findings, list) and len(findings) > 0
+    if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA and structured is not None:
+        value = structured.get(field)
+        return isinstance(value, list)
     return False
 
 
@@ -376,7 +416,12 @@ def build_normalized_envelope(
     if summary is None and isinstance(result.get("summary"), str):
         summary = result["summary"]
     structured, parse_warnings = _try_parse_structured_text(summary if isinstance(summary, str) else None)
-    runtime_reported = _runtime_reported_from_structured(structured, summary=summary, collected=collected)
+    runtime_reported = _runtime_reported_from_structured(
+        structured,
+        schema=schema,
+        summary=summary,
+        collected=collected,
+    )
     parse_status, warnings = _parse_status_and_warnings(
         schema,
         runtime_reported,
@@ -506,6 +551,12 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
         }
         if audit.get("advertises_repository_remote_read"):
             view["tool_access_profile_audit"]["advertises_repository_remote_read"] = True
+    verified = runtime.get("verified_investigation")
+    if parser.get("requested_schema") == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
+        view["verified_investigation_summary"] = verified_investigation_summary(
+            contract_status=str(parser.get("contract_status") or "unavailable"),
+            payload=verified if isinstance(verified, dict) else None,
+        )
     return view
 
 

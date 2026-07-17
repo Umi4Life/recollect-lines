@@ -34,6 +34,19 @@ _SCHEMA_FIELD_GUIDANCE: dict[str, str] = {
         "- commands_executed (array) or claimed_commands (array): commands you report running.\n"
         "- tests_reported (array of objects) or claimed_tests (array): tests you report running."
     ),
+    "verified-investigation-report": (
+        "Required JSON fields:\n"
+        "- summary (string): concise investigation outcome.\n"
+        "- findings (array): each object requires claim (string), confidence (number 0.0-1.0), "
+        "and evidence_refs (non-empty array of evidence ids).\n"
+        "- evidence (array): each object requires id (stable lowercase identifier), provenance "
+        "(orchestrator_supplied | runtime_reported | unresolved only — never broker_observed or "
+        "broker_verified), source_type (string), source (bounded locator/label, not raw content), "
+        "and claim_supported (string).\n"
+        "- unverified_claims (array of strings): claims you could not support.\n"
+        "- blocked_capabilities (array of strings): runtime-reported tools/capabilities you could "
+        "not use during the investigation (distinct from broker capability observations)."
+    ),
 }
 
 
