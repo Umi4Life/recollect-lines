@@ -28,6 +28,11 @@ from .provider_commands import (
     run_provider_test,
 )
 from .required_capabilities import RequiredCapabilityValidationError, normalize_required_capabilities
+from .tool_access_profile import (
+    KNOWN_TOOL_ACCESS_PROFILE_IDS,
+    ToolAccessProfileValidationError,
+    normalize_tool_access_profile,
+)
 from .providers import OPERATOR_CONFIG_DIRNAME, ProviderConfigError, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
@@ -110,6 +115,17 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         choices=("workspace.read", "repository.remote.read"),
         help="Semantic capability required before launch; may be repeated.",
+    )
+    create.add_argument(
+        "--tool-access-profile",
+        dest="tool_access_profile",
+        default=None,
+        choices=sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS),
+        help=(
+            "Explicit runtime tool-access profile, separate from --mode (workspace-mutation "
+            "authority). When omitted, resolves to the profile that reproduces today's default "
+            "tool policy for the selected runtime and execution mode."
+        ),
     )
     create.add_argument(
         "--provider", default=None,
@@ -565,6 +581,8 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_fields.add("claude_permission_mode")
             if args.required_capabilities is not None:
                 explicit_fields.add("required_capabilities")
+            if args.tool_access_profile is not None:
+                explicit_fields.add("tool_access_profile")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -579,6 +597,10 @@ def main(argv: list[str] | None = None) -> int:
                     else ()
                 )
             except RequiredCapabilityValidationError as error:
+                raise SystemExit(str(error)) from error
+            try:
+                tool_access_profile = normalize_tool_access_profile(args.tool_access_profile)
+            except ToolAccessProfileValidationError as error:
                 raise SystemExit(str(error)) from error
             request = TaskRequest(
                 args.task,
@@ -602,6 +624,7 @@ def main(argv: list[str] | None = None) -> int:
                 origin_kind=args.origin_kind,
                 origin_ref=args.origin_ref,
                 required_capabilities=required_capabilities,
+                tool_access_profile=tool_access_profile,
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)
