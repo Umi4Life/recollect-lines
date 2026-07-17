@@ -19,7 +19,7 @@ def emit(obj):
     print(json.dumps(obj), flush=True)
 
 
-def result(text, session_id="ses_fake", is_error=False, api_error_status=None):
+def result(text, session_id="ses_fake", is_error=False, api_error_status=None, permission_denials=None):
     emit({
         "type": "result",
         "subtype": "success" if not is_error else "error",
@@ -28,7 +28,7 @@ def result(text, session_id="ses_fake", is_error=False, api_error_status=None):
         "result": text,
         "session_id": session_id,
         "num_turns": 1,
-        "permission_denials": [],
+        "permission_denials": permission_denials if permission_denials is not None else [],
     })
 
 
@@ -103,6 +103,13 @@ def main():
         # False, but instead of the requested structured JSON the model asks
         # the parent to pick an output format — a meta-response, not a result.
         result("Would you like this as a table, a bulleted list, or prose? Let me know and I'll finalize the response.")
+        return 0
+
+    if "PERMISSION_DENIALS_JSON" in prompt:
+        marker = "PERMISSION_DENIALS_JSON "
+        start = prompt.index(marker) + len(marker)
+        denials = json.loads(prompt[start:].strip())
+        result("completed with denied tools", permission_denials=denials)
         return 0
 
     body = task_prompt_only(prompt)
