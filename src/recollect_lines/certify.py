@@ -120,11 +120,13 @@ def _declared_capabilities(profile: str, provider_config: ProviderConfig | None,
     policy = descriptor.policy
     modes = policy.allowed_modes
     caps = descriptor.adapter_capabilities
+    contract = descriptor.capability_contract
     return {
         "read_only_execution": "read_only" in modes,
-        "isolated_worktree": "isolated_worktree" in modes,
+        "isolated_worktree": contract.owns_worktree,
         "subprocess_supervision": caps.requires_subprocess,
         "model_selection": descriptor.model_selection.value,
+        "capability_contract": contract.as_dict(),
     }
 
 

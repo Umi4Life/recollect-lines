@@ -162,7 +162,10 @@ and `doctor`.
 `openai_compatible` is a **text/synthesis** runtime over HTTP — it does not
 supervise workspace-mutating CLI adapters. CLI profiles (`codex`, `claude_code`,
 `cursor`, `opencode`) own subprocess supervision and worktree policy; keep a
-long-lived `recollect-mcp` session when collecting their results.
+long-lived `recollect-mcp` session when collecting their results. Every
+runtime's `capability_contract` (`discover_capabilities`) says who owns
+turning its result into an applied change — see
+[operator-guide.md](operator-guide.md#materialize--validate--record-the-honest-parent-workflow).
 
 Preferred operator flow (YAML operator config, not legacy repo-root JSON):
 

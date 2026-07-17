@@ -61,12 +61,16 @@ def _declared_capabilities(descriptor: RuntimeDescriptor) -> dict[str, bool | st
     policy = descriptor.policy
     modes = policy.allowed_modes
     caps = descriptor.adapter_capabilities
+    contract = descriptor.capability_contract
     payload: dict[str, bool | str] = {
         "subprocess_supervision": caps.requires_subprocess,
         "process_group_cancellation": caps.supports_process_group_cancellation,
         "read_only_execution": "read_only" in modes,
-        "isolated_worktree": "isolated_worktree" in modes,
-        "workspace_mutation": "isolated_worktree" in modes,
+        # Sourced from the capability contract, not mode membership: mock's
+        # policy permits isolated_worktree (the broker still allocates one),
+        # but mock never actually writes a file even inside it.
+        "isolated_worktree": contract.owns_worktree,
+        "workspace_mutation": contract.mutates_workspace,
         "live_steering": False,
         "session_reattachment": False,
         "broker_verified_tests": caps.reports_broker_verified_tests,
@@ -157,6 +161,7 @@ def _descriptor_entry(
             "execution_strategy": descriptor.execution_strategy.value,
             "execution_modes": sorted(policy.allowed_modes),
             "declared_capabilities": _declared_capabilities(descriptor),
+            "capability_contract": descriptor.capability_contract.as_dict(),
             "observed_availability": {"available": True, "reason": "synthetic_fixture"},
             "recovery_control": recovery_control_discovery_payload(descriptor.adapter_capabilities.recovery_control),
             "policy": {
@@ -172,6 +177,7 @@ def _descriptor_entry(
             "execution_strategy": descriptor.execution_strategy.value,
             "execution_modes": sorted(policy.allowed_modes),
             "declared_capabilities": _declared_capabilities(descriptor),
+            "capability_contract": descriptor.capability_contract.as_dict(),
             "observed_availability": {
                 "available": direct_api_runtime is not None,
                 "reason": "providers_configured" if direct_api_runtime else "providers_not_configured",
@@ -201,6 +207,7 @@ def _descriptor_entry(
         "runtime_label": resolve_runtime_label(descriptor, adapter),
         "execution_modes": sorted(policy.allowed_modes),
         "declared_capabilities": _declared_capabilities(descriptor),
+        "capability_contract": descriptor.capability_contract.as_dict(),
         "observed_availability": _observed_adapter_availability(adapter),
         "recovery_control": _recovery_control_for_runtime(
             contract=descriptor.adapter_capabilities.recovery_control,

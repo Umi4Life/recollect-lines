@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .adapters import AdapterCapabilities
+from .capability_contract import (
+    SYNTHETIC_CONTRACT,
+    TEXT_SYNTHESIS_CONTRACT,
+    WORKTREE_CAPABLE_CONTRACT,
+    RuntimeCapabilityContract,
+)
 from .claude_code_adapter import ClaudeCodeAdapter
 from .codex_adapter import CodexAdapter
 from .cursor_adapter import CursorAdapter
@@ -69,6 +75,7 @@ class RuntimeDescriptor:
     model_selection: ModelSelectionSupport
     requires_named_provider: bool = False
     runtime_label: str | None = None
+    capability_contract: RuntimeCapabilityContract = WORKTREE_CAPABLE_CONTRACT
 
     @property
     def discovery_kind(self) -> str:
@@ -174,6 +181,7 @@ def build_default_runtime_registry() -> RuntimeRegistry:
         adapter_capabilities=_MOCK_CAPABILITIES,
         limitations=SUBPROCESS_LIMITATIONS,
         model_selection=ModelSelectionSupport.NOT_SUPPORTED,
+        capability_contract=SYNTHETIC_CONTRACT,
     ))
     registry.register(_subprocess_descriptor(
         OpenCodeAdapter, policy_key=OpenCodeAdapter.name, model_selection=ModelSelectionSupport.PERSISTED_NOT_INVOKED,
@@ -191,6 +199,7 @@ def build_default_runtime_registry() -> RuntimeRegistry:
         model_selection=ModelSelectionSupport.PROVIDER_CONFIG_DEFAULT,
         requires_named_provider=True,
         runtime_label=OpenAiCompatibleDirectRuntime.name,
+        capability_contract=TEXT_SYNTHESIS_CONTRACT,
     ))
     return registry
 

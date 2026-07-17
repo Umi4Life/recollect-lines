@@ -87,6 +87,39 @@ Claude Desktop, VS Code, OpenCode-as-host, and other MCP parents are **not** cla
 
 For HTTP tasks, the parent supplies `runtime=openai_compatible` and `provider=<name>`; the broker validates config at startup and performs the HTTP call — still no inline secrets in task arguments.
 
+### Runtime capability contract
+
+Every runtime exposes one `capability_contract` (see `discover_capabilities` / `discover` output, `capability_contract.py`) instead of scattered per-adapter conditionals:
+
+| Field | Meaning |
+|-------|---------|
+| `output_kind` | `workspace_mutation` (CLI runtimes, `mock`) or `text_synthesis` (`openai_compatible`) |
+| `owns_worktree` | Whether this runtime's policy can ever get a broker-owned `isolated_worktree` |
+| `mutates_workspace` | Whether the underlying tool actually writes files (`mock` never does, even in its own worktree) |
+| `materialization_owner` | `parent_merges_broker_worktree` or `parent_applies_text` |
+| `parent_materialization_required` | Always `true` — see below |
+| `materialization_note` | Human-readable statement of what this runtime does and does not do |
+
+Requesting an `execution_mode` a runtime's policy does not permit (e.g. `isolated_worktree` with
+`openai_compatible`) is rejected at `create()`/delegate time, before the task is ever queued or
+started — never a false success. The error names the runtime's `materialization_note` and any
+other registered runtimes that do support the requested mode.
+
+### Materialize → validate → record: the honest parent workflow
+
+**The broker never writes a task's result into the caller's real workspace, for any runtime.**
+`isolated_worktree` changes land in a broker-owned git worktree/branch under `<home>/worktrees/`,
+never merged back automatically; `openai_compatible` produces prose with no worktree at all. The
+parent that delegated the task always owns three steps after `collect`:
+
+1. **Materialize** — for worktree-capable runtimes, review and merge (or cherry-pick) the
+   broker-owned branch into the real repository yourself; for `openai_compatible`, apply the
+   returned text yourself (there is no branch to merge).
+2. **Validate** — run your own tests/review against the materialized change. A runtime-reported
+   success or a `verify_commands` pass is evidence, not a substitute for this step.
+3. **Record** — commit with a reference to the task id (and `root_task_id`/`external_root_id` for
+   multi-child trees) so the change stays attributable to its delegated task.
+
 ## Data and workspace authority boundaries
 
 | Asset | Authority | Notes |
