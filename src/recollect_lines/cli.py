@@ -582,6 +582,9 @@ def main(argv: list[str] | None = None) -> int:
             output = record.json()
             if compatibility is not None:
                 output = {**output, "compatibility": compatibility}
+            warning = broker.schema_conflict_warning(record.id)
+            if warning is not None:
+                output = {**output, "schema_conflict_warning": warning}
         elif args.command == "start":
             output = broker.start(args.task_id).json()
         elif args.command == "complete":

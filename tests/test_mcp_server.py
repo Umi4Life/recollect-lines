@@ -310,6 +310,31 @@ class McpServerTests(unittest.TestCase):
         self.assertFalse(response["result"]["isError"])
         self.assertEqual(payload["data"]["state"], "cancelled")
 
+    def test_delegate_surfaces_schema_conflict_warning_without_blocking(self):
+        self.initialize()
+        delegated = self.delegate(
+            task="Debate whether microservices are worth the added complexity",
+            result_schema="review-findings",
+        )
+        self.assertFalse(delegated["result"]["isError"])
+        payload = json.loads(delegated["result"]["content"][0]["text"])["data"]
+        # Advisory only: the task is still accepted and started.
+        self.assertIn(payload["state"], ("running", "succeeded", "queued", "preparing"))
+        self.assertEqual(payload["schema_conflict_warning"]["matched_signal"], "debate")
+
+        status = self.client.call_tool("status", {"task_id": payload["task_id"]})
+        status_payload = json.loads(status["result"]["content"][0]["text"])["data"]
+        self.assertEqual(status_payload["schema_conflict_warning"]["matched_signal"], "debate")
+
+    def test_delegate_has_no_schema_conflict_warning_for_ordinary_review_task(self):
+        self.initialize()
+        delegated = self.delegate(
+            task="Review the auth module for race conditions",
+            result_schema="review-findings",
+        )
+        payload = json.loads(delegated["result"]["content"][0]["text"])["data"]
+        self.assertNotIn("schema_conflict_warning", payload)
+
     # --- verify_commands / collect broker-verified evidence ------------------
 
     def test_collect_surfaces_broker_verified_evidence_distinct_from_runtime_result(self):

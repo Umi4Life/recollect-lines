@@ -98,6 +98,13 @@ def main():
     if "EMPTY_OUTPUT" in prompt:
         return 0
 
+    if "META_FORMAT_CHOICE" in prompt:
+        # The literal Wave 0 dogfood incident: process exits 0, is_error is
+        # False, but instead of the requested structured JSON the model asks
+        # the parent to pick an output format — a meta-response, not a result.
+        result("Would you like this as a table, a bulleted list, or prose? Let me know and I'll finalize the response.")
+        return 0
+
     body = task_prompt_only(prompt)
     if "SCHEMA_" in body:
         schema_part = body[body.index("SCHEMA_"):]
