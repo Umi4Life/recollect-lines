@@ -159,6 +159,41 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(child["origin_kind"], "host")
         self.assertEqual(child["parent_task_id"], parent["task_id"])
 
+    def test_task_tree_by_external_root_id(self):
+        self.initialize()
+        self.client.notify("notifications/initialized")
+        first = json.loads(
+            self.delegate(external_root_id="mcp-audit-key")["result"]["content"][0]["text"]
+        )["data"]
+        second = json.loads(
+            self.delegate(external_root_id="mcp-audit-key")["result"]["content"][0]["text"]
+        )["data"]
+        json.loads(self.delegate(external_root_id="other-key")["result"]["content"][0]["text"])
+
+        response = self.client.call_tool("task_tree", {"external_root_id": "mcp-audit-key"})
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertFalse(response["result"]["isError"])
+        self.assertEqual(payload["data"]["external_root_id"], "mcp-audit-key")
+        returned_ids = {task["task_id"] for task in payload["data"]["tasks"]}
+        self.assertEqual(returned_ids, {first["task_id"], second["task_id"]})
+
+    def test_task_tree_rejects_both_root_task_id_and_external_root_id(self):
+        self.initialize()
+        self.client.notify("notifications/initialized")
+        delegated = json.loads(self.delegate()["result"]["content"][0]["text"])["data"]
+
+        response = self.client.call_tool(
+            "task_tree", {"root_task_id": delegated["task_id"], "external_root_id": "some-key"}
+        )
+        self.assertTrue(response["result"]["isError"])
+
+    def test_task_tree_rejects_neither_root_task_id_nor_external_root_id(self):
+        self.initialize()
+        self.client.notify("notifications/initialized")
+
+        response = self.client.call_tool("task_tree", {})
+        self.assertTrue(response["result"]["isError"])
+
     def test_ping(self):
         self.initialize()
         response = self.client.request("ping")

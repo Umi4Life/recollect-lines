@@ -442,6 +442,19 @@ class Broker:
         except Exception as error:
             print(f"recollect_lines.service: pump collect failed for {task_id}: {error!r}", file=sys.stderr)
 
+    def task_tree_by_external_root(self, external_root_id: str) -> dict:
+        # Unlike task_tree, this key need not belong to any task; no match is an empty result, not an error.
+        if not isinstance(external_root_id, str) or not external_root_id.strip():
+            raise ValueError("'external_root_id' must be a non-empty string")
+        external_root_id = external_root_id.strip()
+        tasks = self.store.list_tasks_by_external_root(external_root_id, limit=MAX_TREE_NODES)
+        truncated = len(tasks) >= MAX_TREE_NODES
+        return {
+            "external_root_id": external_root_id,
+            "truncated": truncated,
+            "tasks": [concise_task_summary(task) for task in tasks],
+        }
+
     def completion_events_since(
         self,
         after_event_id: int = 0,

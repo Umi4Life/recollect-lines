@@ -277,5 +277,78 @@ class HostProvenanceDefaultTests(unittest.TestCase):
         self.assertFalse(tree["truncated"])
 
 
+class ExternalRootLookupTests(unittest.TestCase):
+    # external_root_id is a caller-supplied audit tag, not inherited automatically like root_task_id.
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.policy = LineagePolicy(max_active_agents=8, max_children_per_parent=4, max_delegation_depth=3)
+        mock_policy = ProfilePolicy("mock", frozenset({"read_only", "isolated_worktree"}), 3600, 16)
+        self.broker = Broker(self.home, profiles={"mock": mock_policy}, lineage_policy=self.policy)
+
+    def tearDown(self):
+        self.broker.close()
+        self.tempdir.cleanup()
+
+    def create(self, task: str = "work", workspace: str = "/repo", **kwargs):
+        return self.broker.create(TaskRequest(task, workspace, **kwargs))
+
+    def test_external_root_lookup_finds_tasks_sharing_the_key(self):
+        first = self.create("debate opener", external_root_id="helloworld-debate")
+        second = self.create("debate rebuttal", external_root_id="helloworld-debate")
+        unrelated = self.create("unrelated", external_root_id="other-session")
+
+        result = self.broker.task_tree_by_external_root("helloworld-debate")
+
+        self.assertEqual(result["external_root_id"], "helloworld-debate")
+        self.assertFalse(result["truncated"])
+        returned_ids = {task["task_id"] for task in result["tasks"]}
+        self.assertEqual(returned_ids, {first.id, second.id})
+        self.assertNotIn(unrelated.id, returned_ids)
+
+    def test_external_root_lookup_empty_result_is_not_an_error(self):
+        self.create("unrelated", external_root_id="some-other-key")
+
+        result = self.broker.task_tree_by_external_root("no-such-grouping-key")
+
+        self.assertEqual(result["external_root_id"], "no-such-grouping-key")
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["tasks"], [])
+
+    def test_external_root_lookup_rejects_blank_key(self):
+        with self.assertRaisesRegex(ValueError, "external_root_id"):
+            self.broker.task_tree_by_external_root("   ")
+
+    def test_mixed_tree_shared_external_root_spans_all_descendants(self):
+        root = self.create("root", external_root_id="shared-key")
+        child_a = self.create("child a", parent_task_id=root.id, external_root_id="shared-key")
+        child_b = self.create("child b", parent_task_id=root.id, external_root_id="shared-key")
+        # A sibling in the same broker tree that was *not* tagged with the
+        # audit key: the lookup is keyed strictly on external_root_id, not
+        # merely "somewhere in this root_task_id tree".
+        untagged_sibling = self.create("untagged sibling", parent_task_id=root.id)
+
+        result = self.broker.task_tree_by_external_root("shared-key")
+
+        returned_ids = {task["task_id"] for task in result["tasks"]}
+        self.assertEqual(returned_ids, {root.id, child_a.id, child_b.id})
+        self.assertNotIn(untagged_sibling.id, returned_ids)
+
+    def test_root_task_id_and_external_root_id_lookups_agree_for_same_root(self):
+        root = self.create("root", external_root_id="parity-key")
+        self.create("child a", parent_task_id=root.id, external_root_id="parity-key")
+        self.create("child b", parent_task_id=root.id, external_root_id="parity-key")
+
+        by_root = self.broker.task_tree(root.id)
+        by_external = self.broker.task_tree_by_external_root("parity-key")
+
+        self.assertEqual(
+            [task["task_id"] for task in by_root["tasks"]],
+            [task["task_id"] for task in by_external["tasks"]],
+        )
+        self.assertEqual(by_root["truncated"], by_external["truncated"])
+        self.assertEqual(by_root["tasks"], by_external["tasks"])
+
+
 if __name__ == "__main__":
     unittest.main()

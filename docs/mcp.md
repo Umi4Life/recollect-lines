@@ -34,7 +34,7 @@ Adapter override flags match `recollect-lines` (`--codex-command`, etc.).
 | `council_validate` | Validate council plan |
 | `council_execute` | Execute bounded council plan |
 | `task_children` | Direct child task summaries for a parent |
-| `task_tree` | Bounded tree for a `root_task_id` |
+| `task_tree` | Bounded tree for a `root_task_id`, or an audit lookup by `external_root_id` |
 | `completion_events` | Poll durable completion signals from the global event cursor (see below) |
 
 ## `delegate` input (schema summary)
@@ -69,6 +69,17 @@ Optional:
 `delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), `completion_cursor` (see [Completion-events polling contract](#completion-events-polling-contract-wave-5--pr-13) below), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
 
 See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
+
+## `task_tree`: `root_task_id` vs `external_root_id` (Wave 5 / PR 14)
+
+`task_tree` accepts exactly one of two mutually exclusive filters and returns the same shape (`truncated`, `tasks`) either way:
+
+| Filter | Identity | Matches |
+|--------|----------|---------|
+| `root_task_id` | A broker task id that is itself a tree root (`root_task_id == task_id`) | Every task whose broker-derived `root_task_id` equals it — the full parent-directed delegation tree. Unknown id is an error. |
+| `external_root_id` | A caller-supplied audit tag, not a task id | Every task that was explicitly created with that `external_root_id`, regardless of which broker tree(s) they belong to. Unlike `root_task_id`, this tag is **not inherited** by children automatically — each task only matches if its own `create`/`delegate` call supplied it. An unmatched key returns an empty `tasks` list, not an error. |
+
+Use `root_task_id` to walk one delegation tree by its broker identity. Use `external_root_id` for audit lookups keyed on a caller-chosen grouping label (e.g. a host conversation or debate id) attached to some or all of the tasks the host created for that grouping — this is the query path the dogfooded `helloworld` debate was missing: it tagged every task with the same `external_root_id`, but there was no way to look them back up except by individually-known `tsk_…` ids. This is audit trail visibility only; it grants no additional authorization and adds no workflow automation.
 
 ## Result outcome dimensions: execution, parsing, contract
 
