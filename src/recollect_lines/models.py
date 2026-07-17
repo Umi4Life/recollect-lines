@@ -204,6 +204,8 @@ class TaskRequest:
     model: str | None = None
     agent_profile: str | None = None
     result_schema: str | None = None
+    task_category: str | None = None
+    claude_permission_mode: str | None = None
     compatibility: dict[str, Any] | None = None
     explicit_fields: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
     parent_task_id: str | None = None
@@ -291,6 +293,10 @@ def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
         payload["agent_profile"] = request.agent_profile
     if request.result_schema is not None:
         payload["result_schema"] = request.result_schema
+    if request.task_category is not None:
+        payload["task_category"] = request.task_category
+    if request.claude_permission_mode is not None:
+        payload["claude_permission_mode"] = request.claude_permission_mode
     if request.compatibility is not None:
         payload["compatibility"] = request.compatibility
     if request.parent_task_id is not None:

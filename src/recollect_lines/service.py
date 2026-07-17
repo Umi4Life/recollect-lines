@@ -291,6 +291,8 @@ class Broker:
             model=request.model,
             agent_profile=request.agent_profile,
             result_schema=resolved.result_schema,
+            task_category=request.task_category,
+            claude_permission_mode=request.claude_permission_mode,
             compatibility=request.compatibility,
             explicit_fields=request.explicit_fields,
             parent_task_id=request.parent_task_id,

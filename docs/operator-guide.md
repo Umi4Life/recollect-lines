@@ -59,6 +59,8 @@ When mid-task steering is required, expect an explicit refusal — create a foll
 | `cursor` | Cursor CLI | Subprocess | Experimental read-only / worktree tasks |
 | `openai_compatible` | HTTP chat API | Direct HTTP | Text generation only — **no** subprocess/worktree supervision |
 
+Claude Code launches use a **task-aware permission-mode policy** (see [cli.md](cli.md#claude-code-permission-mode-policy-claude_code-runtime-only)): prose/review read-only tasks avoid `--permission-mode plan` (which can meta-refuse debate-style work) while structural read-only safety still comes from `--tools` / `--disallowedTools`. Unknown categories default to `plan` conservatively; `isolated_worktree` uses `acceptEdits`.
+
 ### MCP parent hosts (where `recollect-mcp` can be registered)
 
 `recollect-lines mcp install` supports hosts this project also supervises as runtimes:

@@ -118,6 +118,10 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         explicit_fields.add("agent_profile")
     if "result_schema" in item:
         explicit_fields.add("result_schema")
+    if "task_category" in item:
+        explicit_fields.add("task_category")
+    if "claude_permission_mode" in item:
+        explicit_fields.add("claude_permission_mode")
     effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
         runtime=runtime,
         profile=profile,
@@ -136,6 +140,14 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     provider = item.get("provider")
     if provider is not None and (not isinstance(provider, str) or not provider.strip()):
         raise ValueError("'provider' must be a non-empty string when provided")
+    task_category = item.get("task_category")
+    if task_category is not None and (not isinstance(task_category, str) or not task_category.strip()):
+        raise ValueError("'task_category' must be a non-empty string when provided")
+    claude_permission_mode = item.get("claude_permission_mode")
+    if claude_permission_mode is not None and (
+        not isinstance(claude_permission_mode, str) or not claude_permission_mode.strip()
+    ):
+        raise ValueError("'claude_permission_mode' must be a non-empty string when provided")
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
         validate_verify_commands(verify_commands)
@@ -159,6 +171,8 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         model=model,
         agent_profile=agent_profile,
         result_schema=result_schema,
+        task_category=task_category,
+        claude_permission_mode=claude_permission_mode,
         compatibility=compatibility,
         explicit_fields=frozenset(explicit_fields),
         parent_task_id=parent_task_id,
@@ -488,6 +502,22 @@ DELEGATE_INPUT_SCHEMA = {
             "description": (
                 "Requested normalized result schema. Unknown values are rejected at delegate time; "
                 "profile defaults apply when omitted unless an explicit task value wins."
+            ),
+        },
+        "task_category": {
+            "type": "string",
+            "enum": ["prose", "review", "investigation", "implementation", "unknown"],
+            "description": (
+                "Optional Claude Code task category for permission-mode policy. When omitted, inferred "
+                "from execution_mode, result_schema, and agent_profile."
+            ),
+        },
+        "claude_permission_mode": {
+            "type": "string",
+            "enum": ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"],
+            "description": (
+                "Optional explicit Claude Code --permission-mode override. Validated per execution_mode; "
+                "read_only may not broaden to acceptEdits or bypassPermissions."
             ),
         },
         "provider": {

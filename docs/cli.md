@@ -211,6 +211,10 @@ findings documented below.
 --model NAME           (optional; persisted only)
 --agent-profile NAME   (optional behavioral role; persisted only)
 --result-schema NAME   (optional result contract; persisted only)
+--task-category prose|review|investigation|implementation|unknown
+                       (optional Claude Code permission policy hint; inferred when omitted)
+--claude-permission-mode MODE
+                       (optional explicit Claude Code --permission-mode; validated per --mode)
 --provider NAME        (required for openai_compatible)
 --timeout SECONDS      (default 1800)
 --verification-policy none|advisory|required
@@ -223,6 +227,32 @@ findings documented below.
 ```
 
 Runtimes and modes are validated against broker policy before queueing. Legacy `--profile` follows the same translation rules as MCP; see [migration-runtime-profile.md](migration-runtime-profile.md).
+
+### Claude Code permission-mode policy (`claude_code` runtime only)
+
+The broker chooses Claude Code's `--permission-mode` from task signals instead of
+always forcing `plan` for every `read_only` task:
+
+| Inferred category | Typical signals | Default mode | Read-only tool guard |
+|-------------------|-----------------|--------------|----------------------|
+| `prose` | `plain-summary`, debate/summarization | `dontAsk` | `--tools Read,Grep,Glob` + disallowed edits |
+| `review` | `review-findings`, `architecture-reviewer` | `dontAsk` | same structural allowlist |
+| `investigation` | `evidence-report`, `repository-investigator` | `plan` | same structural allowlist |
+| `implementation` | `isolated_worktree`, `implementation-report` | `acceptEdits` | none (worktree isolation) |
+| `unknown` | no confident match | `plan` (conservative) | same structural allowlist |
+
+`plan` structurally refuses writes but can meta-refuse prose/debate work; those
+categories use `dontAsk` with the same tool allowlist instead. Unknown categories
+keep `plan` rather than silently broadening workspace authority.
+
+Optional overrides:
+
+- `--task-category` — explicit category when inference is wrong.
+- `--claude-permission-mode` — explicit CLI mode, validated per `--mode`
+  (`read_only` cannot use `acceptEdits` or `bypassPermissions`).
+
+The chosen mode and policy signals are recorded in launch metadata as
+`permission_mode_policy` (no prompt or secret content).
 
 `root_task_id` and `delegation_depth` are broker-derived and cannot be supplied by callers. `external_root_id` groups host-side work without inventing a broker parent. Absent `origin_kind`, host-facing `create` defaults to `host` (including parented tasks); `side_agent` is reserved for a future explicit recursive callback path and is audit-only. Agent callback delegation remains unimplemented; host `create`/`delegate` calls are not conflated with it.
 

@@ -32,6 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .adapters import AdapterCapabilities
+from .claude_permission_mode_policy import (
+    ClaudePermissionModeDecision,
+    ClaudePermissionModePolicyError,
+    permission_mode_policy_artifact,
+    resolve_claude_permission_mode,
+)
 from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
@@ -60,14 +66,9 @@ RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 # call at all, confirmed against the real CLI (it reports having no Bash
 # tool). --disallowedTools stays layered on top as defense in depth.
 #
-# ponytail: only the two execution_modes the broker currently defines are
-# mapped; build_command() fails closed (raises) for anything else rather than
-# guessing a permission mode, so a future execution_mode never silently
-# inherits write access.
-PERMISSION_MODE_BY_EXECUTION_MODE = {
-    "read_only": "plan",
-    "isolated_worktree": "acceptEdits",
-}
+# ponytail: read_only write-safety is structural (--tools/--disallowedTools), not
+# permission-mode alone; task-aware policy picks plan vs dontAsk for read_only
+# (see claude_permission_mode_policy.py). isolated_worktree always acceptEdits.
 READ_ONLY_DISALLOWED_TOOLS = ("Edit", "Write", "NotebookEdit")
 READ_ONLY_TOOLS = ("Read", "Grep", "Glob")
 
@@ -90,12 +91,29 @@ def redact_secrets(text: str) -> str:
     return text
 
 
-class ClaudeCodeUnsupportedPolicy(ValueError):
-    """Raised when an execution_mode has no validated Claude Code permission-mode mapping.
+def _read_launch_policy_overrides(artifacts_dir: Path) -> tuple[str | None, str | None]:
+    request_path = artifacts_dir / "request.json"
+    if not request_path.is_file():
+        return None, None
+    try:
+        payload = json.loads(request_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    task_category = payload.get("task_category")
+    claude_permission_mode = payload.get("claude_permission_mode")
+    if task_category is not None and not isinstance(task_category, str):
+        task_category = None
+    if claude_permission_mode is not None and not isinstance(claude_permission_mode, str):
+        claude_permission_mode = None
+    return task_category, claude_permission_mode
 
-    Fail-closed by construction: this is raised from build_command() before any
-    subprocess is spawned, so an unmapped policy never launches under a
-    silently-broadened default permission mode.
+
+class ClaudeCodeUnsupportedPolicy(ClaudePermissionModePolicyError):
+    """Raised when execution_mode or permission override is not permitted.
+
+    Fail-closed by construction: raised from build_command() before any subprocess
+    is spawned, so an unmapped policy never launches under a silently-broadened
+    default permission mode.
     """
 
 
@@ -165,19 +183,33 @@ class ClaudeCodeAdapter:
             return {"available": False, "reason": "version_check_failed", "detail": detail}
         return {"available": True, "version": completed.stdout.strip()}
 
-    def build_command(self, prompt: str, execution_mode: str, *, model: str | None = None) -> list:
-        permission_mode = PERMISSION_MODE_BY_EXECUTION_MODE.get(execution_mode)
-        if permission_mode is None:
-            raise ClaudeCodeUnsupportedPolicy(
-                f"No validated Claude Code permission-mode mapping for execution_mode={execution_mode!r}; "
-                "refusing to launch rather than silently broadening privilege"
+    def build_command(
+        self,
+        prompt: str,
+        execution_mode: str,
+        *,
+        model: str | None = None,
+        result_schema: str | None = None,
+        agent_profile: str | None = None,
+        task_category: str | None = None,
+        claude_permission_mode: str | None = None,
+    ) -> tuple[list, ClaudePermissionModeDecision]:
+        try:
+            decision = resolve_claude_permission_mode(
+                execution_mode=execution_mode,
+                result_schema=result_schema,
+                agent_profile=agent_profile,
+                task_category=task_category,
+                claude_permission_mode=claude_permission_mode,
             )
+        except ClaudePermissionModePolicyError as error:
+            raise ClaudeCodeUnsupportedPolicy(str(error)) from error
         # Prompt goes immediately after -p, before any flag — see module
         # docstring for why order matters with commander's variadic options.
         command = [
             *self.command_prefix, "-p", prompt,
             "--output-format", "json",
-            "--permission-mode", permission_mode,
+            "--permission-mode", decision.permission_mode,
             "--no-session-persistence",
         ]
         effective_model = model if model is not None else self.model
@@ -186,17 +218,26 @@ class ClaudeCodeAdapter:
         if execution_mode == "read_only":
             command += ["--tools", ",".join(READ_ONLY_TOOLS)]
             command += ["--disallowedTools", ",".join(READ_ONLY_DISALLOWED_TOOLS)]
-        return command
+        return command, decision
 
     def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, ProcessHandle]:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = artifacts_dir / "stdout.log"
         stderr_path = artifacts_dir / "stderr.log"
         effective_workspace = workspace or record.workspace
+        task_category, claude_permission_mode = _read_launch_policy_overrides(artifacts_dir)
         # Claude Code has no --dir/--workspace flag (unlike OpenCode); tool
         # access is scoped to the process's own cwd, so isolation depends on
         # launching in effective_workspace, not on an argument.
-        command = self.build_command(prompt or record.task, record.execution_mode, model=record.effective_model)
+        command, decision = self.build_command(
+            prompt or record.task,
+            record.execution_mode,
+            model=record.effective_model,
+            result_schema=record.result_schema,
+            agent_profile=record.agent_profile,
+            task_category=task_category,
+            claude_permission_mode=claude_permission_mode,
+        )
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             popen = subprocess.Popen(
                 command, stdout=stdout_file, stderr=stderr_file, cwd=effective_workspace, start_new_session=True,
@@ -224,7 +265,8 @@ class ClaudeCodeAdapter:
             "events_artifact": stdout_path.name,
             "stderr_artifact": stderr_path.name,
             "workspace": effective_workspace,
-            "permission_mode": PERMISSION_MODE_BY_EXECUTION_MODE[record.execution_mode],
+            "permission_mode": decision.permission_mode,
+            "permission_mode_policy": permission_mode_policy_artifact(decision),
         }
         return metadata, handle
 
