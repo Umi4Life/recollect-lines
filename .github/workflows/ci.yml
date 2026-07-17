@@ -28,6 +28,11 @@ jobs:
       - name: Run test suite
         run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 
+      - name: Run pytest import-path contract (no PYTHONPATH override)
+        run: |
+          python3 -m pip install pytest pytest-subtests
+          env -u PYTHONPATH pytest -q
+
       - name: Run generic MCP-host acceptance harness
         run: python3 scripts/mcp_acceptance.py
 
