@@ -36,6 +36,7 @@ from .models import (
     validate_verify_commands,
     verification_gate_label,
 )
+from .required_capabilities import RequiredCapabilityValidationError, normalize_required_capabilities
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
@@ -122,6 +123,8 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         explicit_fields.add("task_category")
     if "claude_permission_mode" in item:
         explicit_fields.add("claude_permission_mode")
+    if "required_capabilities" in item:
+        explicit_fields.add("required_capabilities")
     effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
         runtime=runtime,
         profile=profile,
@@ -151,6 +154,14 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     verify_commands = item.get("verify_commands")
     if verify_commands is not None:
         validate_verify_commands(verify_commands)
+    required_capabilities_raw = item.get("required_capabilities")
+    if required_capabilities_raw is not None:
+        try:
+            required_capabilities = normalize_required_capabilities(required_capabilities_raw)
+        except RequiredCapabilityValidationError as error:
+            raise ValueError(str(error)) from error
+    else:
+        required_capabilities = ()
     parent_task_id = item.get("parent_task_id")
     external_root_id = item.get("external_root_id")
     relationship = item.get("relationship")
@@ -180,6 +191,7 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
         relationship=relationship,
         origin_kind=origin_kind,
         origin_ref=origin_ref,
+        required_capabilities=required_capabilities,
     ), verify_commands
 
 
@@ -537,6 +549,15 @@ DELEGATE_INPUT_SCHEMA = {
             "description": (
                 "Optional explicit Claude Code --permission-mode override. Validated per execution_mode; "
                 "read_only may not broaden to acceptEdits or bypassPermissions."
+            ),
+        },
+        "required_capabilities": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["workspace.read", "repository.remote.read"]},
+            "minItems": 1,
+            "description": (
+                "Optional semantic capabilities the task needs before launch. Unknown ids are rejected "
+                "at delegate time. When omitted, no capability preflight is applied."
             ),
         },
         "provider": {

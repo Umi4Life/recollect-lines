@@ -64,6 +64,12 @@ from .models import (
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .providers import ProviderConfigError, load_providers_config
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
+from .required_capabilities import (
+    CapabilityPreflightContext,
+    RequiredCapabilityValidationError,
+    evaluate_capability_preflight,
+    normalize_required_capabilities,
+)
 from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
@@ -252,6 +258,10 @@ class Broker:
             )
         if request.verification_policy not in VERIFICATION_POLICIES:
             raise ValueError(f"Unknown verification_policy: {request.verification_policy}")
+        try:
+            normalize_required_capabilities(list(request.required_capabilities) if request.required_capabilities else None)
+        except RequiredCapabilityValidationError as error:
+            raise ValueError(str(error)) from error
         if runtime == DIRECT_API_PROFILE:
             if self.direct_api_runtime is None:
                 raise ValueError(
@@ -307,8 +317,55 @@ class Broker:
             relationship=request.relationship,
             origin_kind=request.origin_kind,
             origin_ref=request.origin_ref,
+            required_capabilities=request.required_capabilities,
         )
         return effective, resolved
+
+    def _capability_preflight_context(self, record: TaskRecord) -> CapabilityPreflightContext:
+        request_path = self.store.artifacts / record.id / "request.json"
+        task_category = None
+        claude_permission_mode = None
+        if request_path.is_file():
+            try:
+                payload = json.loads(request_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            task_category = payload.get("task_category")
+            claude_permission_mode = payload.get("claude_permission_mode")
+            if task_category is not None and not isinstance(task_category, str):
+                task_category = None
+            if claude_permission_mode is not None and not isinstance(claude_permission_mode, str):
+                claude_permission_mode = None
+        return CapabilityPreflightContext(
+            runtime=record.runtime,
+            execution_mode=record.execution_mode,
+            result_schema=record.result_schema,
+            agent_profile=record.agent_profile,
+            task_category=task_category,
+            claude_permission_mode=claude_permission_mode,
+        )
+
+    def _required_capabilities_for_record(self, record: TaskRecord) -> tuple[str, ...]:
+        request_path = self.store.artifacts / record.id / "request.json"
+        if not request_path.is_file():
+            return ()
+        try:
+            payload = json.loads(request_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return ()
+        return normalize_required_capabilities(payload.get("required_capabilities"))
+
+    def _reject_unsatisfied_capabilities(self, record: TaskRecord) -> TaskRecord | None:
+        required = self._required_capabilities_for_record(record)
+        rejection = evaluate_capability_preflight(required, self._capability_preflight_context(record))
+        if rejection is None:
+            return None
+        return self.store.transition(
+            record.id,
+            TaskState.REJECTED,
+            "Required capabilities are not satisfied by the selected runtime policy",
+            rejection,
+        )
 
     def _composed_launch_prompt(self, task_id: str, record: TaskRecord) -> tuple[str, dict[str, object] | None]:
         schema = effective_result_schema(record)
@@ -533,6 +590,10 @@ class Broker:
         return json.loads(path.read_text()) if path.is_file() else None
 
     def start(self, task_id: str) -> TaskRecord:
+        record = self.store.get(task_id)
+        rejected = self._reject_unsatisfied_capabilities(record)
+        if rejected is not None:
+            return rejected
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
         record, model_evidence = self._resolve_launch_model(record)
         launch_prompt, prompt_evidence = self._composed_launch_prompt(task_id, record)
