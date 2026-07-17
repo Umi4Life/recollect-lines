@@ -410,6 +410,7 @@ def build_normalized_envelope(
     final_state: TaskState,
     required_capabilities: tuple[str, ...] = (),
     tool_access_profile_audit: dict[str, Any] | None = None,
+    model_profile_resource: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema = effective_result_schema(record)
     summary = collected.get("summary")
@@ -501,6 +502,8 @@ def build_normalized_envelope(
         envelope["capability_contract"] = capability_contract
     if tool_access_profile_audit is not None:
         envelope["broker_observed"]["tool_access_profile_audit"] = tool_access_profile_audit
+    if model_profile_resource is not None:
+        envelope["broker_observed"]["model_profile_resource"] = model_profile_resource
     return envelope
 
 
@@ -551,6 +554,13 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
         }
         if audit.get("advertises_repository_remote_read"):
             view["tool_access_profile_audit"]["advertises_repository_remote_read"] = True
+    model_profile = broker.get("model_profile_resource")
+    if isinstance(model_profile, dict) and model_profile:
+        view["model_profile_resource"] = {
+            key: model_profile[key]
+            for key in ("resolution", "model_profile", "cost_class", "usage_bucket", "resources")
+            if key in model_profile
+        }
     verified = runtime.get("verified_investigation")
     if parser.get("requested_schema") == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
         view["verified_investigation_summary"] = verified_investigation_summary(

@@ -80,6 +80,16 @@ from .tool_access_profile import (
     resolve_tool_access_profile,
     tool_access_profile_audit_payload,
 )
+from .model_profile import (
+    ModelProfileValidationError,
+    build_model_profile_registry,
+    evaluate_model_profile_preflight,
+    load_model_profiles_config,
+    model_profile_public_projection,
+    normalize_model_profile,
+    resolve_model_profile_snapshot,
+    unconfigured_model_profile_snapshot,
+)
 from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
@@ -136,6 +146,8 @@ class Broker:
         agent_profiles: dict | None = None,
         tool_access_profiles: dict | None = None,
         tool_access_profile_registry=None,
+        model_profiles: dict | None = None,
+        model_profile_registry=None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
         lineage_policy: LineagePolicy | None = None,
         environ: dict[str, str] | None = None,
@@ -154,6 +166,18 @@ class Broker:
         else:
             self.tool_access_profile_registry = build_tool_access_profile_registry(
                 configured=configured_profiles or {},
+            )
+        configured_model_profiles = model_profiles
+        if configured_model_profiles is None and model_profile_registry is None and providers_config is not None:
+            try:
+                configured_model_profiles = load_model_profiles_config(providers_config)
+            except Exception:
+                configured_model_profiles = {}
+        if model_profile_registry is not None:
+            self.model_profile_registry = model_profile_registry
+        else:
+            self.model_profile_registry = build_model_profile_registry(
+                configured=configured_model_profiles or {},
             )
         self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter(
             tool_access_profile_registry=self.tool_access_profile_registry,
@@ -298,6 +322,13 @@ class Broker:
             )
         except ToolAccessProfileValidationError as error:
             raise ValueError(str(error)) from error
+        try:
+            normalize_model_profile(
+                request.model_profile,
+                registry=self.model_profile_registry,
+            )
+        except ModelProfileValidationError as error:
+            raise ValueError(str(error)) from error
         if runtime == DIRECT_API_PROFILE:
             if self.direct_api_runtime is None:
                 raise ValueError(
@@ -355,6 +386,7 @@ class Broker:
             origin_ref=request.origin_ref,
             required_capabilities=request.required_capabilities,
             tool_access_profile=request.tool_access_profile,
+            model_profile=request.model_profile,
         )
         return effective, resolved
 
@@ -395,6 +427,69 @@ class Broker:
     def _tool_access_profile_for_record(self, record: TaskRecord) -> str | None:
         value = self._request_payload_for_record(record).get("tool_access_profile")
         return value if isinstance(value, str) else None
+
+    def _model_profile_for_record(self, record: TaskRecord) -> str | None:
+        value = self._request_payload_for_record(record).get("model_profile")
+        return value if isinstance(value, str) else None
+
+    def _reject_invalid_model_profile(self, record: TaskRecord) -> TaskRecord | None:
+        requested = self._model_profile_for_record(record)
+        rejection = evaluate_model_profile_preflight(
+            runtime=record.runtime,
+            provider=record.provider,
+            effective_model=record.effective_model,
+            requested_profile=requested,
+            registry=self.model_profile_registry,
+        )
+        if rejection is None:
+            return None
+        return self.store.transition(
+            record.id,
+            TaskState.REJECTED,
+            "Requested model_profile is not compatible with this task runtime/model binding",
+            rejection,
+        )
+
+    def _record_model_profile_resolution(self, record: TaskRecord) -> dict[str, Any] | None:
+        requested = self._model_profile_for_record(record)
+        try:
+            snapshot = resolve_model_profile_snapshot(
+                runtime=record.runtime,
+                provider=record.provider,
+                effective_model=record.effective_model,
+                requested_profile=requested,
+                registry=self.model_profile_registry,
+            )
+        except ModelProfileValidationError:
+            return None
+        public = model_profile_public_projection(snapshot)
+        if public is None:
+            return None
+        self.store.write_artifact(
+            record.id,
+            "model_profile_resolution.json",
+            json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+        )
+        return public
+
+    def _read_model_profile_projection(self, task_id: str) -> dict[str, Any] | None:
+        path = self.store.artifacts / task_id / "model_profile_resolution.json"
+        if not path.is_file():
+            requested_path = self.store.artifacts / task_id / "request.json"
+            if requested_path.is_file():
+                try:
+                    payload = json.loads(requested_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+                requested = payload.get("model_profile")
+                if isinstance(requested, str) and requested:
+                    return {"resolution": "pending", "model_profile": requested, "cost_class": "unknown"}
+            return model_profile_public_projection(unconfigured_model_profile_snapshot())
+        try:
+            snapshot = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return model_profile_public_projection(snapshot) if isinstance(snapshot, dict) else None
 
     def _record_tool_access_profile_resolution(self, record: TaskRecord) -> dict[str, Any] | None:
         requested = self._tool_access_profile_for_record(record)
@@ -525,7 +620,10 @@ class Broker:
 
     def children(self, task_id: str) -> list[dict]:
         self.store.get(task_id)
-        return [concise_task_summary(child) for child in self.store.list_children(task_id)]
+        return [
+            concise_task_summary(child, model_profile_resource=self._read_model_profile_projection(child.id))
+            for child in self.store.list_children(task_id)
+        ]
 
     def task_tree(self, root_task_id: str) -> dict:
         root = self.store.get(root_task_id)
@@ -536,7 +634,10 @@ class Broker:
         return {
             "root_task_id": root_task_id,
             "truncated": truncated,
-            "tasks": [concise_task_summary(task) for task in tasks],
+            "tasks": [
+                concise_task_summary(task, model_profile_resource=self._read_model_profile_projection(task.id))
+                for task in tasks
+            ],
         }
 
     def _pump_finished_handles(self) -> None:
@@ -588,7 +689,10 @@ class Broker:
         return {
             "external_root_id": external_root_id,
             "truncated": truncated,
-            "tasks": [concise_task_summary(task) for task in tasks],
+            "tasks": [
+                concise_task_summary(task, model_profile_resource=self._read_model_profile_projection(task.id))
+                for task in tasks
+            ],
         }
 
     def completion_events_since(
@@ -676,9 +780,13 @@ class Broker:
         rejected = self._reject_unsatisfied_capabilities(record)
         if rejected is not None:
             return rejected
+        record, model_evidence = self._resolve_launch_model(record)
+        rejected = self._reject_invalid_model_profile(record)
+        if rejected is not None:
+            return rejected
+        self._record_model_profile_resolution(record)
         profile_audit = self._record_tool_access_profile_resolution(record)
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
-        record, model_evidence = self._resolve_launch_model(record)
         launch_prompt, prompt_evidence = self._composed_launch_prompt(task_id, record)
         if prompt_evidence is not None:
             self.store.write_artifact(
@@ -898,6 +1006,7 @@ class Broker:
             final_state=final_state,
             required_capabilities=self._required_capabilities_for_record(record),
             tool_access_profile_audit=self._read_tool_access_profile_audit(record.id),
+            model_profile_resource=self._read_model_profile_projection(record.id),
         )
         self.store.write_artifact(
             record.id,

@@ -33,6 +33,7 @@ from .tool_access_profile import (
     ToolAccessProfileValidationError,
     normalize_tool_access_profile,
 )
+from .model_profile import ModelProfileValidationError, normalize_model_profile
 from .providers import OPERATOR_CONFIG_DIRNAME, ProviderConfigError, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
@@ -127,6 +128,17 @@ def parser() -> argparse.ArgumentParser:
             "instances from tool_access_profiles in broker config are also valid when present. "
             "When omitted, resolves to the profile that reproduces today's default tool policy "
             "for the selected runtime and execution mode."
+        ),
+    )
+    create.add_argument(
+        "--model-profile",
+        dest="model_profile",
+        default=None,
+        help=(
+            "Operator-configured model profile id for explicit cost/resource metadata. "
+            "Unknown ids fail at create; incompatible runtime/provider/model bindings fail "
+            "at start before adapter launch. When omitted, the task is recorded as "
+            "unconfigured (cost_class unknown) — never inferred from runtime or model name."
         ),
     )
     create.add_argument(
@@ -585,6 +597,8 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_fields.add("required_capabilities")
             if args.tool_access_profile is not None:
                 explicit_fields.add("tool_access_profile")
+            if args.model_profile is not None:
+                explicit_fields.add("model_profile")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -606,6 +620,13 @@ def main(argv: list[str] | None = None) -> int:
                     registry=broker.tool_access_profile_registry,
                 )
             except ToolAccessProfileValidationError as error:
+                raise SystemExit(str(error)) from error
+            try:
+                model_profile = normalize_model_profile(
+                    args.model_profile,
+                    registry=broker.model_profile_registry,
+                )
+            except ModelProfileValidationError as error:
                 raise SystemExit(str(error)) from error
             request = TaskRequest(
                 args.task,
@@ -630,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
                 origin_ref=args.origin_ref,
                 required_capabilities=required_capabilities,
                 tool_access_profile=tool_access_profile,
+                model_profile=model_profile,
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)

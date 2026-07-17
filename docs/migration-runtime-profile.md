@@ -118,6 +118,19 @@ Optional JSON configuration extends built-ins (`--agent-profiles-config` / broke
 
 No destructive schema replacement. Re-running migration is idempotent.
 
+## Model profiles and resource metadata
+
+Optional operator-configured `model_profiles` bind explicit runtime/model
+configurations to durable `cost_class` and resource tier metadata. See
+[model-profile-resource-metadata.md](model-profile-resource-metadata.md).
+
+- `model_profile` on a task selects a configured profile id; omission is
+  explicit unconfigured (`cost_class: unknown`), never inferred.
+- Resolution is snapshotted at launch; graph role does not affect
+  classification.
+- Safe projections appear on status, normalized results, and completion
+  events as `model_profile_resource`.
+
 ## Normalized results (MR 8.6)
 
 Supported `result_schema` values:
