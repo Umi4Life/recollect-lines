@@ -40,6 +40,7 @@ _SCHEMA_TO_CATEGORY: dict[str, str] = {
     "plain-summary": "prose",
     "review-findings": "review",
     "evidence-report": "investigation",
+    "verified-investigation-report": "investigation",
     "implementation-report": "implementation",
 }
 

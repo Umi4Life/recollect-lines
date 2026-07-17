@@ -53,7 +53,7 @@ Optional:
 | `profile` | — | **Deprecated.** Legacy alias for `runtime`; accepted only for known runtime identifiers |
 | `model` | — | Optional requested model identifier (persisted only in this release) |
 | `agent_profile` | — | Optional behavioral role identifier (persisted only in this release) |
-| `result_schema` | — | Optional normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`); unknown values rejected at delegate. Structured schemas append a versioned prompt-level output contract at launch (not provider-native structured output). |
+| `result_schema` | — | Optional normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`, `verified-investigation-report`); unknown values rejected at delegate. Structured schemas append a versioned prompt-level output contract at launch (not provider-native structured output). |
 | `provider` | — | Required when `runtime` is `openai_compatible` |
 | `timeout_seconds` | `1800` | positive integer |
 | `verification_policy` | `none` | `none`, `advisory`, `required` |
@@ -95,7 +95,7 @@ This is what makes the Wave 0 dogfood incident un-repeatable: a `claude -p` run 
 
 ## Schema/prose conflict warning
 
-`delegate`/`delegate_batch` run a deterministic, advisory check at create time: if the task text reads as an open-ended, unstructured request (matching a small fixed vocabulary — e.g. "debate", "essay", "story") while a structured `result_schema` (`evidence-report`, `review-findings`, `implementation-report`) was requested, the response and later `status` calls include a `schema_conflict_warning` object:
+`delegate`/`delegate_batch` run a deterministic, advisory check at create time: if the task text reads as an open-ended, unstructured request (matching a small fixed vocabulary — e.g. "debate", "essay", "story") while a structured `result_schema` (`evidence-report`, `review-findings`, `implementation-report`, `verified-investigation-report`) was requested, the response and later `status` calls include a `schema_conflict_warning` object:
 
 ```json
 {

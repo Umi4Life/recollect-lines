@@ -551,7 +551,7 @@ DELEGATE_INPUT_SCHEMA = {
         },
         "result_schema": {
             "type": "string",
-            "enum": ["plain-summary", "evidence-report", "review-findings", "implementation-report"],
+            "enum": ["plain-summary", "evidence-report", "review-findings", "implementation-report", "verified-investigation-report"],
             "description": (
                 "Requested normalized result schema. Unknown values are rejected at delegate time; "
                 "profile defaults apply when omitted unless an explicit task value wins."

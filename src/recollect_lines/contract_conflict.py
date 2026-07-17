@@ -27,7 +27,12 @@ _PROSE_GENRE_SIGNALS: tuple[str, ...] = (
     "brainstorm", "opinion piece",
 )
 
-_STRUCTURED_SCHEMAS = frozenset({"evidence-report", "review-findings", "implementation-report"})
+_STRUCTURED_SCHEMAS = frozenset({
+    "evidence-report",
+    "review-findings",
+    "implementation-report",
+    "verified-investigation-report",
+})
 
 
 def detect_schema_prose_conflict(task_text: str, result_schema: str | None) -> dict[str, str] | None:

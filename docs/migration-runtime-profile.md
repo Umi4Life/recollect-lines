@@ -11,7 +11,7 @@ Recollect Lines previously overloaded `profile` as the execution-backend selecto
 | `agent_profile` | Optional behavioral agent profile name (resolves prompt prefix and defaults at create; composed at launch) |
 | `model` | Optional requested model identifier (passed to adapters when the runtime's `model_selection` supports it) |
 | `effective_model` | Model resolved at launch (adapter/provider default or task override); persisted after `start()` |
-| `result_schema` | Optional requested normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`); unknown values fail at create |
+| `result_schema` | Optional requested normalized result schema (`plain-summary`, `evidence-report`, `review-findings`, `implementation-report`, `verified-investigation-report`); unknown values fail at create |
 
 The SQLite `profile` column remains as a compatibility bridge (`profile = runtime`).
 
@@ -126,6 +126,7 @@ Supported `result_schema` values:
 |--------|---------|
 | `plain-summary` | Default when unset; summary text only |
 | `evidence-report` | Investigation output with optional findings/evidence/commands (runtime-reported) |
+| `verified-investigation-report` | Strict investigation contract with provenance, referential integrity, and count-only concise summaries ([details](verified-investigation-report.md)) |
 | `review-findings` | Review output with findings list |
 | `implementation-report` | Change summary with runtime-reported commands/tests |
 
