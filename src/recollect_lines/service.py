@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import AdapterCapabilities
+from .capability_contract import describe_unsupported_execution_mode, materialization_prompt_notice
 from .durable_reconciliation import (
     AdoptedDurableHandle,
     LAUNCH_KIND_DURABLE,
@@ -241,7 +242,9 @@ class Broker:
             raise ValueError(f"Unknown runtime: {runtime}")
         resolved_policy = policy or self.profiles[runtime]
         if request.execution_mode not in resolved_policy.allowed_modes:
-            raise ValueError(f"Profile {resolved_policy.name} does not permit mode {request.execution_mode}")
+            raise ValueError(describe_unsupported_execution_mode(
+                self.runtime_registry, runtime, request.execution_mode,
+            ))
         if request.timeout_seconds > resolved_policy.max_timeout_seconds:
             raise ValueError(
                 f"Profile {resolved_policy.name} maximum timeout is {resolved_policy.max_timeout_seconds} seconds"
@@ -279,6 +282,8 @@ class Broker:
             result_schema=request.result_schema,
             allowed_modes=policy.allowed_modes,
             max_timeout_seconds=policy.max_timeout_seconds,
+            runtime=runtime,
+            runtime_registry=self.runtime_registry,
         )
         effective = TaskRequest(
             request.task,
@@ -306,6 +311,7 @@ class Broker:
 
     def _composed_launch_prompt(self, task_id: str, record: TaskRecord) -> tuple[str, dict[str, object] | None]:
         schema = effective_result_schema(record)
+        notice = materialization_prompt_notice(self.runtime_registry.get(record.runtime).capability_contract)
         resolution_path = self.store.artifacts / task_id / "agent_profile_resolution.json"
         if resolution_path.is_file():
             resolution = json.loads(resolution_path.read_text())
@@ -313,6 +319,7 @@ class Broker:
                 prompt_prefix=resolution["prompt_prefix"],
                 task_text=record.task,
                 result_schema=schema,
+                materialization_notice=notice,
             )
             evidence: dict[str, object] = {
                 "profile_name": resolution["name"],
@@ -326,24 +333,31 @@ class Broker:
             }
             if contract is not None:
                 evidence["result_schema_contract"] = contract
+            if notice is not None:
+                evidence["materialization_notice"] = notice
             return composed, evidence
 
         composed, contract = compose_launch_prompt(
             prompt_prefix=None,
             task_text=record.task,
             result_schema=schema,
+            materialization_notice=notice,
         )
-        if contract is None:
+        if contract is None and notice is None:
             return record.task, None
         source = "task_request" if record.result_schema is not None else "runtime_default"
-        return composed, {
+        evidence = {
             "task_text": record.task,
             "result_schema": schema,
             "result_schema_source": source,
             "result_schema_prompt_version": RESULT_SCHEMA_PROMPT_VERSION,
-            "result_schema_contract": contract,
             "composed_prompt": composed,
         }
+        if contract is not None:
+            evidence["result_schema_contract"] = contract
+        if notice is not None:
+            evidence["materialization_notice"] = notice
+        return composed, evidence
 
     def _apply_resolved_lineage(self, record: TaskRecord, resolved) -> TaskRecord:
         return dataclasses.replace(

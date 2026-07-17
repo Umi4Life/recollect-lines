@@ -58,9 +58,12 @@ def compose_launch_prompt(
     prompt_prefix: str | None,
     task_text: str,
     result_schema: str,
+    materialization_notice: str | None = None,
 ) -> tuple[str, str | None]:
-    """Join profile prefix, task text, and optional schema contract."""
+    """Join profile prefix, task text, optional runtime honesty notice, and optional schema contract."""
     base = compose_task_prompt(prompt_prefix or "", task_text)
+    if materialization_notice:
+        base = f"{base}\n\n{materialization_notice}" if base else materialization_notice
     contract = result_schema_prompt(result_schema)
     if not contract:
         return base, None

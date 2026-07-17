@@ -474,8 +474,13 @@ DELEGATE_INPUT_SCHEMA = {
             "description": (
                 "Execution backend identifier. mock is a deterministic no-op adapter for testing; "
                 "opencode runs the real OpenCode CLI; claude_code runs Claude Code (`claude -p`); "
-                "codex runs Codex (`codex exec`); cursor runs Cursor Agent; "
-                "openai_compatible sends a chat-completions request through a named provider."
+                "codex runs Codex (`codex exec`); cursor runs Cursor Agent -- these own a broker "
+                "worktree in isolated_worktree mode, but the broker never merges it back into the "
+                "source workspace (parent_materialization_required is always true; see "
+                "discover_capabilities capability_contract). openai_compatible sends a "
+                "chat-completions request through a named provider and returns text/synthesis "
+                "output only (read_only execution_mode only) -- it never owns a worktree or writes "
+                "to a workspace; the parent must materialize and validate any suggested change."
             ),
         },
         "profile": {

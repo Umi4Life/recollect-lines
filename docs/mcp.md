@@ -128,6 +128,23 @@ Errors use `"ok": false` and `"error": { "code", "message" }` at the envelope le
 
 `source` is `"not_configured"` when no provider configuration file was resolved from any tier. `source_origin` names which precedence tier selected `source`: `explicit` (`--providers-config`), `env` (`RECOLLECT_CONFIG`), `repo_local` (`./.recollect/config.{yaml,yml,json}`), `user_level` (`~/.recollect/config.{yaml,yml,json}`), `legacy_default` (`./providers.json`), or `not_configured`. See [cli.md](cli.md#provider-configuration-resolution-order) for the full precedence order and its fail-truthfully rule for configured (explicit/env) sources. `loaded_at` is when *this* process read the file — not when it was last modified on disk. There is no hot reload: if you edit the file, this MCP server will keep serving the old snapshot until it is restarted. Never contains credential values. Both JSON and YAML (safe-loaded only) are supported.
 
+## Runtime capability contract (Wave 4 / PR 12)
+
+Each entry in `discover_capabilities`'s `runtimes` array carries a `capability_contract` object:
+
+```json
+{
+  "output_kind": "text_synthesis",
+  "mutates_workspace": false,
+  "owns_worktree": false,
+  "materialization_owner": "parent_applies_text",
+  "parent_materialization_required": true,
+  "materialization_note": "openai_compatible returns synthesized text only over HTTP; it never owns a git worktree or writes to any workspace. The parent that delegated this task must materialize (apply) and validate the returned text itself."
+}
+```
+
+CLI runtimes (`mock`, `opencode`, `claude_code`, `codex`, `cursor`) report `output_kind: "workspace_mutation"` and `owns_worktree: true` — but `parent_materialization_required` is `true` for these too: the broker never merges an `isolated_worktree` branch back into the source workspace (see [operator-guide.md](operator-guide.md#materialize--validate--record-the-honest-parent-workflow)). Requesting an `execution_mode` a runtime does not permit is rejected at `delegate` time with a message naming supported alternative runtimes and this runtime's `materialization_note` — never a fabricated success.
+
 ## Host configuration example
 
 ```json

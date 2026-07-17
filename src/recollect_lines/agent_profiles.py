@@ -233,6 +233,8 @@ def resolve_agent_profile(
     result_schema: str | None,
     allowed_modes: frozenset[str],
     max_timeout_seconds: int,
+    runtime: str | None = None,
+    runtime_registry: object | None = None,
 ) -> ResolvedAgentProfile:
     resolved_mode, mode_source = _resolve_field(
         "execution_mode",
@@ -271,10 +273,16 @@ def resolve_agent_profile(
 
     if resolved_mode not in allowed_modes:
         sources["execution_mode"] = SOURCE_BROKER_CEILING
-        raise AgentProfileError(
-            f"Resolved execution_mode {resolved_mode!r} is not permitted by runtime policy "
-            f"(allowed: {sorted(allowed_modes)})"
-        )
+        if runtime is not None and runtime_registry is not None:
+            from .capability_contract import describe_unsupported_execution_mode
+
+            message = describe_unsupported_execution_mode(runtime_registry, runtime, resolved_mode)
+        else:
+            message = (
+                f"Resolved execution_mode {resolved_mode!r} is not permitted by runtime policy "
+                f"(allowed: {sorted(allowed_modes)})"
+            )
+        raise AgentProfileError(message)
     if resolved_timeout > max_timeout_seconds:
         sources["timeout_seconds"] = SOURCE_BROKER_CEILING
         raise AgentProfileError(
