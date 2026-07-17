@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from .claude_permission_mode_policy import resolve_claude_permission_mode
-from .tool_access_profile import ToolAccessProfileValidationError, resolve_tool_access_profile
+from .tool_access_profile import (
+    ToolAccessProfileRegistry,
+    ToolAccessProfileValidationError,
+    default_tool_access_profile_registry,
+    resolve_tool_access_profile,
+)
 
 WORKSPACE_READ = "workspace.read"
 REPOSITORY_REMOTE_READ = "repository.remote.read"
@@ -36,6 +41,7 @@ class CapabilityPreflightContext:
     task_category: str | None = None
     claude_permission_mode: str | None = None
     tool_access_profile: str | None = None
+    tool_access_profile_registry: ToolAccessProfileRegistry | None = None
 
 
 def normalize_required_capabilities(raw: Any) -> tuple[str, ...]:
@@ -83,13 +89,12 @@ def _claude_code_advertised_capabilities(ctx: CapabilityPreflightContext) -> fro
             runtime=ctx.runtime,
             execution_mode=ctx.execution_mode,
             requested_profile=ctx.tool_access_profile,
+            registry=ctx.tool_access_profile_registry or default_tool_access_profile_registry(),
         )
     except ToolAccessProfileValidationError:
         return frozenset()
     if profile is None:
         return frozenset()
-    # repository.remote.read needs an explicit MCP allowlist map per adapter; no
-    # tool_access_profile defined today grants it (see tool_access_profile.py).
     return profile.semantic_capabilities
 
 

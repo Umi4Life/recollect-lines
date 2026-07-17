@@ -73,8 +73,12 @@ from .required_capabilities import (
 )
 from .tool_access_profile import (
     ToolAccessProfileValidationError,
+    build_tool_access_profile_registry,
     evaluate_tool_access_profile_preflight,
+    load_tool_access_profiles_config,
     normalize_tool_access_profile,
+    resolve_tool_access_profile,
+    tool_access_profile_audit_payload,
 )
 from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
@@ -130,6 +134,8 @@ class Broker:
         providers_config_origin: str | None = None,
         agent_profiles_config: Path | None = None,
         agent_profiles: dict | None = None,
+        tool_access_profiles: dict | None = None,
+        tool_access_profile_registry=None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
         lineage_policy: LineagePolicy | None = None,
         environ: dict[str, str] | None = None,
@@ -137,7 +143,23 @@ class Broker:
         self.store = TaskStore(home)
         self.adapter = MockAdapter()
         self.opencode_adapter = opencode_adapter or OpenCodeAdapter()
-        self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter()
+        configured_profiles = tool_access_profiles
+        if configured_profiles is None and tool_access_profile_registry is None and providers_config is not None:
+            try:
+                configured_profiles = load_tool_access_profiles_config(providers_config)
+            except Exception:
+                configured_profiles = {}
+        if tool_access_profile_registry is not None:
+            self.tool_access_profile_registry = tool_access_profile_registry
+        else:
+            self.tool_access_profile_registry = build_tool_access_profile_registry(
+                configured=configured_profiles or {},
+            )
+        self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter(
+            tool_access_profile_registry=self.tool_access_profile_registry,
+        )
+        if claude_code_adapter is not None:
+            self.claude_code_adapter.tool_access_profile_registry = self.tool_access_profile_registry
         self.codex_adapter = codex_adapter or CodexAdapter()
         self.cursor_adapter = cursor_adapter or CursorAdapter()
         self.fixture_durable_adapter = fixture_durable_adapter
@@ -270,7 +292,10 @@ class Broker:
         except RequiredCapabilityValidationError as error:
             raise ValueError(str(error)) from error
         try:
-            normalize_tool_access_profile(request.tool_access_profile)
+            normalize_tool_access_profile(
+                request.tool_access_profile,
+                registry=self.tool_access_profile_registry,
+            )
         except ToolAccessProfileValidationError as error:
             raise ValueError(str(error)) from error
         if runtime == DIRECT_API_PROFILE:
@@ -361,6 +386,7 @@ class Broker:
             task_category=task_category,
             claude_permission_mode=claude_permission_mode,
             tool_access_profile=tool_access_profile,
+            tool_access_profile_registry=self.tool_access_profile_registry,
         )
 
     def _required_capabilities_for_record(self, record: TaskRecord) -> tuple[str, ...]:
@@ -370,10 +396,34 @@ class Broker:
         value = self._request_payload_for_record(record).get("tool_access_profile")
         return value if isinstance(value, str) else None
 
+    def _record_tool_access_profile_resolution(self, record: TaskRecord) -> dict[str, Any] | None:
+        requested = self._tool_access_profile_for_record(record)
+        try:
+            profile = resolve_tool_access_profile(
+                runtime=record.runtime,
+                execution_mode=record.execution_mode,
+                requested_profile=requested,
+                registry=self.tool_access_profile_registry,
+            )
+        except ToolAccessProfileValidationError:
+            return None
+        audit = tool_access_profile_audit_payload(profile)
+        if audit is None:
+            return None
+        self.store.write_artifact(
+            record.id,
+            "tool_access_profile_resolution.json",
+            json.dumps(audit, indent=2, sort_keys=True) + "\n",
+        )
+        return audit
+
     def _reject_invalid_tool_access_profile(self, record: TaskRecord) -> TaskRecord | None:
         requested = self._tool_access_profile_for_record(record)
         rejection = evaluate_tool_access_profile_preflight(
-            runtime=record.runtime, execution_mode=record.execution_mode, requested_profile=requested,
+            runtime=record.runtime,
+            execution_mode=record.execution_mode,
+            requested_profile=requested,
+            registry=self.tool_access_profile_registry,
         )
         if rejection is None:
             return None
@@ -626,6 +676,7 @@ class Broker:
         rejected = self._reject_unsatisfied_capabilities(record)
         if rejected is not None:
             return rejected
+        profile_audit = self._record_tool_access_profile_resolution(record)
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
         record, model_evidence = self._resolve_launch_model(record)
         launch_prompt, prompt_evidence = self._composed_launch_prompt(task_id, record)
@@ -742,6 +793,8 @@ class Broker:
             event_metadata = {**event_metadata, "model_selection": model_evidence}
             if prompt_evidence is not None:
                 event_metadata = {**event_metadata, "agent_profile_prompt": prompt_evidence}
+            if profile_audit is not None:
+                event_metadata = {**event_metadata, "tool_access_profile_audit": profile_audit}
             return self.store.transition(record.id, TaskState.RUNNING, f"{adapter.name} adapter started", event_metadata)
         mock_metadata = {**self.adapter.start_metadata(record, effective_workspace), "model_selection": model_evidence}
         if prompt_evidence is not None:
@@ -754,6 +807,16 @@ class Broker:
     def _read_verification_artifact(self, task_id: str) -> dict | None:
         path = self.store.artifacts / task_id / "verification.json"
         return json.loads(path.read_text()) if path.is_file() else None
+
+    def _read_tool_access_profile_audit(self, task_id: str) -> dict[str, Any] | None:
+        path = self.store.artifacts / task_id / "tool_access_profile_resolution.json"
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def _capability_contract_for_collection(
         self, record: TaskRecord, collected: dict[str, Any],
@@ -834,6 +897,7 @@ class Broker:
             raw_output_artifact=raw_ref,
             final_state=final_state,
             required_capabilities=self._required_capabilities_for_record(record),
+            tool_access_profile_audit=self._read_tool_access_profile_audit(record.id),
         )
         self.store.write_artifact(
             record.id,

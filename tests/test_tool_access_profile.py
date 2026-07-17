@@ -12,21 +12,40 @@ from recollect_lines.claude_code_adapter import ClaudeCodeAdapter, ClaudeCodeUns
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.mcp_server import _build_task_request
 from recollect_lines.required_capabilities import (
+    REPOSITORY_REMOTE_READ,
     WORKSPACE_READ,
     CapabilityPreflightContext,
     advertised_semantic_capabilities,
+    evaluate_capability_preflight,
 )
+from recollect_lines.result_normalization import build_normalized_envelope, concise_normalized_view
 from recollect_lines.service import Broker
 from recollect_lines.tool_access_profile import (
     LOCAL_WORKSPACE_READ_ONLY,
     LOCAL_WORKSPACE_STANDARD,
+    OPERATOR_APPROVED_REPOSITORY_READ,
+    ToolAccessProfileConfigError,
     ToolAccessProfileValidationError,
+    build_tool_access_profile_registry,
     evaluate_tool_access_profile_preflight,
     normalize_tool_access_profile,
+    parse_tool_access_profiles_document,
     resolve_tool_access_profile,
+    tool_access_profile_audit_payload,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fake_claude.py"
+SAMPLE_EXTERNAL_TOOLS = (
+    "mcp__github__get_pull_request",
+    "mcp__github__list_commits",
+)
+
+
+def repository_read_registry(*, profile_name: str = OPERATOR_APPROVED_REPOSITORY_READ) -> object:
+    configured = parse_tool_access_profiles_document({
+        profile_name: {"allowed_external_tools": list(SAMPLE_EXTERNAL_TOOLS)},
+    })
+    return build_tool_access_profile_registry(configured=configured)
 
 
 class SpyClaudeAdapter(ClaudeCodeAdapter):
@@ -38,7 +57,11 @@ class SpyClaudeAdapter(ClaudeCodeAdapter):
 
 
 def fake_claude_adapter(**kwargs):
-    return SpyClaudeAdapter(command_prefix=(sys.executable, str(FIXTURE)), **kwargs)
+    registry = kwargs.pop("tool_access_profile_registry", None)
+    adapter = SpyClaudeAdapter(command_prefix=(sys.executable, str(FIXTURE)), **kwargs)
+    if registry is not None:
+        adapter.tool_access_profile_registry = registry
+    return adapter
 
 
 class NormalizationTests(unittest.TestCase):
@@ -290,6 +313,197 @@ class BrokerPreflightTests(unittest.TestCase):
                 "runtime": "claude_code",
                 "tool_access_profile": "yolo_mode",
             })
+
+
+class RepositoryReadProfileTests(unittest.TestCase):
+    def test_config_parses_finite_exact_external_tools(self):
+        configured = parse_tool_access_profiles_document({
+            OPERATOR_APPROVED_REPOSITORY_READ: {
+                "allowed_external_tools": list(SAMPLE_EXTERNAL_TOOLS),
+            },
+        })
+        profile = configured[OPERATOR_APPROVED_REPOSITORY_READ]
+        self.assertEqual(profile.external_tools, SAMPLE_EXTERNAL_TOOLS)
+
+    def test_wildcard_external_tool_rejected_at_config_parse(self):
+        with self.assertRaises(ToolAccessProfileConfigError) as ctx:
+            parse_tool_access_profiles_document({
+                OPERATOR_APPROVED_REPOSITORY_READ: {
+                    "allowed_external_tools": ["mcp__github__*"],
+                },
+            })
+        self.assertIn("wildcard", str(ctx.exception).lower())
+
+    def test_duplicate_external_tool_rejected_at_config_parse(self):
+        with self.assertRaises(ToolAccessProfileConfigError):
+            parse_tool_access_profiles_document({
+                OPERATOR_APPROVED_REPOSITORY_READ: {
+                    "allowed_external_tools": [
+                        "mcp__github__get_pull_request",
+                        "mcp__github__get_pull_request",
+                    ],
+                },
+            })
+
+    def test_empty_external_allowlist_rejected_at_config_parse(self):
+        with self.assertRaises(ToolAccessProfileConfigError):
+            parse_tool_access_profiles_document({
+                OPERATOR_APPROVED_REPOSITORY_READ: {"allowed_external_tools": []},
+            })
+
+    def test_unconfigured_repository_read_profile_rejected_before_launch(self):
+        rejection = evaluate_tool_access_profile_preflight(
+            runtime="claude_code",
+            execution_mode="read_only",
+            requested_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+        )
+        assert rejection is not None
+        self.assertEqual(rejection["reason"], "unconfigured_tool_access_profile")
+
+    def test_approved_profile_builds_expected_claude_allowlist(self):
+        registry = repository_read_registry()
+        adapter = fake_claude_adapter(tool_access_profile_registry=registry)
+        command, _decision = adapter.build_command(
+            "inspect remote",
+            "read_only",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+        )
+        tools = command[command.index("--tools") + 1]
+        self.assertEqual(tools.split(","), ["Read", "Grep", "Glob", *SAMPLE_EXTERNAL_TOOLS])
+        self.assertEqual(command[command.index("--disallowedTools") + 1], "Edit,Write,NotebookEdit")
+
+    def test_approved_profile_advertises_repository_remote_read(self):
+        registry = repository_read_registry()
+        ctx = CapabilityPreflightContext(
+            runtime="claude_code",
+            execution_mode="read_only",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+            tool_access_profile_registry=registry,
+        )
+        self.assertEqual(
+            advertised_semantic_capabilities(ctx),
+            frozenset({WORKSPACE_READ, REPOSITORY_REMOTE_READ}),
+        )
+
+    def test_repository_remote_read_preflight_succeeds_for_approved_profile(self):
+        registry = repository_read_registry()
+        ctx = CapabilityPreflightContext(
+            runtime="claude_code",
+            execution_mode="read_only",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+            tool_access_profile_registry=registry,
+        )
+        self.assertIsNone(evaluate_capability_preflight((REPOSITORY_REMOTE_READ,), ctx))
+
+    def test_local_only_profile_still_rejects_repository_remote_read(self):
+        ctx = CapabilityPreflightContext(runtime="claude_code", execution_mode="read_only")
+        rejection = evaluate_capability_preflight((REPOSITORY_REMOTE_READ,), ctx)
+        assert rejection is not None
+        self.assertEqual(rejection["reason"], "missing_required_capabilities")
+
+    def test_audit_payload_exposes_count_not_tool_identifiers(self):
+        registry = repository_read_registry()
+        profile = resolve_tool_access_profile(
+            runtime="claude_code",
+            execution_mode="read_only",
+            requested_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+            registry=registry,
+        )
+        audit = tool_access_profile_audit_payload(profile)
+        assert audit is not None
+        self.assertEqual(audit["external_tool_count"], len(SAMPLE_EXTERNAL_TOOLS))
+        encoded = json.dumps(audit)
+        for tool in SAMPLE_EXTERNAL_TOOLS:
+            self.assertNotIn(tool, encoded)
+
+    def test_operator_configured_instance_name_is_selectable(self):
+        registry = repository_read_registry(profile_name="acme_repo_read")
+        self.assertEqual(
+            normalize_tool_access_profile("acme_repo_read", registry=registry),
+            "acme_repo_read",
+        )
+
+
+class RepositoryReadBrokerTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tempdir.name) / "broker"
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir()
+        self.registry = repository_read_registry()
+        SpyClaudeAdapter.start_calls = 0
+        self.broker = Broker(
+            self.home,
+            claude_code_adapter=fake_claude_adapter(tool_access_profile_registry=self.registry),
+            tool_access_profile_registry=self.registry,
+        )
+
+    def tearDown(self):
+        self.broker.close()
+        self.tempdir.cleanup()
+
+    def test_approved_profile_launches_with_required_capability(self):
+        record = self.broker.create(TaskRequest(
+            "check remote pr",
+            str(self.workspace),
+            profile="claude_code",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+            required_capabilities=(REPOSITORY_REMOTE_READ,),
+        ))
+        started = self.broker.start(record.id)
+        self.assertEqual(started.state, TaskState.RUNNING)
+        self.assertEqual(SpyClaudeAdapter.start_calls, 1)
+
+    def test_unconfigured_repository_read_rejected_before_launch(self):
+        broker = Broker(self.home, claude_code_adapter=fake_claude_adapter())
+        record = broker.create(TaskRequest(
+            "check remote pr",
+            str(self.workspace),
+            profile="claude_code",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+        ))
+        rejected = broker.start(record.id)
+        self.assertEqual(rejected.state, TaskState.REJECTED)
+        self.assertEqual(SpyClaudeAdapter.start_calls, 0)
+        events = broker.store.events(record.id)
+        rejection_event = next(event for event in events if event["type"] == "task.rejected")
+        self.assertEqual(rejection_event["metadata"]["reason"], "unconfigured_tool_access_profile")
+        broker.close()
+
+    def test_resolution_artifact_and_normalized_audit_are_privacy_safe(self):
+        record = self.broker.create(TaskRequest(
+            "inspect",
+            str(self.workspace),
+            profile="claude_code",
+            tool_access_profile=OPERATOR_APPROVED_REPOSITORY_READ,
+        ))
+        self.broker.start(record.id)
+        resolution = json.loads(
+            (self.broker.store.artifacts / record.id / "tool_access_profile_resolution.json").read_text()
+        )
+        self.assertEqual(resolution["tool_access_profile"], OPERATOR_APPROVED_REPOSITORY_READ)
+        self.assertEqual(resolution["external_tool_count"], len(SAMPLE_EXTERNAL_TOOLS))
+        encoded = json.dumps(resolution)
+        for tool in SAMPLE_EXTERNAL_TOOLS:
+            self.assertNotIn(tool, encoded)
+
+        envelope = build_normalized_envelope(
+            record=record,
+            result={},
+            collected={"adapter": "claude_code", "exit_code": 0},
+            gate={"policy": "none", "outcome": "passed"},
+            verification=None,
+            manifest={"artifacts": []},
+            launch=None,
+            raw_output_artifact=None,
+            final_state=TaskState.SUCCEEDED,
+            tool_access_profile_audit=resolution,
+        )
+        view = concise_normalized_view(envelope)
+        assert view is not None
+        audit = view["tool_access_profile_audit"]
+        self.assertEqual(audit["external_tool_count"], len(SAMPLE_EXTERNAL_TOOLS))
+        self.assertNotIn("mcp__", json.dumps(audit))
 
 
 if __name__ == "__main__":

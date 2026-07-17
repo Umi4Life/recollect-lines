@@ -120,11 +120,13 @@ def parser() -> argparse.ArgumentParser:
         "--tool-access-profile",
         dest="tool_access_profile",
         default=None,
-        choices=sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS),
         help=(
             "Explicit runtime tool-access profile, separate from --mode (workspace-mutation "
-            "authority). When omitted, resolves to the profile that reproduces today's default "
-            "tool policy for the selected runtime and execution mode."
+            "authority). Built-in ids: "
+            f"{sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS)}. Operator-configured repository-read "
+            "instances from tool_access_profiles in broker config are also valid when present. "
+            "When omitted, resolves to the profile that reproduces today's default tool policy "
+            "for the selected runtime and execution mode."
         ),
     )
     create.add_argument(
@@ -599,7 +601,10 @@ def main(argv: list[str] | None = None) -> int:
             except RequiredCapabilityValidationError as error:
                 raise SystemExit(str(error)) from error
             try:
-                tool_access_profile = normalize_tool_access_profile(args.tool_access_profile)
+                tool_access_profile = normalize_tool_access_profile(
+                    args.tool_access_profile,
+                    registry=broker.tool_access_profile_registry,
+                )
             except ToolAccessProfileValidationError as error:
                 raise SystemExit(str(error)) from error
             request = TaskRequest(

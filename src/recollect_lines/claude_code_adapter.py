@@ -41,7 +41,12 @@ from .claude_permission_mode_policy import (
 from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
-from .tool_access_profile import ToolAccessProfileValidationError, resolve_tool_access_profile
+from .tool_access_profile import (
+    ToolAccessProfileRegistry,
+    ToolAccessProfileValidationError,
+    default_tool_access_profile_registry,
+    resolve_tool_access_profile,
+)
 
 DEFAULT_COMMAND_PREFIX = ("claude",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
@@ -158,10 +163,14 @@ class ClaudeCodeAdapter:
         command_prefix=DEFAULT_COMMAND_PREFIX,
         model: str | None = None,
         grace_period_seconds: float = DEFAULT_GRACE_PERIOD_SECONDS,
+        tool_access_profile_registry: ToolAccessProfileRegistry | None = None,
     ):
         self.command_prefix = tuple(command_prefix)
         self.model = model
         self.grace_period_seconds = grace_period_seconds
+        self.tool_access_profile_registry = (
+            tool_access_profile_registry or default_tool_access_profile_registry()
+        )
 
     @property
     def runtime_label(self) -> str:
@@ -213,7 +222,10 @@ class ClaudeCodeAdapter:
             raise ClaudeCodeUnsupportedPolicy(str(error)) from error
         try:
             profile = resolve_tool_access_profile(
-                runtime=self.name, execution_mode=execution_mode, requested_profile=tool_access_profile,
+                runtime=self.name,
+                execution_mode=execution_mode,
+                requested_profile=tool_access_profile,
+                registry=self.tool_access_profile_registry,
             )
         except ToolAccessProfileValidationError as error:
             raise ClaudeCodeUnsupportedPolicy(str(error)) from error

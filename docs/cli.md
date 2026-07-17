@@ -215,6 +215,11 @@ findings documented below.
                        (optional Claude Code permission policy hint; inferred when omitted)
 --claude-permission-mode MODE
                        (optional explicit Claude Code --permission-mode; validated per --mode)
+--required-capability ID
+                       (repeatable semantic capability preflight; e.g. workspace.read,
+                        repository.remote.read)
+--tool-access-profile ID
+                       (explicit runtime tool-access profile; separate from --mode)
 --provider NAME        (required for openai_compatible)
 --timeout SECONDS      (default 1800)
 --verification-policy none|advisory|required
@@ -269,6 +274,26 @@ Optional overrides:
 
 The chosen mode and policy signals are recorded in launch metadata as
 `permission_mode_policy` (no prompt or secret content).
+
+### Tool-access profiles (`tool_access_profile`)
+
+`tool_access_profile` is orthogonal to `--mode`. Built-in local profiles:
+
+| Profile | Compatible `--mode` | Claude `--tools` effect | Advertises |
+|---------|---------------------|-------------------------|------------|
+| *(omitted)* | per runtime default | today's default mapping | `workspace.read` only |
+| `local_workspace_read_only` | `read_only` | `Read,Grep,Glob` + disallowed edits | `workspace.read` |
+| `local_workspace_standard` | `isolated_worktree` | native CLI default toolset | `workspace.read` |
+| `operator_approved_repository_read` | `read_only` | local read tools + configured exact MCP ids | `workspace.read`, `repository.remote.read` |
+
+`operator_approved_repository_read` requires an operator-approved finite
+`allowed_external_tools` list in broker config (`tool_access_profiles` in
+`.recollect/config.yaml`). Wildcards, prefixes, and server-wide grants are
+rejected. See [operator-guide.md](operator-guide.md#tool-access-profiles-and-operator-approved-repository-read).
+
+Normalized results include a compact `tool_access_profile_audit`
+(`tool_access_profile`, `external_tool_count`) — never tool arguments or MCP
+payloads.
 
 `root_task_id` and `delegation_depth` are broker-derived and cannot be supplied by callers. `external_root_id` groups host-side work without inventing a broker parent. Absent `origin_kind`, host-facing `create` defaults to `host` (including parented tasks); `side_agent` is reserved for a future explicit recursive callback path and is audit-only. Agent callback delegation remains unimplemented; host `create`/`delegate` calls are not conflated with it.
 

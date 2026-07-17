@@ -28,7 +28,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # Strict schema surface (Wave 2 / PR 5): unknown keys are rejected rather than
 # silently ignored, so a misspelled field or a misplaced literal secret is
 # caught at load time instead of silently doing nothing.
-ALLOWED_TOP_LEVEL_KEYS = frozenset({"providers"})
+ALLOWED_TOP_LEVEL_KEYS = frozenset({"providers", "tool_access_profiles"})
 ALLOWED_PROVIDER_ENTRY_KEYS = frozenset({
     "kind", "base_url", "api_key_env", "default_model",
     "request_timeout_seconds", "tls_verify", "allow_insecure_http",
@@ -280,7 +280,7 @@ def validate_providers_document(data: Any) -> dict[str, ProviderConfig]:
     if unknown_top_level:
         raise ProviderConfigError(
             f"Unknown top-level key(s) {', '.join(sorted(unknown_top_level))}; "
-            "only 'providers' is supported"
+            f"supported keys: {', '.join(sorted(ALLOWED_TOP_LEVEL_KEYS))}"
         )
     providers_raw = data.get("providers")
     if not isinstance(providers_raw, dict) or not providers_raw:
