@@ -93,7 +93,11 @@ def _tool_result(tool: str, ok: bool, data: Any = None, error: dict | None = Non
 # --- shared argument helpers -----------------------------------------------
 
 
-def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
+def _build_task_request(
+    item: Any,
+    *,
+    tool_access_profile_registry=None,
+) -> tuple[TaskRequest, list | None]:
     """Validate one delegate-shaped item, raising ValueError on any bad field.
 
     Shared by `delegate` (a single item) and `delegate_batch` (many items). A
@@ -170,7 +174,10 @@ def _build_task_request(item: Any) -> tuple[TaskRequest, list | None]:
     else:
         required_capabilities = ()
     try:
-        tool_access_profile = normalize_tool_access_profile(item.get("tool_access_profile"))
+        tool_access_profile = normalize_tool_access_profile(
+            item.get("tool_access_profile"),
+            registry=tool_access_profile_registry,
+        )
     except ToolAccessProfileValidationError as error:
         raise ValueError(str(error)) from error
     parent_task_id = item.get("parent_task_id")
@@ -247,7 +254,10 @@ def _create_and_start(broker: Broker, item: Any) -> tuple[Any, Exception | None]
     task_id) must never be lost just because the caller now needs to know
     something went wrong with an already-persisted task.
     """
-    request, verify_commands = _build_task_request(item)
+    request, verify_commands = _build_task_request(
+        item,
+        tool_access_profile_registry=broker.tool_access_profile_registry,
+    )
     record = broker.create(request, verify_commands=verify_commands)
     try:
         record = broker.start(record.id)
@@ -574,13 +584,15 @@ DELEGATE_INPUT_SCHEMA = {
         },
         "tool_access_profile": {
             "type": "string",
-            "enum": sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS),
             "description": (
                 "Optional explicit runtime tool-access profile, separate from execution_mode (which "
-                "governs workspace-mutation authority only). Unknown, incompatible, or unavailable-for-"
-                "runtime selections are rejected at preflight before launch. When omitted, resolves "
-                "deterministically to the profile that reproduces today's default tool policy for the "
-                "selected runtime and execution_mode -- no behavior change for existing callers."
+                "governs workspace-mutation authority only). Built-in ids: "
+                f"{sorted(KNOWN_TOOL_ACCESS_PROFILE_IDS)}. Operator-configured repository-read "
+                "instances from tool_access_profiles in broker config are also valid when present. "
+                "Unknown, incompatible, unconfigured, or unavailable-for-runtime selections are "
+                "rejected at preflight before launch. When omitted, resolves deterministically to "
+                "the profile that reproduces today's default tool policy for the selected runtime "
+                "and execution_mode -- no behavior change for existing callers."
             ),
         },
         "provider": {

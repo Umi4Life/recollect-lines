@@ -369,6 +369,7 @@ def build_normalized_envelope(
     raw_output_artifact: str | None,
     final_state: TaskState,
     required_capabilities: tuple[str, ...] = (),
+    tool_access_profile_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema = effective_result_schema(record)
     summary = collected.get("summary")
@@ -453,6 +454,8 @@ def build_normalized_envelope(
     }
     if capability_contract is not None:
         envelope["capability_contract"] = capability_contract
+    if tool_access_profile_audit is not None:
+        envelope["broker_observed"]["tool_access_profile_audit"] = tool_access_profile_audit
     return envelope
 
 
@@ -495,6 +498,14 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
             "unknown_capabilities": contract.get("unknown_capabilities", []),
             "reasons": contract.get("reasons", []),
         }
+    audit = broker.get("tool_access_profile_audit")
+    if isinstance(audit, dict) and audit:
+        view["tool_access_profile_audit"] = {
+            "tool_access_profile": audit.get("tool_access_profile"),
+            "external_tool_count": audit.get("external_tool_count"),
+        }
+        if audit.get("advertises_repository_remote_read"):
+            view["tool_access_profile_audit"]["advertises_repository_remote_read"] = True
     return view
 
 

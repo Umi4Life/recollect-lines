@@ -124,6 +124,55 @@ pattern (opening positions → rebuttals → synthesis → validation → option
 parent materialization) in [bounded-debate-workflow.md](bounded-debate-workflow.md)
 — still caller-controlled, not an autonomous council.
 
+### Tool-access profiles and operator-approved repository read
+
+`execution_mode` (`read_only` / `isolated_worktree`) governs **workspace mutation
+authority only**. `tool_access_profile` is a separate, explicit dimension for
+which runtime tool identifiers a launch may use. Omitting `tool_access_profile`
+keeps today's defaults unchanged: local read-only Claude Code tasks still get
+`Read,Grep,Glob` only and **do not** advertise `repository.remote.read`.
+
+The built-in `operator_approved_repository_read` profile is **opt-in** and
+**configuration-backed**. It never expands defaults on its own. To use it:
+
+1. Add a finite, exact allowlist of external/MCP read tool identifiers to your
+   operator config (`.recollect/config.yaml` or resolved equivalent):
+
+```yaml
+tool_access_profiles:
+  operator_approved_repository_read:
+    allowed_external_tools:
+      - mcp__github__get_pull_request
+      - mcp__github__list_commits
+```
+
+2. Pass `tool_access_profile=operator_approved_repository_read` on `create` /
+   MCP `delegate` together with `required_capabilities` that include
+   `repository.remote.read` when the task needs remote evidence.
+
+3. Keep MCP credentials and server configuration in the **runtime's** normal
+   configuration (for example Claude Code's MCP host files). The broker does
+   **not** forward generic credentials, copy environment secrets into task
+   artifacts, or proxy arbitrary MCP tools.
+
+**Threat model (explicit limits):**
+
+| Trust boundary | What the broker does | What it does *not* do |
+|----------------|----------------------|------------------------|
+| Profile selection | Rejects unknown, incompatible, unconfigured, wildcard, or duplicate allowlists before launch | Infer profile choice from task prose |
+| Tool allowlist | Passes resolved local read tools plus configured exact MCP ids into Claude `--tools` | Grant prefix/wildcard/server-wide MCP access |
+| `repository.remote.read` preflight | Statically advertises the capability only when an approved profile with a non-empty allowlist is selected | Verify external source truth or MCP server responses |
+| Audit metadata | Records profile id and `external_tool_count` in normalized results | Expose tool arguments, queries, paths, responses, or credentials |
+
+The broker treats each configured MCP tool identifier as **operator-curated
+read-only**. It does not infer safety from a tool name pattern alone.
+
+Custom instance names are also supported when declared under
+`tool_access_profiles` with `profile_kind: operator_approved_repository_read`.
+
+Restart `recollect-mcp` (or start a fresh CLI invocation) after editing
+`tool_access_profiles`; configuration is a startup snapshot.
+
 ### Runtime capability contract
 
 Every runtime exposes one `capability_contract` (see `discover_capabilities` / `discover` output, `capability_contract.py`) instead of scattered per-adapter conditionals:

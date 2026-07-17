@@ -54,3 +54,17 @@ providers:
       structured_output: true
       streaming: false
       tool_calls: false
+
+# Optional: operator-approved repository-read tool-access profile (RFC-002).
+# Each entry is a finite exact allowlist of external MCP tool identifiers.
+# Wildcards/prefixes are rejected. MCP credentials stay in the runtime's own
+# configuration — never in this file.
+# tool_access_profiles:
+#   operator_approved_repository_read:
+#     allowed_external_tools:
+#       - mcp__github__get_pull_request
+#       - mcp__github__list_commits
+#   acme_repo_read:
+#     profile_kind: operator_approved_repository_read
+#     allowed_external_tools:
+#       - mcp__acme__list_pull_requests
