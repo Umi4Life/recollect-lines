@@ -1,4 +1,4 @@
-"""RFC-002 PR 2: required-capability declarations and static preflight rejection."""
+"""Required-capability declarations and static preflight rejection."""
 
 from __future__ import annotations
 

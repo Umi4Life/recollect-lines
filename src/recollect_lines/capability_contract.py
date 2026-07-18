@@ -1,4 +1,4 @@
-"""Runtime capability contract (Wave 4 / PR 12).
+"""Runtime capability contract.
 
 One stable, queryable descriptor of what a runtime executes, mutates, and
 materializes. Every `RuntimeDescriptor` carries exactly one of these so

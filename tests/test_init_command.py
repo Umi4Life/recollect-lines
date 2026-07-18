@@ -1,4 +1,4 @@
-"""Wave 3 / PR 6: `recollect-lines init` -- local state/config bootstrap.
+"""`recollect-lines init` -- local state/config bootstrap.
 
 Covers idempotency, overwrite safety, secret-free generated content, POSIX
 file/directory permissions, truthful diagnostic surfacing, and the CLI

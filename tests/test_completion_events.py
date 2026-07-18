@@ -1,6 +1,6 @@
-"""MR 8.7: durable global completion-event cursor.
+"""Durable global completion-event cursor.
 
-Wave 5 / PR 13 extends this with event-driven completion collection: a
+Event-driven completion collection extends this with a
 non-blocking pump (Broker._pump_finished_handles(), exercised only through
 completion_events_since()) that lets a parent observe a real child process
 finishing without ever calling collect() first and without a guessed sleep.
@@ -36,7 +36,7 @@ def fake_opencode_adapter(grace_period_seconds: float = 2.0) -> OpenCodeAdapter:
 
 def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> bool:
     """Tight bounded poll loop -- the hermetic-test analogue of the no-guessed-sleep
-    pattern this PR gives real callers: keep checking, never sleep for a guessed
+    pattern real callers use: keep checking, never sleep for a guessed
     task duration and check once.
     """
     deadline = time.monotonic() + timeout
@@ -311,7 +311,7 @@ def kill_and_reap(popen: subprocess.Popen) -> None:
 
 
 class CompletionEventsPumpTests(unittest.TestCase):
-    """Wave 5 / PR 13: event-driven completion collection.
+    """Event-driven completion collection.
 
     completion_events_since() opportunistically finalizes (non-blocking) any
     real child process this broker instance itself launched and still holds a
@@ -386,7 +386,7 @@ class CompletionEventsPumpTests(unittest.TestCase):
             broker.close()
 
     def test_dispatch_record_cursor_poll_collect_multiple_real_tasks_no_sleep_guessing(self):
-        """The exact round-trip this PR delivers: dispatch several tasks, record
+        """The exact round-trip real callers use: dispatch several tasks, record
         the cursor, poll completion_events until every task id has appeared,
         collect each -- no fixed sleep between dispatch and collection.
         """

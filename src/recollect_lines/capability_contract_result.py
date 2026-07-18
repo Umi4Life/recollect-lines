@@ -1,10 +1,10 @@
-"""Post-run required-capability contract (RFC-002 PR 3).
+"""Post-run required-capability contract.
 
 `required_capabilities.py` is a *static* preflight gate: conservative, and
 only ever able to reason about the runtime/policy combination selected
 *before launch*. A task that passes preflight can still receive a structured
 runtime denial for the concrete tool a declared capability actually depends
-on. This module is the post-run counterpart: it turns PR 1's normalized
+on. This module is the post-run counterpart: it turns the normalized
 `capability_observations` (see `result_normalization.normalize_permission_denials`)
 plus a narrow, explicit, policy-bound capability -> adapter-tool mapping into
 a separate, machine-readable verdict per declared capability.
@@ -17,7 +17,7 @@ the process level while its capability contract is unsatisfied.
 
 Conservative by construction: only a denial of a capability's *primary* tool
 proves that capability itself is unsatisfied. Denials of auxiliary tools
-(e.g. Grep/Glob for workspace.read) remain visible only as PR 1's
+(e.g. Grep/Glob for workspace.read) remain visible only as
 capability-warning observations — they never escalate to "this whole
 semantic capability failed" on their own.
 """
@@ -73,7 +73,7 @@ def evaluate_capability_contract(
 ) -> dict[str, Any]:
     """Deterministic post-run verdict for each declared required capability.
 
-    `capability_observations` must already be PR 1-normalized (a list of
+    `capability_observations` must already be normalized (a list of
     well-formed `{tool_identifier, source, adapter}` dicts) -- this function
     never sees raw `permission_denials`/`tool_input`. `denial_metadata_malformed`
     records whether normalize_permission_denials had to drop malformed

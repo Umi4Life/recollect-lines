@@ -66,11 +66,11 @@ Optional:
 
 `root_task_id` and `delegation_depth` are broker-derived and rejected if callers supply them.
 
-`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), `completion_cursor` (see [Completion-events polling contract](#completion-events-polling-contract-wave-5--pr-13) below), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
+`delegate` returns `task_id`, `state`, `workspace`, `runtime`, `profile` (bridge), `completion_cursor` (see [Completion-events polling contract](#completion-events-polling-contract) below), optional side-agent and lineage fields, `compatibility` when a legacy `profile` was translated, and `schema_conflict_warning` when the task prose looks incompatible with a requested structured `result_schema` — not a fabricated completion.
 
 See [migration-runtime-profile.md](migration-runtime-profile.md) for translation rules.
 
-## `task_tree`: `root_task_id` vs `external_root_id` (Wave 5 / PR 14)
+## `task_tree`: `root_task_id` vs `external_root_id`
 
 `task_tree` accepts exactly one of two mutually exclusive filters and returns the same shape (`truncated`, `tasks`) either way:
 
@@ -108,7 +108,7 @@ This is what makes the Wave 0 dogfood incident un-repeatable: a `claude -p` run 
 
 This never blocks or rejects task creation, and ambiguous or unmatched task text is never flagged — it exists so a parent can decide to retry with a different `result_schema` *before* spending a runtime call, not to gate delegation. Only the matched keyword name is ever recorded; the task text itself is never inspected beyond that static match or stored in the warning.
 
-## Completion-events polling contract (Wave 5 / PR 13)
+## Completion-events polling contract
 
 The dogfood problem this closes: a parent orchestrating several delegate
 rounds used to sleep a guessed duration between dispatch and the next round
@@ -218,7 +218,7 @@ Errors use `"ok": false` and `"error": { "code", "message" }` at the envelope le
 
 `source` is `"not_configured"` when no provider configuration file was resolved from any tier. `source_origin` names which precedence tier selected `source`: `explicit` (`--providers-config`), `env` (`RECOLLECT_CONFIG`), `repo_local` (`./.recollect/config.{yaml,yml,json}`), `user_level` (`~/.recollect/config.{yaml,yml,json}`), `legacy_default` (`./providers.json`), or `not_configured`. See [cli.md](cli.md#provider-configuration-resolution-order) for the full precedence order and its fail-truthfully rule for configured (explicit/env) sources. `loaded_at` is when *this* process read the file — not when it was last modified on disk. There is no hot reload: if you edit the file, this MCP server will keep serving the old snapshot until it is restarted. Never contains credential values. Both JSON and YAML (safe-loaded only) are supported.
 
-## Runtime capability contract (Wave 4 / PR 12)
+## Runtime capability contract
 
 Each entry in `discover_capabilities`'s `runtimes` array carries a `capability_contract` object:
 

@@ -1,4 +1,4 @@
-"""Task-aware Claude Code ``--permission-mode`` selection (Wave 4 / PR 10).
+"""Task-aware Claude Code ``--permission-mode`` selection.
 
 ``plan`` structurally refuses workspace writes but also steers the model toward
 planning/meta-refusal on prose, debate, review, and summarization tasks. Read-only

@@ -1,4 +1,4 @@
-"""MR 8.6: provenance-aware structured result normalization."""
+"""Provenance-aware structured result normalization."""
 
 from __future__ import annotations
 
@@ -190,14 +190,14 @@ class BrokerNormalizationTests(unittest.TestCase):
             self.assertEqual(envelope["parser"]["requested_schema"], "evidence-report")
             self.assertEqual(envelope["parser"]["parse_status"], "fallback")
             self.assertIn("summarize the incident", envelope["runtime_reported"]["summary"])
-            # PR 11: execution success must never be conflated with contract
+            # Execution success must never be conflated with contract
             # satisfaction — the state is succeeded, but the contract was not.
             self.assertEqual(envelope["parser"]["contract_status"], "unsatisfied_fallback")
         finally:
             broker.close()
 
     def test_meta_response_asking_for_output_format_is_unsatisfied_fallback_not_a_runtime_failure(self):
-        # Literal Wave 4 / PR 11 dogfood incident: Claude exited 0 with a
+        # Literal dogfood incident: Claude exited 0 with a
         # clean is_error:false result, but the "result" text was a
         # meta-response asking the parent to choose an output format instead
         # of the requested structured JSON. The broker must report this

@@ -1,4 +1,4 @@
-"""Wave 3 / PR 8: `recollect-lines mcp print|install` and post-install verification.
+"""`recollect-lines mcp print|install` and post-install verification.
 
 Hermetic: isolated temporary host config files, local MCP entrypoint overrides,
 and no real provider/network/Cursor/Claude/Codex installations.

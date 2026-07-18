@@ -1,4 +1,4 @@
-"""Durable global completion-event cursor (MR 8.7).
+"""Durable global completion-event cursor.
 
 Hosts poll append-only broker events by monotonic event id. Payloads are compact
 and evidence-aware — never raw runtime logs.

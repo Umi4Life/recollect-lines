@@ -1,4 +1,4 @@
-"""Bounded parent-directed task lineage (MR 8.5).
+"""Bounded parent-directed task lineage.
 
 Immutable provenance fields are derived at create time; callers cannot forge
 root_task_id or delegation_depth. external_root_id groups host-side work

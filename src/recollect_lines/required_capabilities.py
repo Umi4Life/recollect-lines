@@ -1,4 +1,4 @@
-"""Semantic required-capability declarations and static preflight (RFC-002 PR 2).
+"""Semantic required-capability declarations and static preflight.
 
 Capability IDs are broker-level semantic requirements, distinct from adapter
 tool names and from discovery's boolean runtime flags. Preflight is conservative:

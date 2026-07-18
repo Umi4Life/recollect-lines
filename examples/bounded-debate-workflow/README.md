@@ -1,4 +1,4 @@
-# Bounded debate reference workflow (Wave 5 / PR 15)
+# Bounded debate reference workflow
 
 This example runs the **reference** bounded debate helper against fixture
 runtimes only. It is not a workflow engine and makes no provider network calls

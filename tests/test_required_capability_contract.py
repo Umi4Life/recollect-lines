@@ -1,4 +1,4 @@
-"""RFC-002 PR 3: post-run required-capability contract.
+"""Post-run required-capability contract.
 
 Preflight (test_required_capability_preflight.py) is a static, pre-launch
 gate. This module covers the post-run counterpart: a task that *passed*
@@ -185,7 +185,7 @@ class BrokerCapabilityContractIntegrationTests(unittest.TestCase):
         task_id = self._create_with_denials([denial("Grep")])
         envelope = self._normalized(task_id)
         self.assertEqual(envelope["capability_contract"]["status"], STATUS_SATISFIED)
-        # The auxiliary denial is still visible as a capability-warning observation (PR 1).
+        # The auxiliary denial is still visible as a capability-warning observation.
         self.assertIn("capability_observations", envelope["runtime_reported"])
         view = concise_normalized_view(envelope)
         assert view is not None

@@ -131,7 +131,7 @@ configurations to durable `cost_class` and resource tier metadata. See
 - Safe projections appear on status, normalized results, and completion
   events as `model_profile_resource`.
 
-## Normalized results (MR 8.6)
+## Normalized results
 
 Supported `result_schema` values:
 
@@ -168,7 +168,7 @@ At launch, when a structured `result_schema` is selected (profile default or exp
 
 Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.
 
-## Integrated fixture proof (MR 8.8)
+## Integrated fixture proof
 
 Offline acceptance tying lineage, heterogeneous runtimes/profiles/schemas, completion-event cursor polling, normalized collection, task trees, steering refusal with `continues` follow-up, and writer isolation:
 

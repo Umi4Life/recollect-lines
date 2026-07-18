@@ -1,4 +1,4 @@
-"""RFC-002 PR 1: capability-warning observations from structured permission denials."""
+"""Capability-warning observations from structured permission denials."""
 
 from __future__ import annotations
 

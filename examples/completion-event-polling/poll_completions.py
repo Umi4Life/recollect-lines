@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side polling example for durable completion-event cursors (MR 8.7).
+"""Host-side polling example for durable completion-event cursors.
 
 Poll the broker's global append-only event cursor and print compact completion
 signals. This is a pull contract — no daemon, webhook, or push transport.

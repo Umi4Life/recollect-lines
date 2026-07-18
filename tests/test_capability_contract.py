@@ -1,4 +1,4 @@
-"""Runtime capability contract tests (Wave 4 / PR 12).
+"""Runtime capability contract tests.
 
 Hermetic: no subprocess CLIs or provider HTTP calls -- exercises the
 descriptor registry, discovery serialization, delegate-time validation, and

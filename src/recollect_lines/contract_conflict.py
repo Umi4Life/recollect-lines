@@ -1,4 +1,4 @@
-"""Deterministic pre-delegate schema/prose conflict detection (Wave 4 / PR 11).
+"""Deterministic pre-delegate schema/prose conflict detection.
 
 Runs once at Broker.create() time, before the child is ever launched. Flags a
 task whose prose reads as an open-ended, unstructured request (a debate, an

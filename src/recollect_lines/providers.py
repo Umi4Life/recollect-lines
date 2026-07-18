@@ -25,7 +25,7 @@ OPENAI_COMPATIBLE_KIND = "openai-compatible"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
-# Strict schema surface (Wave 2 / PR 5): unknown keys are rejected rather than
+# Strict schema surface: unknown keys are rejected rather than
 # silently ignored, so a misspelled field or a misplaced literal secret is
 # caught at load time instead of silently doing nothing.
 ALLOWED_TOP_LEVEL_KEYS = frozenset({"providers", "tool_access_profiles", "model_profiles"})
@@ -44,7 +44,7 @@ SECRET_LIKE_KEY_HINTS = frozenset({
 })
 _CA_BUNDLE_INLINE_MARKERS = ("BEGIN CERTIFICATE", "BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "BEGIN EC PRIVATE KEY")
 
-# Configuration-resolution precedence (Wave 2 / PR 4). Highest first: an
+# Configuration-resolution precedence. Highest first: an
 # explicit --providers-config/constructor argument always wins; RECOLLECT_CONFIG
 # is the next-highest "configured" source. Both are configured sources -- if
 # either points at a missing/invalid file, that failure is reported with its

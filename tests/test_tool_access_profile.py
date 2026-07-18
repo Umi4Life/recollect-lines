@@ -1,4 +1,4 @@
-"""RFC-002 PR 4: tool-access-profile model, separate from execution_mode."""
+"""Tool-access-profile model, separate from execution_mode."""
 
 from __future__ import annotations
 

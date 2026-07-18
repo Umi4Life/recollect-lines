@@ -1,4 +1,4 @@
-"""Wave 3 / PR 7: `provider list/add/show/test` CLI commands.
+"""`provider list/add/show/test` CLI commands.
 
 Hermetic: uses the fixed local `FakeOpenAiServer` fixture (loopback only,
 scenario selected by a keyword in the request prompt) for every "live"

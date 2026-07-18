@@ -839,7 +839,7 @@ class Broker:
     def _pump_finished_handles(self) -> None:
         """Opportunistically finalize any locally-held runtime handle whose
         process/request has already finished, without ever blocking on one
-        that is still in flight (MR 8.7 follow-up / Wave 5 PR 13).
+        that is still in flight.
 
         `collect()` is the only thing that ever records a terminal completion
         event, and `collect()` blocks until the runtime actually finishes --
@@ -1138,7 +1138,7 @@ class Broker:
     ) -> dict[str, Any] | None:
         """Post-run capability-contract verdict, or None when nothing was declared.
 
-        Reuses PR 1's `normalize_permission_denials` so this never reasons
+        Reuses `normalize_permission_denials` so this never reasons
         about raw `permission_denials`/`tool_input` directly -- see
         `capability_contract_result.evaluate_capability_contract`.
         """

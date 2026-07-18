@@ -297,7 +297,7 @@ payloads.
 
 `root_task_id` and `delegation_depth` are broker-derived and cannot be supplied by callers. `external_root_id` groups host-side work without inventing a broker parent. Absent `origin_kind`, host-facing `create` defaults to `host` (including parented tasks); `side_agent` is reserved for a future explicit recursive callback path and is audit-only. Agent callback delegation remains unimplemented; host `create`/`delegate` calls are not conflated with it.
 
-### `completion-events` (Wave 5 / PR 13)
+### `completion-events`
 
 ```
 completion-events [--after-event-id N] [--limit N] [--task-id ID]
@@ -307,7 +307,7 @@ completion-events [--after-event-id N] [--limit N] [--task-id ID]
 Full contract — exclusive cursor, ordering, page limits, filtering,
 idempotency, retention, the non-blocking same-process pump, and how this
 differs from `collect` — is documented once in
-[mcp.md](mcp.md#completion-events-polling-contract-wave-5--pr-13); the CLI
+[mcp.md](mcp.md#completion-events-polling-contract); the CLI
 command is a thin wrapper over the identical `Broker.completion_events_since()`
 call MCP's `completion_events` tool uses, so the contract is the same.
 
@@ -320,7 +320,7 @@ process with no in-memory handle); use `recollect-mcp` (one long-lived
 process) or a script driving `Broker` directly for a real no-sleep polling
 loop against real subprocess/API runtimes.
 
-### `task-tree` (`root_task_id` vs `--external-root-id`, Wave 5 / PR 14)
+### `task-tree` (`root_task_id` vs `--external-root-id`)
 
 ```
 task-tree ROOT_TASK_ID
