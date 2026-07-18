@@ -15,6 +15,9 @@ class AdapterCapabilities:
     reports_broker_verified_tests: bool
     recovery_control: RecoveryControlContract
     uses_durable_subprocess_runner: bool = False
+    # None preserves legacy behavior: this adapter does not restrict schemas.
+    # A set is an explicit pre-launch schema allowlist.
+    supported_result_schemas: frozenset[str] | None = None
 
 
 @runtime_checkable
