@@ -112,6 +112,16 @@ def main():
         result("completed with denied tools", permission_denials=denials)
         return 0
 
+    if "SUMMARY_AND_DENIALS_JSON" in prompt:
+        # Uses task_prompt_only so an appended result-schema contract suffix
+        # (see below) never corrupts the JSON payload being parsed here.
+        stripped_body = task_prompt_only(prompt)
+        marker = "SUMMARY_AND_DENIALS_JSON "
+        start = stripped_body.index(marker) + len(marker)
+        payload = json.loads(stripped_body[start:].strip())
+        result(payload["summary"], permission_denials=payload.get("permission_denials"))
+        return 0
+
     body = task_prompt_only(prompt)
     if "SCHEMA_" in body:
         schema_part = body[body.index("SCHEMA_"):]

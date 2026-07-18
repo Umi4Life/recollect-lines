@@ -32,6 +32,10 @@ from pathlib import Path
 from typing import Any
 
 from .capability_contract_result import STATUS_NO_REQUIREMENTS, evaluate_capability_contract
+from .claim_capability_diagnostics import (
+    claim_capability_diagnostics_concise,
+    evaluate_claim_capability_diagnostics,
+)
 from .models import TaskRecord, TaskState
 from .review_report import (
     REVIEW_REPORT_SCHEMA,
@@ -49,6 +53,7 @@ RAW_OUTPUT_ARTIFACT = "runtime_raw_output.txt"
 ENVELOPE_VERSION = 1
 CAPABILITY_ENVELOPE_VERSION = 2
 CAPABILITY_CONTRACT_ENVELOPE_VERSION = 3
+CLAIM_CAPABILITY_DIAGNOSTICS_ENVELOPE_VERSION = 4
 
 CAPABILITY_OBSERVATION_SOURCE = "runtime_permission_denial"
 DISPLAYED_DENIED_TOOLS_CAP = 16
@@ -461,6 +466,7 @@ def build_normalized_envelope(
     adapter = collected.get("adapter")
     capability_warning = None
     capability_contract = None
+    claim_capability_diagnostics = None
     if isinstance(adapter, str) and adapter:
         observations, capability_warning, denial_warnings = normalize_permission_denials(
             collected.get("permission_denials"),
@@ -476,6 +482,10 @@ def build_normalized_envelope(
                 capability_observations=observations,
                 denial_metadata_malformed=bool(denial_warnings),
             )
+        claim_capability_diagnostics = evaluate_claim_capability_diagnostics(
+            summary=runtime_reported.get("summary"),
+            capability_observations=observations,
+        )
     elif required_capabilities:
         capability_contract = evaluate_capability_contract(
             required_capabilities,
@@ -489,6 +499,8 @@ def build_normalized_envelope(
         envelope_version = CAPABILITY_ENVELOPE_VERSION
     if capability_contract is not None:
         envelope_version = CAPABILITY_CONTRACT_ENVELOPE_VERSION
+    if claim_capability_diagnostics is not None:
+        envelope_version = CLAIM_CAPABILITY_DIAGNOSTICS_ENVELOPE_VERSION
 
     broker_verification = None
     if verification is not None:
@@ -527,6 +539,8 @@ def build_normalized_envelope(
     }
     if capability_contract is not None:
         envelope["capability_contract"] = capability_contract
+    if claim_capability_diagnostics is not None:
+        envelope["claim_capability_diagnostics"] = claim_capability_diagnostics
     if tool_access_profile_audit is not None:
         envelope["broker_observed"]["tool_access_profile_audit"] = tool_access_profile_audit
     if model_profile_resource is not None:
@@ -575,6 +589,10 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
             "unknown_capabilities": contract.get("unknown_capabilities", []),
             "reasons": contract.get("reasons", []),
         }
+    claim_diagnostics = claim_capability_diagnostics_concise(envelope.get("claim_capability_diagnostics"))
+    if claim_diagnostics is not None:
+        view["has_claim_capability_diagnostic"] = True
+        view["claim_capability_diagnostics"] = claim_diagnostics
     audit = broker.get("tool_access_profile_audit")
     if isinstance(audit, dict) and audit:
         view["tool_access_profile_audit"] = {
