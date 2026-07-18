@@ -90,6 +90,18 @@ from .model_profile import (
     resolve_model_profile_snapshot,
     unconfigured_model_profile_snapshot,
 )
+from .cost_rework_policy import (
+    CostReworkPolicyValidationError,
+    build_cost_rework_policy_registry,
+    build_cost_policy_snapshot,
+    compute_workflow_usage,
+    cost_policy_public_projection,
+    evaluate_cost_rework_preflight,
+    load_cost_rework_policies_config,
+    normalize_cost_rework_policy,
+    normalize_rework_metadata,
+    unconfigured_cost_policy_snapshot,
+)
 from .result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
@@ -148,6 +160,8 @@ class Broker:
         tool_access_profile_registry=None,
         model_profiles: dict | None = None,
         model_profile_registry=None,
+        cost_rework_policies: dict | None = None,
+        cost_rework_policy_registry=None,
         direct_api_runtime: OpenAiCompatibleDirectRuntime | None = None,
         lineage_policy: LineagePolicy | None = None,
         environ: dict[str, str] | None = None,
@@ -178,6 +192,22 @@ class Broker:
         else:
             self.model_profile_registry = build_model_profile_registry(
                 configured=configured_model_profiles or {},
+            )
+        configured_cost_policies = cost_rework_policies
+        if (
+            configured_cost_policies is None
+            and cost_rework_policy_registry is None
+            and providers_config is not None
+        ):
+            try:
+                configured_cost_policies = load_cost_rework_policies_config(providers_config)
+            except Exception:
+                configured_cost_policies = {}
+        if cost_rework_policy_registry is not None:
+            self.cost_rework_policy_registry = cost_rework_policy_registry
+        else:
+            self.cost_rework_policy_registry = build_cost_rework_policy_registry(
+                configured=configured_cost_policies or {},
             )
         self.claude_code_adapter = claude_code_adapter or ClaudeCodeAdapter(
             tool_access_profile_registry=self.tool_access_profile_registry,
@@ -329,6 +359,22 @@ class Broker:
             )
         except ModelProfileValidationError as error:
             raise ValueError(str(error)) from error
+        try:
+            normalize_cost_rework_policy(
+                request.cost_rework_policy,
+                registry=self.cost_rework_policy_registry,
+            )
+        except CostReworkPolicyValidationError as error:
+            raise ValueError(str(error)) from error
+        if request.cost_rework_policy is not None:
+            try:
+                normalize_rework_metadata(
+                    prior_task_id=request.rework_prior_task_id,
+                    scope=request.rework_scope,
+                    escalation_reason=request.escalation_reason,
+                )
+            except CostReworkPolicyValidationError as error:
+                raise ValueError(str(error)) from error
         if runtime == DIRECT_API_PROFILE:
             if self.direct_api_runtime is None:
                 raise ValueError(
@@ -387,6 +433,10 @@ class Broker:
             required_capabilities=request.required_capabilities,
             tool_access_profile=request.tool_access_profile,
             model_profile=request.model_profile,
+            cost_rework_policy=request.cost_rework_policy,
+            rework_prior_task_id=request.rework_prior_task_id,
+            rework_scope=request.rework_scope,
+            escalation_reason=request.escalation_reason,
         )
         return effective, resolved
 
@@ -431,6 +481,126 @@ class Broker:
     def _model_profile_for_record(self, record: TaskRecord) -> str | None:
         value = self._request_payload_for_record(record).get("model_profile")
         return value if isinstance(value, str) else None
+
+    def _cost_rework_policy_for_record(self, record: TaskRecord) -> str | None:
+        value = self._request_payload_for_record(record).get("cost_rework_policy")
+        return value if isinstance(value, str) else None
+
+    def _rework_metadata_for_record(self, record: TaskRecord):
+        payload = self._request_payload_for_record(record)
+        if self._cost_rework_policy_for_record(record) is None:
+            return None
+        try:
+            return normalize_rework_metadata(
+                prior_task_id=payload.get("rework_prior_task_id"),
+                scope=payload.get("rework_scope"),
+                escalation_reason=payload.get("escalation_reason"),
+            )
+        except CostReworkPolicyValidationError:
+            return None
+
+    def _read_model_profile_snapshot(self, task_id: str) -> dict[str, Any]:
+        path = self.store.artifacts / task_id / "model_profile_resolution.json"
+        if path.is_file():
+            try:
+                snapshot = json.loads(path.read_text())
+                if isinstance(snapshot, dict):
+                    return snapshot
+            except (OSError, json.JSONDecodeError):
+                pass
+        return unconfigured_model_profile_snapshot()
+
+    def _read_cost_policy_projection(self, task_id: str) -> dict[str, Any] | None:
+        path = self.store.artifacts / task_id / "cost_rework_policy_resolution.json"
+        if path.is_file():
+            try:
+                snapshot = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                snapshot = None
+            if isinstance(snapshot, dict):
+                return cost_policy_public_projection(snapshot)
+        requested = self._request_payload_for_record(self.store.get(task_id))
+        if isinstance(requested.get("cost_rework_policy"), str) and requested["cost_rework_policy"]:
+            return {
+                "resolution": "pending",
+                "policy_id": requested["cost_rework_policy"],
+                "preflight_status": "pending",
+            }
+        return cost_policy_public_projection(unconfigured_cost_policy_snapshot())
+
+    def _reject_cost_rework_policy(self, record: TaskRecord) -> TaskRecord | None:
+        policy_id = self._cost_rework_policy_for_record(record)
+        if policy_id is None:
+            return None
+        policy = self.cost_rework_policy_registry.policies.get(policy_id)
+        if policy is None:
+            return self.store.transition(
+                record.id,
+                TaskState.REJECTED,
+                "Requested cost_rework_policy is not configured",
+                {"reason": "unknown_cost_rework_policy", "cost_rework_policy": policy_id},
+            )
+        snapshot_path = self.store.artifacts / record.id / "model_profile_resolution.json"
+        if snapshot_path.is_file():
+            try:
+                model_snapshot = json.loads(snapshot_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                model_snapshot = unconfigured_model_profile_snapshot()
+        else:
+            requested = self._model_profile_for_record(record)
+            try:
+                model_snapshot = resolve_model_profile_snapshot(
+                    runtime=record.runtime,
+                    provider=record.provider,
+                    effective_model=record.effective_model,
+                    requested_profile=requested,
+                    registry=self.model_profile_registry,
+                )
+            except ModelProfileValidationError:
+                model_snapshot = unconfigured_model_profile_snapshot()
+        rework = self._rework_metadata_for_record(record)
+        rejection = evaluate_cost_rework_preflight(
+            record=record,
+            policy=policy,
+            rework=rework,
+            model_profile_snapshot=model_snapshot,
+            get_task=self.store.get,
+            list_tree_tasks=lambda root, limit: self.store.list_tree_tasks(root, limit=limit),
+            artifacts_dir=self.store.artifacts,
+            tree_limit=MAX_TREE_NODES,
+        )
+        if rejection is None:
+            root_task_id = record.root_task_id or record.id
+            usage = compute_workflow_usage(
+                root_task_id=root_task_id,
+                tasks=self.store.list_tree_tasks(root_task_id, limit=MAX_TREE_NODES),
+                artifacts_dir=self.store.artifacts,
+                exclude_task_id=record.id,
+            )
+            cost_class = model_snapshot.get("cost_class", "unknown")
+            escalation_decision = "not_applicable"
+            if rework is not None and rework.scope == "full":
+                escalation_decision = "allowed"
+            snapshot = build_cost_policy_snapshot(
+                policy=policy,
+                rework=rework,
+                model_profile_snapshot=model_snapshot,
+                usage=usage,
+                cost_class=str(cost_class),
+                escalation_decision=escalation_decision,
+            )
+            self.store.write_artifact(
+                record.id,
+                "cost_rework_policy_resolution.json",
+                json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+            )
+            return None
+        return self.store.transition(
+            record.id,
+            TaskState.REJECTED,
+            "Cost/rework policy preflight rejected this launch",
+            rejection,
+        )
 
     def _reject_invalid_model_profile(self, record: TaskRecord) -> TaskRecord | None:
         requested = self._model_profile_for_record(record)
@@ -621,7 +791,11 @@ class Broker:
     def children(self, task_id: str) -> list[dict]:
         self.store.get(task_id)
         return [
-            concise_task_summary(child, model_profile_resource=self._read_model_profile_projection(child.id))
+            concise_task_summary(
+                child,
+                model_profile_resource=self._read_model_profile_projection(child.id),
+                cost_policy_status=self._read_cost_policy_projection(child.id),
+            )
             for child in self.store.list_children(task_id)
         ]
 
@@ -635,7 +809,11 @@ class Broker:
             "root_task_id": root_task_id,
             "truncated": truncated,
             "tasks": [
-                concise_task_summary(task, model_profile_resource=self._read_model_profile_projection(task.id))
+                concise_task_summary(
+                    task,
+                    model_profile_resource=self._read_model_profile_projection(task.id),
+                    cost_policy_status=self._read_cost_policy_projection(task.id),
+                )
                 for task in tasks
             ],
         }
@@ -690,7 +868,11 @@ class Broker:
             "external_root_id": external_root_id,
             "truncated": truncated,
             "tasks": [
-                concise_task_summary(task, model_profile_resource=self._read_model_profile_projection(task.id))
+                concise_task_summary(
+                    task,
+                    model_profile_resource=self._read_model_profile_projection(task.id),
+                    cost_policy_status=self._read_cost_policy_projection(task.id),
+                )
                 for task in tasks
             ],
         }
@@ -785,6 +967,9 @@ class Broker:
         if rejected is not None:
             return rejected
         self._record_model_profile_resolution(record)
+        rejected = self._reject_cost_rework_policy(record)
+        if rejected is not None:
+            return rejected
         profile_audit = self._record_tool_access_profile_resolution(record)
         record = self.store.transition(task_id, TaskState.PREPARING, "Preparing execution", {})
         launch_prompt, prompt_evidence = self._composed_launch_prompt(task_id, record)
@@ -1007,6 +1192,7 @@ class Broker:
             required_capabilities=self._required_capabilities_for_record(record),
             tool_access_profile_audit=self._read_tool_access_profile_audit(record.id),
             model_profile_resource=self._read_model_profile_projection(record.id),
+            cost_policy_status=self._read_cost_policy_projection(record.id),
         )
         self.store.write_artifact(
             record.id,

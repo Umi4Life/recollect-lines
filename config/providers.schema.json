@@ -21,6 +21,13 @@
         "pattern": "^[a-z][a-z0-9_-]{0,62}$"
       },
       "additionalProperties": { "$ref": "#/$defs/model_profile" }
+    },
+    "cost_rework_policies": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/cost_rework_policy" }
     }
   },
   "$defs": {
@@ -116,6 +123,22 @@
             "context_cost": { "type": "string", "enum": ["negligible", "low", "moderate", "high", "unknown"] }
           }
         }
+      }
+    },
+    "cost_rework_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_premium_tasks",
+        "max_premium_retries_per_task",
+        "max_escalations_per_workflow"
+      ],
+      "properties": {
+        "max_premium_tasks": { "type": "integer", "minimum": 0 },
+        "max_premium_retries_per_task": { "type": "integer", "minimum": 0 },
+        "max_escalations_per_workflow": { "type": "integer", "minimum": 0 },
+        "allow_higher_cost_reexecution": { "type": "boolean", "default": false },
+        "require_escalation_reason": { "type": "boolean", "default": true }
       }
     }
   }

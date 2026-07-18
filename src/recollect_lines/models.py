@@ -216,6 +216,10 @@ class TaskRequest:
     required_capabilities: tuple[str, ...] = ()
     tool_access_profile: str | None = None
     model_profile: str | None = None
+    cost_rework_policy: str | None = None
+    rework_prior_task_id: str | None = None
+    rework_scope: str | None = None
+    escalation_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +308,14 @@ def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
         payload["tool_access_profile"] = request.tool_access_profile
     if request.model_profile is not None:
         payload["model_profile"] = request.model_profile
+    if request.cost_rework_policy is not None:
+        payload["cost_rework_policy"] = request.cost_rework_policy
+    if request.rework_prior_task_id is not None:
+        payload["rework_prior_task_id"] = request.rework_prior_task_id
+    if request.rework_scope is not None:
+        payload["rework_scope"] = request.rework_scope
+    if request.escalation_reason is not None:
+        payload["escalation_reason"] = request.escalation_reason
     if request.compatibility is not None:
         payload["compatibility"] = request.compatibility
     if request.parent_task_id is not None:

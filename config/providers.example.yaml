@@ -95,3 +95,14 @@ providers:
 #       latency: moderate
 #       local_compute_occupancy: low
 #       context_cost: high
+
+# Optional: bounded rework and escalation policies (RFC-003).
+# Select explicitly per task via cost_rework_policy. Omitting a policy preserves
+# legacy behavior. Rework intent is never inferred from task text or graph role.
+# cost_rework_policies:
+#   strict-review:
+#     max_premium_tasks: 2
+#     max_premium_retries_per_task: 1
+#     max_escalations_per_workflow: 1
+#     allow_higher_cost_reexecution: false
+#     require_escalation_reason: true
