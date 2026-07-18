@@ -1,5 +1,9 @@
 # Recollect Lines
 
+> **Alpha / pre-production:** The public PyPI distribution (`0.1.0a1`) is an
+> early alpha, not a stable or production-certified release. Behavior and APIs
+> may change; use source installs or TestPyPI only when you accept that risk.
+
 > Recollect Lines is a local-first delegation broker that lets a parent agent safely hand bounded work to existing AI coding runtimes and receive attributable, evidence-backed results.
 
 It is **not** a new editor, not a coding agent, not an OpenCode plugin, and not merely an MCP server. **MCP** and **CLI** are interfaces to the broker; **Codex, Cursor, Claude Code, OpenCode**, and HTTP providers are **runtime backends** the broker supervises.
@@ -53,15 +57,31 @@ Operator / parent agent
 
 ## Fastest way to try it
 
-**Python 3.11+**, install from source (not on PyPI yet):
+**Python 3.11+.** Install from source today; PyPI alpha (`0.1.0a1`) is
+packaged but not yet published to production PyPI:
 
 ```bash
+# Source (always works)
 git clone https://github.com/Umi4Life/recollect-lines.git
 cd recollect-lines
 python3 -m venv .venv && source .venv/bin/activate
 pip install .
 recollect-lines --help
 recollect-mcp --help
+```
+
+After maintainers publish to **TestPyPI**, install with the main index for
+dependencies (see [docs/release-guide.md](docs/release-guide.md)):
+
+```bash
+pip install recollect-lines==0.1.0a1 \
+  --extra-index-url https://test.pypi.org/simple/
+```
+
+Future **production PyPI** install (once authorized separately):
+
+```bash
+pip install recollect-lines
 ```
 
 **Offline five-minute operator path (no provider):** [docs/operator-guide.md](docs/operator-guide.md#five-minute-success-path-clean-environment)
@@ -123,7 +143,7 @@ Generic MCP host config:
 | Broker-verified verification gate | Supported, opt-in per task |
 | Post-restart reconciliation | Supported; no full result recovery |
 | In-flight message steering | Not supported (explicit refusal) |
-| PyPI package | Not published yet |
+| PyPI package | Alpha `0.1.0a1` prepared; production PyPI not published yet |
 
 Canonical design: [docs/design/PRD.md](docs/design/PRD.md), [docs/design/RFC-001.md](docs/design/RFC-001.md), [docs/design/RFC-002.md](docs/design/RFC-002.md).
 
@@ -135,8 +155,11 @@ python3 scripts/five_minute_acceptance.py
 python3 scripts/mcp_acceptance.py
 python3 scripts/side_agent_fixture_acceptance.py
 python3 scripts/clean_install_acceptance.py
+python3 scripts/dist_artifact_acceptance.py   # after python -m build
 python3 -m compileall -q src tests scripts
 ```
+
+Release and TestPyPI operator steps: [docs/release-guide.md](docs/release-guide.md).
 
 ## Contributing / design history
 

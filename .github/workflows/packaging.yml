@@ -1,0 +1,31 @@
+name: Packaging validation
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python3 -m pip install build twine
+
+      - name: Build wheel and sdist
+        run: python3 -m build
+
+      - name: Check distribution metadata
+        run: python3 -m twine check dist/*
+
+      - name: Validate dist artifacts (install + hygiene)
+        run: python3 scripts/dist_artifact_acceptance.py

@@ -4,10 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recollect-lines"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Local-first broker for delegating agent work and recollecting evidence-backed results"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
+keywords = ["agents", "broker", "delegation", "mcp"]
+
+[project.urls]
+Homepage = "https://github.com/Umi4Life/recollect-lines"
+Source = "https://github.com/Umi4Life/recollect-lines"
+Issues = "https://github.com/Umi4Life/recollect-lines/issues"
 
 [project.scripts]
 recollect-lines = "recollect_lines.cli:main"

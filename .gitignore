@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .recollect/
 build/
+dist/
 *.egg-info/
 
 # Local/operator provider configuration (may reference env var names, never
