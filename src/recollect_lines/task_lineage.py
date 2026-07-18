@@ -157,7 +157,11 @@ def lineage_from_request(request: TaskRequest) -> dict[str, Any]:
     }
 
 
-def concise_task_summary(record: TaskRecord) -> dict[str, Any]:
+def concise_task_summary(
+    record: TaskRecord,
+    *,
+    model_profile_resource: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "task_id": record.id,
         "state": record.state.value,
@@ -188,4 +192,6 @@ def concise_task_summary(record: TaskRecord) -> dict[str, Any]:
         summary["agent_profile"] = record.agent_profile
     if record.result_schema is not None:
         summary["result_schema"] = record.result_schema
+    if model_profile_resource is not None:
+        summary["model_profile_resource"] = model_profile_resource
     return summary

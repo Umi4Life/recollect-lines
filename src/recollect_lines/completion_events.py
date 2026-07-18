@@ -11,6 +11,7 @@ from typing import Any
 
 from .models import TERMINAL_STATES, TaskState, verification_gate_label
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
+from .model_profile import model_profile_public_projection
 
 DEFAULT_COMPLETION_EVENTS_LIMIT = 64
 MAX_COMPLETION_EVENTS_LIMIT = 256
@@ -99,6 +100,18 @@ def _result_summary(store: Any, task_id: str) -> dict[str, Any] | None:
     return {"summary": summary.strip()}
 
 
+def _model_profile_resource(store: Any, task_id: str) -> dict[str, Any] | None:
+    path = store.artifacts / task_id / "model_profile_resolution.json"
+    if path.is_file():
+        try:
+            snapshot = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            snapshot = None
+        if isinstance(snapshot, dict):
+            return model_profile_public_projection(snapshot)
+    return None
+
+
 def build_completion_event(store: Any, row: dict[str, Any]) -> dict[str, Any]:
     metadata = json.loads(row["metadata_json"])
     state = row.get("state_after")
@@ -134,6 +147,9 @@ def build_completion_event(store: Any, row: dict[str, Any]) -> dict[str, Any]:
     summary = _result_summary(store, row["task_id"])
     if summary is not None:
         payload["result_summary"] = summary
+    model_profile_resource = _model_profile_resource(store, row["task_id"])
+    if model_profile_resource is not None:
+        payload["model_profile_resource"] = model_profile_resource
     return payload
 
 

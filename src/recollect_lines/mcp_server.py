@@ -42,6 +42,10 @@ from .tool_access_profile import (
     ToolAccessProfileValidationError,
     normalize_tool_access_profile,
 )
+from .model_profile import (
+    ModelProfileValidationError,
+    normalize_model_profile,
+)
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
@@ -97,6 +101,7 @@ def _build_task_request(
     item: Any,
     *,
     tool_access_profile_registry=None,
+    model_profile_registry=None,
 ) -> tuple[TaskRequest, list | None]:
     """Validate one delegate-shaped item, raising ValueError on any bad field.
 
@@ -136,6 +141,8 @@ def _build_task_request(
         explicit_fields.add("required_capabilities")
     if "tool_access_profile" in item:
         explicit_fields.add("tool_access_profile")
+    if "model_profile" in item:
+        explicit_fields.add("model_profile")
     effective_runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
         runtime=runtime,
         profile=profile,
@@ -180,6 +187,13 @@ def _build_task_request(
         )
     except ToolAccessProfileValidationError as error:
         raise ValueError(str(error)) from error
+    try:
+        model_profile = normalize_model_profile(
+            item.get("model_profile"),
+            registry=model_profile_registry,
+        )
+    except ModelProfileValidationError as error:
+        raise ValueError(str(error)) from error
     parent_task_id = item.get("parent_task_id")
     external_root_id = item.get("external_root_id")
     relationship = item.get("relationship")
@@ -211,6 +225,7 @@ def _build_task_request(
         origin_ref=origin_ref,
         required_capabilities=required_capabilities,
         tool_access_profile=tool_access_profile,
+        model_profile=model_profile,
     ), verify_commands
 
 
@@ -222,7 +237,8 @@ def _require_task_id(args: dict) -> str:
 
 
 def _task_summary(record, broker: Broker | None = None) -> dict:
-    summary = concise_task_summary(record)
+    model_profile_resource = broker._read_model_profile_projection(record.id) if broker is not None else None
+    summary = concise_task_summary(record, model_profile_resource=model_profile_resource)
     if broker is not None:
         compatibility = _read_json_artifact(broker, record.id, "request.json")
         if isinstance(compatibility, dict) and "compatibility" in compatibility:
@@ -257,6 +273,7 @@ def _create_and_start(broker: Broker, item: Any) -> tuple[Any, Exception | None]
     request, verify_commands = _build_task_request(
         item,
         tool_access_profile_registry=broker.tool_access_profile_registry,
+        model_profile_registry=broker.model_profile_registry,
     )
     record = broker.create(request, verify_commands=verify_commands)
     try:
@@ -593,6 +610,16 @@ DELEGATE_INPUT_SCHEMA = {
                 "rejected at preflight before launch. When omitted, resolves deterministically to "
                 "the profile that reproduces today's default tool policy for the selected runtime "
                 "and execution_mode -- no behavior change for existing callers."
+            ),
+        },
+        "model_profile": {
+            "type": "string",
+            "description": (
+                "Optional operator-configured model profile id binding this task to explicit "
+                "cost_class and resource metadata. Unknown ids are rejected at delegate time; "
+                "incompatible runtime/provider/model bindings are rejected at preflight before "
+                "adapter launch. When omitted, the task is explicitly recorded as unconfigured "
+                "(cost_class unknown) — never inferred from runtime, provider, or model name."
             ),
         },
         "provider": {

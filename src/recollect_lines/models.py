@@ -215,6 +215,7 @@ class TaskRequest:
     origin_ref: str | None = None
     required_capabilities: tuple[str, ...] = ()
     tool_access_profile: str | None = None
+    model_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,8 @@ def request_artifact_payload(request: TaskRequest) -> dict[str, Any]:
         payload["claude_permission_mode"] = request.claude_permission_mode
     if request.tool_access_profile is not None:
         payload["tool_access_profile"] = request.tool_access_profile
+    if request.model_profile is not None:
+        payload["model_profile"] = request.model_profile
     if request.compatibility is not None:
         payload["compatibility"] = request.compatibility
     if request.parent_task_id is not None:

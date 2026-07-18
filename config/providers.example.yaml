@@ -68,3 +68,30 @@ providers:
 #     profile_kind: operator_approved_repository_read
 #     allowed_external_tools:
 #       - mcp__acme__list_pull_requests
+
+# Optional: operator-configured model profiles (RFC-003 foundation).
+# Each profile binds an explicit runtime/model configuration to durable
+# cost_class and resource metadata. The broker never infers these from graph
+# role, provider name, runtime type, or model-name folklore.
+# model_profiles:
+#   dev-mock-low:
+#     runtime: mock
+#     cost_class: low
+#     usage_bucket: dev-sandbox
+#     resources:
+#       monetary_cost: negligible
+#       quota_scarcity: none
+#       latency: low
+#       local_compute_occupancy: low
+#       context_cost: low
+#   gateway-standard:
+#     runtime: openai_compatible
+#     provider: local_gateway
+#     cost_class: standard
+#     usage_bucket: batch-inference
+#     resources:
+#       monetary_cost: moderate
+#       quota_scarcity: moderate
+#       latency: moderate
+#       local_compute_occupancy: low
+#       context_cost: high

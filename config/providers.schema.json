@@ -14,6 +14,13 @@
         "pattern": "^[a-z][a-z0-9_-]{0,62}$"
       },
       "additionalProperties": { "$ref": "#/$defs/provider" }
+    },
+    "model_profiles": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/model_profile" }
     }
   },
   "$defs": {
@@ -71,6 +78,42 @@
             "tool_calls": { "type": "boolean" },
             "workspace_access": { "type": "boolean" },
             "process_cancellation": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "model_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "cost_class", "usage_bucket", "resources"],
+      "properties": {
+        "runtime": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "cost_class": {
+          "type": "string",
+          "enum": ["low", "standard", "premium", "unknown"]
+        },
+        "usage_bucket": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "monetary_cost",
+            "quota_scarcity",
+            "latency",
+            "local_compute_occupancy",
+            "context_cost"
+          ],
+          "properties": {
+            "monetary_cost": { "type": "string", "enum": ["negligible", "low", "moderate", "high", "unknown"] },
+            "quota_scarcity": { "type": "string", "enum": ["none", "low", "moderate", "high", "unknown"] },
+            "latency": { "type": "string", "enum": ["negligible", "low", "moderate", "high", "unknown"] },
+            "local_compute_occupancy": { "type": "string", "enum": ["negligible", "low", "moderate", "high", "unknown"] },
+            "context_cost": { "type": "string", "enum": ["negligible", "low", "moderate", "high", "unknown"] }
           }
         }
       }
