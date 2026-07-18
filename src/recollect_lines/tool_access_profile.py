@@ -1,4 +1,4 @@
-"""Tool-access-profile model, separate from execution_mode (RFC-002 PR 4+).
+"""Tool-access-profile model, separate from execution_mode.
 
 ``execution_mode`` continues to govern workspace-mutation authority
 (``read_only`` vs ``isolated_worktree``). ``tool_access_profile`` is an

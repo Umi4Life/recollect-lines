@@ -1,4 +1,4 @@
-"""Documentation product contract and five-minute acceptance (Wave 3 / PR 9)."""
+"""Documentation product contract and five-minute acceptance."""
 
 from __future__ import annotations
 

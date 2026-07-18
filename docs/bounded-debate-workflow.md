@@ -1,4 +1,4 @@
-# Bounded debate reference workflow (Wave 5 / PR 15)
+# Bounded debate reference workflow
 
 Parent-directed **reference helper** for the dogfood pattern:
 
@@ -18,9 +18,9 @@ Fixture example: [`examples/bounded-debate-workflow/`](../examples/bounded-debat
 
 Use this helper when you want a copy-pasteable orchestration sketch that:
 
-- tags every task with the same `external_root_id` for audit lookup (`task_tree` by `external_root_id`, Wave 5 / PR 14)
+- tags every task with the same `external_root_id` for audit lookup (`task_tree` by `external_root_id`)
 - hangs phase tasks under a host anchor with `parent_task_id` / `relationship`
-- polls the durable `completion_events` cursor between phases (Wave 5 / PR 13) — **never** a fixed sleep for task duration
+- polls the durable `completion_events` cursor between phases — **never** a fixed sleep for task duration
 - collects terminal outputs before advancing
 - validates synthesis and optionally materializes with explicit parent ownership
 

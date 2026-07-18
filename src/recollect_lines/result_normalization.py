@@ -1,4 +1,4 @@
-"""Provenance-aware structured result normalization (MR 8.6, extended Wave 4 / PR 11).
+"""Provenance-aware structured result normalization.
 
 Parses runtime-reported output into a versioned envelope with explicit trust
 zones. Unknown result_schema values are rejected before launch; they are never

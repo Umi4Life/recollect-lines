@@ -89,7 +89,7 @@ For HTTP tasks, the parent supplies `runtime=openai_compatible` and `provider=<n
 
 ### Completion-driven orchestration (no sleep loops)
 
-The dogfood problem this closes (Wave 5 / PR 13): a parent running several
+The dogfood problem this closes: a parent running several
 delegate rounds (e.g. a bounded model-council comparison, [PRD §3.1](design/PRD.md#31-delegation-shape-dynamic-not-fixed))
 used to sleep a guessed duration between dispatching one round and checking
 whether it finished. That guess is either too short (the parent checks too
@@ -108,7 +108,7 @@ a bigger guess:
    task that is still running.
 3. **Collect** — once a task id appears in a completion event, `collect` it
    for the full artifact-backed result (the event itself is a compact
-   notification only — see [mcp.md](mcp.md#completion-events-polling-contract-wave-5--pr-13)).
+   notification only — see [mcp.md](mcp.md#completion-events-polling-contract)).
 4. **Advance** — start the next round once this round's expected task ids
    are all accounted for.
 
@@ -119,9 +119,10 @@ recursive council scheduling — the parent still decides the graph, the round
 count, and when a comparison is "enough" (see [council.py](../src/recollect_lines/council.py)'s
 same non-goals for the bounded council primitive).
 
-Wave 5 / PR 15 adds a copy-pasteable reference for the full dogfood debate
-pattern (opening positions → rebuttals → synthesis → validation → optional
-parent materialization) in [bounded-debate-workflow.md](bounded-debate-workflow.md)
+[bounded-debate-workflow.md](bounded-debate-workflow.md) adds a
+copy-pasteable reference for the full dogfood debate pattern (opening
+positions → rebuttals → synthesis → validation → optional parent
+materialization)
 — still caller-controlled, not an autonomous council.
 
 ### Tool-access profiles and operator-approved repository read

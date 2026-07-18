@@ -1,4 +1,4 @@
-"""Wave 2 / PR 5: configuration contract completion.
+"""Configuration contract completion.
 
 Covers the tracked example/schema artifacts, gitignore policy for local
 operator config files, the `config validate`/`config init` CLI surface, and

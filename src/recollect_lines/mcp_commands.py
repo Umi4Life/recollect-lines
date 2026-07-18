@@ -1,4 +1,4 @@
-"""`recollect-lines mcp print|install` -- Wave 3 / PR 8.
+"""`recollect-lines mcp print|install` command group.
 
 Safe MCP host registration for parent tools this project actually supports
 as runtimes (`cursor`, `claude_code`, `codex`). Does not claim integration

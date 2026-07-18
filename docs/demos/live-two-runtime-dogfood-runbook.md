@@ -1,7 +1,7 @@
 # Live two-runtime dogfood acceptance (opt-in only)
 
 This runbook describes a **future, operator-initiated** acceptance pass. It is **not**
-executed by CI and **not** completed by the integrated fixture proof in MR 8.8.
+executed by CI and **not** completed by the integrated fixture proof.
 Do not treat fixture acceptance as certification of every installed provider.
 
 ## Goal
@@ -84,4 +84,4 @@ python3 examples/completion-event-polling/poll_completions.py --home "$RECOLLECT
 ## Status
 
 **Not performed** by the fixture proof or CI. Completing this runbook is an explicit
-operator opt-in after MR 8.8 ships. No synthesized live-run evidence is committed here.
+operator opt-in after the integrated fixture proof ships. No synthesized live-run evidence is committed here.

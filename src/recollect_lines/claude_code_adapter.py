@@ -77,7 +77,7 @@ RUNTIME_DESCRIPTION = "Claude Code via claude -p"
 # (see claude_permission_mode_policy.py). isolated_worktree always acceptEdits.
 #
 # The actual --tools/--disallowedTools allowlists are owned by
-# tool_access_profile.py (RFC-002 PR 4), which resolves the tool-access profile
+# tool_access_profile.py, which resolves the tool-access profile
 # for execution_mode separately from the permission-mode decision above.
 
 REDACTED_VALUE = "***REDACTED***"

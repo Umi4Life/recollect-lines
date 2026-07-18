@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrated side-agent fixture acceptance (MR 8.8).
+"""Integrated side-agent fixture acceptance.
 
 Deterministic, no-network proof that one host session can delegate heterogeneous
 bounded children, poll durable completion-event cursors, collect provenance-aware

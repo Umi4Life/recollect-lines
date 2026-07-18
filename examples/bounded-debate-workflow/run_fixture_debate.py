@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixture-only driver for the bounded debate reference workflow (Wave 5 / PR 15)."""
+"""Fixture-only driver for the bounded debate reference workflow."""
 from __future__ import annotations
 
 import json

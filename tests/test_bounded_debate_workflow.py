@@ -1,4 +1,4 @@
-"""Hermetic end-to-end tests for the bounded debate reference workflow (Wave 5 / PR 15)."""
+"""Hermetic end-to-end tests for the bounded debate reference workflow."""
 
 from __future__ import annotations
 

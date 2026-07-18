@@ -1,4 +1,4 @@
-"""MR 8.8: integrated side-agent fixture acceptance."""
+"""Integrated side-agent fixture acceptance."""
 
 from __future__ import annotations
 

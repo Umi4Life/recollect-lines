@@ -9,7 +9,7 @@ grants, or any result contract. See docs/claim-capability-diagnostics.md for
 the trust boundary and recommended parent response.
 
 Inputs are bounded and already structured:
-- `capability_observations` -- PR 1-normalized denial observations (see
+- `capability_observations` -- normalized denial observations (see
   `result_normalization.normalize_permission_denials`); never raw
   `permission_denials`/`tool_input`.
 - `summary` -- the broker's already-collected final summary text; never raw

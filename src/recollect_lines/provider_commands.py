@@ -1,7 +1,7 @@
-"""`recollect-lines provider list/add/show/test` -- Wave 3 / PR 7.
+"""`recollect-lines provider list/add/show/test` command group.
 
 Safe provider identity management on top of the existing config contract
-(precedence resolution, strict schema, atomic writer) from PR 4/5/6. Never
+(precedence resolution, strict schema, atomic writer). Never
 accepts or prints a raw credential value -- only environment-variable
 *names* -- and never sends provider network traffic unless `provider test`
 is explicitly run with `--live`.

@@ -1,10 +1,10 @@
-"""`recollect-lines init` -- one-shot local state/config bootstrap (Wave 3 / PR 6).
+"""`recollect-lines init` -- one-shot local state/config bootstrap.
 
 Establishes the operator home directory (`--home`, default `.recollect`) and
 a minimal starter provider config, creating each only when absent, then runs
 the same offline-safe diagnostic as `config validate` so the reported status
 is truthful (no provider is ever claimed configured unless its file actually
-validates). Provider credential capture (PR 7) and MCP host installation (PR 8) live in
+validates). Provider credential capture and MCP host installation live in
 `recollect-lines provider …` and `recollect-lines mcp …` respectively.
 """
 

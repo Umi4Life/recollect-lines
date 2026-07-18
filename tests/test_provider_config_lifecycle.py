@@ -1,4 +1,4 @@
-"""Wave 1 / PR 3: provider configuration lifecycle diagnostics.
+"""Provider configuration lifecycle diagnostics.
 
 providers.json is only read once, when the broker/MCP process constructs its
 OpenAiCompatibleDirectRuntime. These tests prove the operator-facing

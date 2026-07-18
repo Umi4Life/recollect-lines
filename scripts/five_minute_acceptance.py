@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermetic five-minute operator acceptance (Wave 3 / PR 9).
+"""Hermetic five-minute operator acceptance.
 
 Builds a disposable virtual environment, installs recollect-lines from local
 artifacts (no PYTHONPATH=src shortcut), then runs the documented fresh-operator

@@ -1,4 +1,4 @@
-"""Wave 4 / PR 11: deterministic pre-delegate schema/prose conflict warning."""
+"""Deterministic pre-delegate schema/prose conflict warning."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class DetectSchemaProseConflictTests(unittest.TestCase):
         self.assertIsNone(detect_schema_prose_conflict("let's debate the merits of tabs vs spaces", "plain-summary"))
 
     def test_conflict_for_debate_prose_with_review_findings(self):
-        # The exact example from the PR 11 requirements.
+        # The exact example from the schema/prose conflict requirements.
         warning = detect_schema_prose_conflict("Debate the merits of microservices vs a monolith", "review-findings")
         self.assertIsNotNone(warning)
         self.assertEqual(warning["code"], "prose_genre_vs_structured_schema")

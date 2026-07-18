@@ -1,4 +1,4 @@
-"""Reference bounded debate workflow (Wave 5 / PR 15).
+"""Reference bounded debate workflow.
 
 Parent-directed helper for the dogfood pattern:
 
@@ -8,7 +8,7 @@ This is **not** a workflow engine, daemon, or auto-debate loop. Phases and
 participants are explicit; the caller invokes ``run_bounded_debate_workflow``
 once and remains responsible for retries, round counts, and when a comparison
 is "enough". Completion observation uses the durable ``completion_events``
-cursor (Wave 5 / PR 13) — never a fixed sleep for task duration.
+cursor — never a fixed sleep for task duration.
 
 Lineage: every dispatched task shares the caller's ``external_root_id``; child
 tasks hang under a host anchor with ``relationship=delegates`` (rebuttals may
