@@ -20,6 +20,13 @@ class TaskState(StrEnum):
     # fabricates a result from here; an operator must reconcile (which may
     # resolve it to failed, or attempt a persisted-pgid cancellation).
     RECOVERY_REQUIRED = "recovery_required"
+    # Terminal, but neither a success nor a verified failure: broker restart
+    # reconciliation (Cursor only, see durable_reconciliation.py /
+    # docs/history/phases/phase-7c5-cursor-uncollected.md) proved the
+    # supervised leader process exited before the broker ever collected a
+    # terminal result from it. Orchestration is complete; the outcome cannot
+    # be asserted. Never produced by normal collect() — only by reconcile().
+    UNCOLLECTED = "uncollected"
     SUCCEEDED = "succeeded"
     SUCCEEDED_WITH_WARNINGS = "succeeded_with_warnings"
     FAILED = "failed"
@@ -35,6 +42,7 @@ TERMINAL_STATES = frozenset({
     TaskState.CANCELLED,
     TaskState.TIMED_OUT,
     TaskState.REJECTED,
+    TaskState.UNCOLLECTED,
 })
 
 ALLOWED_TRANSITIONS = {
@@ -46,9 +54,11 @@ ALLOWED_TRANSITIONS = {
     # PREPARING (see Broker.reconcile()).
     TaskState.PREPARING: {
         TaskState.RUNNING, TaskState.FAILED, TaskState.CANCELLED, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED,
+        TaskState.UNCOLLECTED,
     },
     TaskState.RUNNING: {
         TaskState.COLLECTING, TaskState.CANCELLING, TaskState.FAILED, TaskState.TIMED_OUT, TaskState.RECOVERY_REQUIRED,
+        TaskState.UNCOLLECTED,
     },
     TaskState.CANCELLING: {TaskState.CANCELLED, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
     # RECOVERY_REQUIRED is reachable from COLLECTING too: a broker can crash
@@ -56,8 +66,14 @@ ALLOWED_TRANSITIONS = {
     # verification already in flight) but before the final terminal
     # transition — see Broker._RECONCILABLE_STATES / reconcile() and
     # docs/history/phases/phase-5c.md. Reconciliation from here never fabricates a success.
-    TaskState.COLLECTING: {TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED, TaskState.RECOVERY_REQUIRED},
-    TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED, TaskState.RUNNING},
+    TaskState.COLLECTING: {
+        TaskState.SUCCEEDED, TaskState.SUCCEEDED_WITH_WARNINGS, TaskState.FAILED, TaskState.RECOVERY_REQUIRED,
+        TaskState.UNCOLLECTED,
+    },
+    # UNCOLLECTED (Cursor-only): the leader is proven exited via persisted
+    # PID+start-identity, but the broker never collected a terminal result —
+    # see Broker._reconcile_cursor_legacy_subprocess.
+    TaskState.RECOVERY_REQUIRED: {TaskState.CANCELLING, TaskState.FAILED, TaskState.RUNNING, TaskState.UNCOLLECTED},
 }
 
 

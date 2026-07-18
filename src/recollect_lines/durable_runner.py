@@ -344,7 +344,7 @@ def _supervise_main(argv: list[str]) -> int:
             pgid = os.getpgid(0)
         except OSError:
             pgid = payload_pid
-        start_identity = _read_process_start_identity(payload_pid)
+        start_identity = read_process_start_identity(payload_pid)
         if start_identity is None:
             os._exit(127)
         manifest = _read_manifest_dict(manifest_path)
@@ -556,7 +556,13 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
                 item.unlink(missing_ok=True)
 
 
-def _read_process_start_identity(pid: int) -> str | None:
+def read_process_start_identity(pid: int) -> str | None:
+    """Anti-PID-reuse process identity: Linux /proc starttime+boot_id, best-effort elsewhere.
+
+    Public — reused outside the durable-launch manifest path by
+    `classify_process_identity` (legacy-subprocess restart reconciliation,
+    e.g. Cursor; see durable_reconciliation.py).
+    """
     if sys.platform == "linux":
         try:
             stat = Path(f"/proc/{pid}/stat").read_text()
@@ -573,6 +579,35 @@ def _read_process_start_identity(pid: int) -> str | None:
     except OSError:
         return None
     return f"{sys.platform}:pid={pid}:monotonic={time.monotonic_ns()}"
+
+
+def classify_process_identity(pid: int | None, expected_start_identity: str | None) -> str:
+    """Classify a persisted (pid, start_identity) pair against current process-table state.
+
+    Returns "dead" only on positive proof the original process is gone — the
+    exact pid no longer exists, or a live process now holds that pid but its
+    start_identity (boot_id+starttime on Linux) no longer matches, meaning the
+    pid number was reused by an unrelated process. Returns "alive" only when
+    the pid is live and its identity still matches. Returns "unknown" whenever
+    death cannot be safely asserted (missing pid/identity, a permission error
+    on the liveness probe, or an unreadable current identity) — callers that
+    must never infer death from missing proof should treat "unknown" the same
+    as "alive".
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return "unknown"
+    if not isinstance(expected_start_identity, str) or not expected_start_identity.strip():
+        return "unknown"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "unknown"
+    current = read_process_start_identity(pid)
+    if current is None:
+        return "unknown"
+    return "alive" if current == expected_start_identity else "dead"
 
 
 def _verify_live_process(record: DurableLaunchRecord) -> bool:
@@ -597,7 +632,7 @@ def _verify_live_process(record: DurableLaunchRecord) -> bool:
             return False
     except ProcessLookupError:
         return False
-    current = _read_process_start_identity(pid)
+    current = read_process_start_identity(pid)
     return current is not None and current == expected
 
 

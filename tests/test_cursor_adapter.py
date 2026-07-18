@@ -227,7 +227,11 @@ class CursorBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(first.state, second.state)
         self.assertEqual(first.updated_at, second.updated_at)
 
-    def test_collect_without_a_process_handle_confirms_dead_process_group_and_fails(self):
+    def test_collect_without_a_process_handle_and_a_proven_dead_leader_is_uncollected_not_failed(self):
+        # Regression test for the Wave 3 field incident (docs/history/phases/
+        # phase-7c5-cursor-uncollected.md): a broker restart losing the
+        # in-memory handle for a Cursor task whose leader has already exited
+        # must never fabricate `failed` — the outcome is genuinely unknown.
         record = self.create()
         self.broker.start(record.id)
         orphaned_handle = self.broker._process_handles.pop(record.id)
@@ -235,8 +239,12 @@ class CursorBrokerIntegrationTests(unittest.TestCase):
 
         completed = self.broker.collect(record.id)
 
-        self.assertEqual(completed.state, TaskState.FAILED)
-        self.assertEqual(self.broker.store.events(record.id)[-1]["metadata"]["reason"], "process_group_confirmed_dead")
+        self.assertEqual(completed.state, TaskState.UNCOLLECTED)
+        last_event_metadata = self.broker.store.events(record.id)[-1]["metadata"]
+        self.assertEqual(last_event_metadata["reason"], "leader_exited_uncollected")
+        self.assertEqual(last_event_metadata["outcome"], "unknown")
+        self.assertEqual(last_event_metadata["leader"]["state"], "dead")
+        self.assertFalse((self.home / "artifacts" / record.id / "result.json").exists())
 
 
 class CursorUnsupportedPolicyBrokerTests(unittest.TestCase):
