@@ -31,6 +31,7 @@ class DetectSchemaProseConflictTests(unittest.TestCase):
             "review-findings",
             "implementation-report",
             "verified-investigation-report",
+            "review-report",
         ):
             with self.subTest(schema=schema):
                 warning = detect_schema_prose_conflict("write a short story about a dragon", schema)

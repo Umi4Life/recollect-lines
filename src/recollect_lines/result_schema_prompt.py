@@ -47,6 +47,19 @@ _SCHEMA_FIELD_GUIDANCE: dict[str, str] = {
         "- blocked_capabilities (array of strings): runtime-reported tools/capabilities you could "
         "not use during the investigation (distinct from broker capability observations)."
     ),
+    "review-report": (
+        "Required JSON fields:\n"
+        "- summary (string): concise review outcome.\n"
+        "- review_status (string): one of passed | needs_changes | blocked.\n"
+        "- review_findings (array): each object requires finding (string) and may include "
+        "severity (blocking | major | minor | info; defaults to info).\n"
+        "- reviewed_artifacts (array): each object requires category (diff | test_result | "
+        "normalized_result | verification_output | task_summary | other) and reference (bounded "
+        "locator/label, not raw content).\n"
+        "- full_reexecution_performed (boolean): true only if you replayed the full delegated "
+        "task rather than reviewing the supplied artifacts. Default review posture is bounded "
+        "review of supplied artifacts, not full re-execution."
+    ),
 }
 
 

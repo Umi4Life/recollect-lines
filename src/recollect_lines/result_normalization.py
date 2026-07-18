@@ -33,6 +33,11 @@ from typing import Any
 
 from .capability_contract_result import STATUS_NO_REQUIREMENTS, evaluate_capability_contract
 from .models import TaskRecord, TaskState
+from .review_report import (
+    REVIEW_REPORT_SCHEMA,
+    review_summary,
+    validate_review_report,
+)
 from .verified_investigation_report import (
     VERIFIED_INVESTIGATION_REPORT_SCHEMA,
     validate_verified_investigation_report,
@@ -59,6 +64,7 @@ SUPPORTED_RESULT_SCHEMAS = frozenset({
     "review-findings",
     "implementation-report",
     VERIFIED_INVESTIGATION_REPORT_SCHEMA,
+    REVIEW_REPORT_SCHEMA,
 })
 DEFAULT_RESULT_SCHEMA = "plain-summary"
 
@@ -73,6 +79,13 @@ SCHEMA_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
         "evidence",
         "unverified_claims",
         "blocked_capabilities",
+    }),
+    REVIEW_REPORT_SCHEMA: frozenset({
+        "summary",
+        "review_status",
+        "review_findings",
+        "reviewed_artifacts",
+        "full_reexecution_performed",
     }),
 }
 
@@ -177,7 +190,7 @@ def _runtime_reported_from_structured(
     if isinstance(structured.get("summary"), str) and structured["summary"].strip():
         payload["summary"] = structured["summary"].strip()
 
-    if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA:
+    if schema in (VERIFIED_INVESTIGATION_REPORT_SCHEMA, REVIEW_REPORT_SCHEMA):
         return payload
 
     for key, target in (
@@ -241,6 +254,17 @@ def _parse_status_and_warnings(
                 warnings.append("verified-investigation-report contract validation failed")
             return "partial", warnings
         runtime_reported["verified_investigation"] = normalized
+        return "ok", warnings
+
+    if schema == REVIEW_REPORT_SCHEMA:
+        assert structured is not None
+        ok, contract_warnings, normalized = validate_review_report(structured)
+        warnings.extend(contract_warnings)
+        if not ok or normalized is None:
+            if not any("review-report" in w for w in warnings):
+                warnings.append("review-report contract validation failed")
+            return "partial", warnings
+        runtime_reported["review_report"] = normalized
         return "ok", warnings
 
     return "ok", warnings
@@ -345,6 +369,8 @@ def _field_present(
     if schema == VERIFIED_INVESTIGATION_REPORT_SCHEMA and structured is not None:
         value = structured.get(field)
         return isinstance(value, list)
+    if schema == REVIEW_REPORT_SCHEMA and structured is not None:
+        return field in structured and structured.get(field) is not None
     return False
 
 
@@ -586,6 +612,12 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
         view["verified_investigation_summary"] = verified_investigation_summary(
             contract_status=str(parser.get("contract_status") or "unavailable"),
             payload=verified if isinstance(verified, dict) else None,
+        )
+    review = runtime.get("review_report")
+    if parser.get("requested_schema") == REVIEW_REPORT_SCHEMA:
+        view["review_summary"] = review_summary(
+            contract_status=str(parser.get("contract_status") or "unavailable"),
+            payload=review if isinstance(review, dict) else None,
         )
     return view
 
