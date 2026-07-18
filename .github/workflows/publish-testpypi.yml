@@ -1,0 +1,67 @@
+name: Publish to TestPyPI
+
+# Manual, opt-in TestPyPI upload only. No production PyPI, no tag/release trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: 'Type "publish-testpypi" to confirm TestPyPI upload'
+        required: true
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python3 -m pip install build twine
+
+      - name: Build distributions
+        run: python3 -m build
+
+      - name: Validate distribution metadata
+        run: python3 -m twine check dist/*
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Fail closed without explicit confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_publish }}" != "publish-testpypi" ]; then
+            echo "Publish blocked: set confirm_publish to exactly publish-testpypi"
+            exit 1
+          fi
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to TestPyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
