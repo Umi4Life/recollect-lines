@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .adapters import AdapterCapabilities
+from .adaptor.contracts import AdapterCapabilities
 from .capability_contract import describe_unsupported_execution_mode, materialization_prompt_notice
 from .capability_contract_result import STATUS_UNSATISFIED, evaluate_capability_contract
 from .durable_reconciliation import (
@@ -28,11 +28,11 @@ from .durable_reconciliation import (
     make_reconcile_detail,
 )
 from .durable_runner import classify_process_identity
-from .fixture_durable_adapter import FixtureDurableAdapter
+from .adaptor.fixture_durable import FixtureDurableAdapter
 from .recovery_contract import SYNTHETIC_RECOVERY_CONTROL
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .agent_profiles import (
     get_agent_profile,
@@ -63,7 +63,7 @@ from .models import (
     validate_result,
     validate_verify_commands,
 )
-from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
+from .adaptor.opencode import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .providers import ProviderConfigError, load_providers_config
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
 from .result_schema_capabilities import evaluate_result_schema_preflight

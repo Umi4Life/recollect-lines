@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .adapters import AdapterCapabilities
+from .adaptor.contracts import AdapterCapabilities
 from .recovery_contract import DIRECT_API_RECOVERY_CONTROL
 from .models import TaskRecord
 from .providers import (

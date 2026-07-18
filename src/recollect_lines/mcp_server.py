@@ -26,9 +26,9 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .models import (
     VERIFICATION_POLICIES,
     TaskRequest,
@@ -54,7 +54,7 @@ from .cost_rework_policy import (
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VALID_RELATIONSHIPS, concise_task_summary, reject_forbidden_lineage_keys
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
-from .opencode_adapter import OpenCodeAdapter
+from .adaptor.opencode import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
 from .providers import resolve_providers_config_source
 from .service import Broker

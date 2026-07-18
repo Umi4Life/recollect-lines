@@ -16,13 +16,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import __version__
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .discovery import discover_providers, discover_runtimes, probe_cli_version, provider_config_lifecycle
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
-from .opencode_adapter import OpenCodeAdapter
+from .adaptor.opencode import OpenCodeAdapter
 from .providers import (
     MissingCredentialReference,
     ProviderConfigError,

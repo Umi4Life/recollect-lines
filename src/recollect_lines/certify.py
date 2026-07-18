@@ -19,14 +19,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import __version__
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .discovery import probe_cli_version
 from .models import TaskRecord, TaskRequest
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, ExecutionStrategy
-from .opencode_adapter import OpenCodeAdapter
+from .adaptor.opencode import OpenCodeAdapter
 from .providers import (
     MissingCredentialReference,
     ProviderConfig,

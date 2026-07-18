@@ -1,26 +1,7 @@
-"""Runtime adapter boundary: shared types and capability reporting for task execution backends."""
+"""Deprecated compatibility shim — import from ``recollect_lines.adaptor.contracts`` instead."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from recollect_lines.adaptor.contracts import AdapterCapabilities, RuntimeAdapter
 
-from .recovery_contract import RecoveryControlContract
-
-
-@dataclass(frozen=True)
-class AdapterCapabilities:
-    requires_subprocess: bool
-    supports_process_group_cancellation: bool
-    reports_broker_verified_tests: bool
-    recovery_control: RecoveryControlContract
-    uses_durable_subprocess_runner: bool = False
-    # None preserves legacy behavior: this adapter does not restrict schemas.
-    # A set is an explicit pre-launch schema allowlist.
-    supported_result_schemas: frozenset[str] | None = None
-
-
-@runtime_checkable
-class RuntimeAdapter(Protocol):
-    name: str
-    capabilities: AdapterCapabilities
+__all__ = ["AdapterCapabilities", "RuntimeAdapter"]

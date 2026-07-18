@@ -5,19 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .adapters import AdapterCapabilities
+from .adaptor.contracts import AdapterCapabilities
 from .capability_contract import (
     SYNTHETIC_CONTRACT,
     TEXT_SYNTHESIS_CONTRACT,
     WORKTREE_CAPABLE_CONTRACT,
     RuntimeCapabilityContract,
 )
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .models import DEFAULT_PROFILES, ProfilePolicy
-from .opencode_adapter import OpenCodeAdapter
+from .adaptor.opencode import OpenCodeAdapter
 from .recovery_contract import (
     SYNTHETIC_RECOVERY_CONTROL,
 )
