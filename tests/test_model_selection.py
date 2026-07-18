@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recollect_lines.codex_adapter import CodexAdapter
+from recollect_lines.adaptor.codex import CodexAdapter
 from recollect_lines.direct_api_runtime import DIRECT_API_PROFILE
 from recollect_lines.model_selection import (
     ModelSelectionRefusedError,

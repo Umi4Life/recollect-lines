@@ -1,9 +1,10 @@
-"""Regression tests for adaptor package layout and legacy import compatibility."""
+"""Regression tests for recollect_lines.adaptor package layout and registry wiring."""
 
 from __future__ import annotations
 
 import importlib
 import unittest
+from pathlib import Path
 
 import recollect_lines.adaptor as adaptor_pkg
 from recollect_lines.adaptor import (
@@ -20,31 +21,22 @@ from recollect_lines.adaptor import (
 )
 from recollect_lines.runtime_registry import DEFAULT_RUNTIME_REGISTRY
 
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "recollect_lines"
+LEGACY_ROOT_MODULES = (
+    "adapters.py",
+    "claude_code_adapter.py",
+    "codex_adapter.py",
+    "cursor_adapter.py",
+    "opencode_adapter.py",
+    "fixture_durable_adapter.py",
+)
 
-class AdaptorImportCompatibilityTests(unittest.TestCase):
-    def test_legacy_and_new_contract_imports_are_identical(self):
-        legacy = importlib.import_module("recollect_lines.adapters")
-        self.assertIs(legacy.AdapterCapabilities, AdapterCapabilities)
-        self.assertIs(legacy.RuntimeAdapter, RuntimeAdapter)
 
-    def test_legacy_and_new_adapter_imports_are_identical(self):
-        pairs = (
-            ("recollect_lines.opencode_adapter", OpenCodeAdapter),
-            ("recollect_lines.claude_code_adapter", ClaudeCodeAdapter),
-            ("recollect_lines.codex_adapter", CodexAdapter),
-            ("recollect_lines.cursor_adapter", CursorAdapter),
-            ("recollect_lines.fixture_durable_adapter", FixtureDurableAdapter),
-        )
-        for module_name, expected_cls in pairs:
+class AdaptorPackageTests(unittest.TestCase):
+    def test_legacy_root_adaptor_modules_are_absent(self):
+        for module_name in LEGACY_ROOT_MODULES:
             with self.subTest(module=module_name):
-                legacy = importlib.import_module(module_name)
-                self.assertIs(getattr(legacy, expected_cls.__name__), expected_cls)
-
-    def test_legacy_opencode_process_helpers_match_package(self):
-        legacy = importlib.import_module("recollect_lines.opencode_adapter")
-        self.assertIs(legacy.cancel_process_group, cancel_process_group)
-        self.assertIs(legacy.group_alive, group_alive)
-        self.assertIs(legacy.redact_command, redact_command)
+                self.assertFalse((SRC_ROOT / module_name).exists())
 
     def test_registered_runtimes_resolve_to_expected_implementations(self):
         expected = {
@@ -90,6 +82,17 @@ class AdaptorImportCompatibilityTests(unittest.TestCase):
         ):
             with self.subTest(module=module_name):
                 importlib.import_module(module_name)
+
+    def test_process_helpers_exported_from_package(self):
+        from recollect_lines.adaptor.opencode import (
+            cancel_process_group as opencode_cancel,
+            group_alive as opencode_alive,
+            redact_command as opencode_redact,
+        )
+
+        self.assertIs(cancel_process_group, opencode_cancel)
+        self.assertIs(group_alive, opencode_alive)
+        self.assertIs(redact_command, opencode_redact)
 
 
 if __name__ == "__main__":

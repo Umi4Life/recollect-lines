@@ -6,9 +6,9 @@ import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.adapters import AdapterCapabilities
+from recollect_lines.adaptor import AdapterCapabilities
 from recollect_lines.models import TaskRequest, TaskState
-from recollect_lines.opencode_adapter import DEFAULT_COMMAND_PREFIX, OpenCodeAdapter
+from recollect_lines.adaptor.opencode import DEFAULT_COMMAND_PREFIX, OpenCodeAdapter
 from recollect_lines.service import Broker
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fake_opencode.py"

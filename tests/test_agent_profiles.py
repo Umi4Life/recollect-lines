@@ -16,7 +16,7 @@ from recollect_lines.agent_profiles import (
     profile_content_hash,
     resolve_agent_profile,
 )
-from recollect_lines.codex_adapter import CodexAdapter
+from recollect_lines.adaptor.codex import CodexAdapter
 from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState
 from recollect_lines.service import Broker
 

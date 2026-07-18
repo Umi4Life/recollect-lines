@@ -17,9 +17,9 @@ from unittest import mock
 from recollect_lines import mcp_server
 from recollect_lines.durable_reconciliation import is_durable_launch_row
 from recollect_lines.durable_runner import STATE_RUNNING, inspect_durable_launch, load_launch_record
-from recollect_lines.fixture_durable_adapter import FixtureDurableAdapter
+from recollect_lines.adaptor.fixture_durable import FixtureDurableAdapter
 from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, TaskRequest, TaskState
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.operator_control import OPERATOR_CONTROL_SCHEMA_VERSION, OperatorControlRefused
 from recollect_lines.service import Broker
 

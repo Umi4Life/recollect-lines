@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState, TERMINAL_STATES
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from recollect_lines import __version__, cli
 from recollect_lines.doctor import DOCTOR_SCHEMA_VERSION, format_human_report, run_doctor
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 
 ROOT = Path(__file__).resolve().parent.parent
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"

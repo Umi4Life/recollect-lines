@@ -23,9 +23,9 @@ from recollect_lines.durable_runner import (
     inspect_durable_launch,
     load_launch_record,
 )
-from recollect_lines.fixture_durable_adapter import FixtureDurableAdapter
+from recollect_lines.adaptor.fixture_durable import FixtureDurableAdapter
 from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, RecoveryRequired, TaskRequest, TaskState
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
 
 ROOT = Path(__file__).resolve().parent.parent

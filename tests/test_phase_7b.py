@@ -21,7 +21,7 @@ from recollect_lines.certify import (
 )
 from recollect_lines.direct_api_runtime import OpenAiCompatibleDirectRuntime
 from recollect_lines.models import TaskRecord, TaskRequest
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.providers import validate_providers_document
 
 ROOT = Path(__file__).resolve().parent.parent

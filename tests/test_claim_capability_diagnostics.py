@@ -22,7 +22,7 @@ from recollect_lines.claim_capability_diagnostics import (
     claim_capability_diagnostics_concise,
     evaluate_claim_capability_diagnostics,
 )
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.required_capabilities import WORKSPACE_READ
 from recollect_lines.result_normalization import (
