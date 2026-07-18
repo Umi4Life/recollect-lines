@@ -161,6 +161,7 @@ def concise_task_summary(
     record: TaskRecord,
     *,
     model_profile_resource: dict[str, Any] | None = None,
+    cost_policy_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "task_id": record.id,
@@ -194,4 +195,6 @@ def concise_task_summary(
         summary["result_schema"] = record.result_schema
     if model_profile_resource is not None:
         summary["model_profile_resource"] = model_profile_resource
+    if cost_policy_status is not None:
+        summary["cost_policy_status"] = cost_policy_status
     return summary

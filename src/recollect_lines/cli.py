@@ -34,6 +34,7 @@ from .tool_access_profile import (
     normalize_tool_access_profile,
 )
 from .model_profile import ModelProfileValidationError, normalize_model_profile
+from .cost_rework_policy import CostReworkPolicyValidationError, normalize_cost_rework_policy, normalize_rework_metadata
 from .providers import OPERATOR_CONFIG_DIRNAME, ProviderConfigError, resolve_providers_config_source, write_local_config_file
 from .service import Broker
 
@@ -140,6 +141,34 @@ def parser() -> argparse.ArgumentParser:
             "at start before adapter launch. When omitted, the task is recorded as "
             "unconfigured (cost_class unknown) — never inferred from runtime or model name."
         ),
+    )
+    create.add_argument(
+        "--cost-rework-policy",
+        dest="cost_rework_policy",
+        default=None,
+        help=(
+            "Named workflow cost/rework policy from operator configuration. When selected, "
+            "premium budgets and explicit rework metadata are enforced at preflight."
+        ),
+    )
+    create.add_argument(
+        "--rework-prior-task-id",
+        dest="rework_prior_task_id",
+        default=None,
+        help="Prior task id for explicit targeted or full rework (requires --cost-rework-policy).",
+    )
+    create.add_argument(
+        "--rework-scope",
+        dest="rework_scope",
+        default=None,
+        choices=("targeted", "full"),
+        help="Explicit rework scope: targeted continuation or full re-execution.",
+    )
+    create.add_argument(
+        "--escalation-reason",
+        dest="escalation_reason",
+        default=None,
+        help="Bounded reason for rework/escalation when the selected policy requires it.",
     )
     create.add_argument(
         "--provider", default=None,
@@ -599,6 +628,14 @@ def main(argv: list[str] | None = None) -> int:
                 explicit_fields.add("tool_access_profile")
             if args.model_profile is not None:
                 explicit_fields.add("model_profile")
+            if args.cost_rework_policy is not None:
+                explicit_fields.add("cost_rework_policy")
+            if args.rework_prior_task_id is not None:
+                explicit_fields.add("rework_prior_task_id")
+            if args.rework_scope is not None:
+                explicit_fields.add("rework_scope")
+            if args.escalation_reason is not None:
+                explicit_fields.add("escalation_reason")
             runtime, model, agent_profile, result_schema, compatibility = translate_delegate_fields(
                 runtime=args.runtime,
                 profile=args.profile,
@@ -628,6 +665,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ModelProfileValidationError as error:
                 raise SystemExit(str(error)) from error
+            try:
+                cost_rework_policy = normalize_cost_rework_policy(
+                    args.cost_rework_policy,
+                    registry=broker.cost_rework_policy_registry,
+                )
+            except CostReworkPolicyValidationError as error:
+                raise SystemExit(str(error)) from error
+            if cost_rework_policy is not None:
+                try:
+                    normalize_rework_metadata(
+                        prior_task_id=args.rework_prior_task_id,
+                        scope=args.rework_scope,
+                        escalation_reason=args.escalation_reason,
+                    )
+                except CostReworkPolicyValidationError as error:
+                    raise SystemExit(str(error)) from error
             request = TaskRequest(
                 args.task,
                 args.workspace,
@@ -652,6 +705,10 @@ def main(argv: list[str] | None = None) -> int:
                 required_capabilities=required_capabilities,
                 tool_access_profile=tool_access_profile,
                 model_profile=model_profile,
+                cost_rework_policy=cost_rework_policy,
+                rework_prior_task_id=args.rework_prior_task_id,
+                rework_scope=args.rework_scope,
+                escalation_reason=args.escalation_reason,
             )
             verify_commands = [json.loads(command) for command in args.verify_commands] if args.verify_commands else None
             record = broker.create(request, verify_commands=verify_commands)

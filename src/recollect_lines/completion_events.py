@@ -12,6 +12,7 @@ from typing import Any
 from .models import TERMINAL_STATES, TaskState, verification_gate_label
 from .result_normalization import NORMALIZED_RESULT_ARTIFACT, concise_normalized_view
 from .model_profile import model_profile_public_projection
+from .cost_rework_policy import cost_policy_public_projection
 
 DEFAULT_COMPLETION_EVENTS_LIMIT = 64
 MAX_COMPLETION_EVENTS_LIMIT = 256
@@ -112,6 +113,18 @@ def _model_profile_resource(store: Any, task_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _cost_policy_status(store: Any, task_id: str) -> dict[str, Any] | None:
+    path = store.artifacts / task_id / "cost_rework_policy_resolution.json"
+    if path.is_file():
+        try:
+            snapshot = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            snapshot = None
+        if isinstance(snapshot, dict):
+            return cost_policy_public_projection(snapshot)
+    return None
+
+
 def build_completion_event(store: Any, row: dict[str, Any]) -> dict[str, Any]:
     metadata = json.loads(row["metadata_json"])
     state = row.get("state_after")
@@ -150,6 +163,9 @@ def build_completion_event(store: Any, row: dict[str, Any]) -> dict[str, Any]:
     model_profile_resource = _model_profile_resource(store, row["task_id"])
     if model_profile_resource is not None:
         payload["model_profile_resource"] = model_profile_resource
+    cost_policy = _cost_policy_status(store, row["task_id"])
+    if cost_policy is not None:
+        payload["cost_policy_status"] = cost_policy
     return payload
 
 

@@ -411,6 +411,7 @@ def build_normalized_envelope(
     required_capabilities: tuple[str, ...] = (),
     tool_access_profile_audit: dict[str, Any] | None = None,
     model_profile_resource: dict[str, Any] | None = None,
+    cost_policy_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema = effective_result_schema(record)
     summary = collected.get("summary")
@@ -504,6 +505,8 @@ def build_normalized_envelope(
         envelope["broker_observed"]["tool_access_profile_audit"] = tool_access_profile_audit
     if model_profile_resource is not None:
         envelope["broker_observed"]["model_profile_resource"] = model_profile_resource
+    if cost_policy_status is not None:
+        envelope["broker_observed"]["cost_policy_status"] = cost_policy_status
     return envelope
 
 
@@ -560,6 +563,23 @@ def concise_normalized_view(envelope: dict[str, Any] | None) -> dict[str, Any] |
             key: model_profile[key]
             for key in ("resolution", "model_profile", "cost_class", "usage_bucket", "resources")
             if key in model_profile
+        }
+    cost_policy = broker.get("cost_policy_status")
+    if isinstance(cost_policy, dict) and cost_policy:
+        view["cost_policy_status"] = {
+            key: cost_policy[key]
+            for key in (
+                "resolution",
+                "policy_id",
+                "preflight_status",
+                "usage",
+                "remaining",
+                "limits",
+                "rework",
+                "escalation_decision",
+                "model_profile_cost_class",
+            )
+            if key in cost_policy
         }
     verified = runtime.get("verified_investigation")
     if parser.get("requested_schema") == VERIFIED_INVESTIGATION_REPORT_SCHEMA:

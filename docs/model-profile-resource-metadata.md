@@ -2,7 +2,8 @@
 
 Operator-configured **model profiles** bind an explicit runtime/model
 configuration to durable cost and resource classification. This is the
-foundation for later bounded rework and escalation policy (RFC-003); it does
+foundation for bounded rework and escalation policy (RFC-003); see
+[cost-rework-policy.md](cost-rework-policy.md). It does
 not implement routing, budgets, or retries.
 
 ## Invariants
