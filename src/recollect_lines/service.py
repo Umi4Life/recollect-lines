@@ -65,6 +65,7 @@ from .models import (
 from .opencode_adapter import OpenCodeAdapter, group_alive, group_dead_within, redact_command
 from .providers import ProviderConfigError, load_providers_config
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY, RuntimeDescriptor, RuntimeRegistry, ExecutionStrategy, ModelSelectionSupport, SUBPROCESS_LIMITATIONS
+from .result_schema_capabilities import evaluate_result_schema_preflight
 from .required_capabilities import (
     CapabilityPreflightContext,
     RequiredCapabilityValidationError,
@@ -711,6 +712,22 @@ class Broker:
             rejection,
         )
 
+    def _reject_unsupported_result_schema(self, record: TaskRecord) -> TaskRecord | None:
+        rejection = evaluate_result_schema_preflight(
+            runtime=record.runtime,
+            result_schema=effective_result_schema(record),
+            capabilities=self.runtime_registry.get(record.runtime).adapter_capabilities,
+        )
+        if rejection is None:
+            return None
+        return self.store.transition(
+            record.id,
+            TaskState.REJECTED,
+            "Requested result schema is not supported by the selected runtime policy",
+            rejection,
+        )
+
+
     def _composed_launch_prompt(self, task_id: str, record: TaskRecord) -> tuple[str, dict[str, object] | None]:
         schema = effective_result_schema(record)
         notice = materialization_prompt_notice(self.runtime_registry.get(record.runtime).capability_contract)
@@ -956,6 +973,9 @@ class Broker:
 
     def start(self, task_id: str) -> TaskRecord:
         record = self.store.get(task_id)
+        rejected = self._reject_unsupported_result_schema(record)
+        if rejected is not None:
+            return rejected
         rejected = self._reject_invalid_tool_access_profile(record)
         if rejected is not None:
             return rejected

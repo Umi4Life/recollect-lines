@@ -140,6 +140,17 @@ Supported `result_schema` values:
 | `plain-summary` | Default when unset; summary text only |
 | `evidence-report` | Investigation output with optional findings/evidence/commands (runtime-reported) |
 | `verified-investigation-report` | Strict investigation contract with provenance, referential integrity, and count-only concise summaries ([details](verified-investigation-report.md)) |
+
+### Cursor result-schema preflight
+
+Cursor currently supports only `plain-summary`. A Cursor task that requests a
+strict structured result schema (including `verified-investigation-report`) is
+rejected before the Cursor subprocess launches. The rejection is deterministic
+and machine-readable: `reason: "unsupported_result_schema"`, with the
+requested `{runtime, result_schema}` and `supported_result_schemas` policy.
+Choose `plain-summary` explicitly for Cursor, or select a non-Cursor runtime
+for a structured contract. The broker does not coerce output or silently
+downgrade the requested schema.
 | `review-findings` | Review output with findings list |
 | `review-report` | Bounded review contract with closed review status, bounded findings/reviewed-artifacts, and an explicit full-re-execution flag ([details](review-report.md)) |
 | `implementation-report` | Change summary with runtime-reported commands/tests |
