@@ -56,6 +56,7 @@ from .task_lineage import FORBIDDEN_CALLER_LINEAGE_KEYS, VALID_ORIGIN_KINDS, VAL
 from .runtime_registry import DEFAULT_RUNTIME_REGISTRY
 from .opencode_adapter import OpenCodeAdapter
 from .operator_control import OperatorControlRefused
+from .result_schema_selection import UnsupportedResultSchemaError
 from .providers import resolve_providers_config_source
 from .service import Broker
 
@@ -1023,6 +1024,8 @@ def _dispatch_tool_call(broker: Broker, name: str, arguments: dict) -> dict:
                 "control": error.control,
             },
         )
+    except UnsupportedResultSchemaError as error:
+        return _tool_result(name, False, error=error.to_dict())
     except (ValueError, KeyError) as error:
         return _tool_result(name, False, error={"code": type(error).__name__, "message": str(error)})
     except Exception as error:

@@ -157,6 +157,23 @@ At launch, when a structured `result_schema` is selected (profile default or exp
 
 Limitations: structured parsing is heuristic over runtime summary text (JSON object when present); provider-native structured output is not assumed unless the runtime adapter supplies parseable text. Model-reported `commands_executed` / tests are never broker-verified.
 
+### Runtime result-schema capability (adapter preflight)
+
+Each runtime adapter declares a `result_schema_policy` checked at task **create** (delegate/CLI), before any subprocess launch:
+
+| Policy | Meaning |
+|--------|---------|
+| `all_supported` | Any globally supported `result_schema` (default for Codex, Claude Code, OpenCode, mock, direct API) |
+| `plain_summary_only` | Only `plain-summary` (explicit or default); structured schemas are rejected |
+
+The Cursor adapter (`runtime=cursor`) is **`plain_summary_only`**. This is an operational policy from bounded field validation (July 2026): Cursor Agent CLI children pinned to `composer-2.5` exited successfully in read-only modes but returned prose in the JSON `result` field instead of obeying prompt-level structured contracts such as `verified-investigation-report`. Recollect Lines already records execution success separately from `unsatisfied_fallback` contract status; this gate prevents spending a child invocation on a contract the adapter does not support.
+
+Rejections use stable code `unsupported_result_schema` with `runtime`, `requested_schema`, `policy`, and `supported_schemas`. There is **no silent downgrade** to `plain-summary`. MCP `delegate` surfaces the structured rejection; CLI/create raises `UnsupportedResultSchemaError`.
+
+`discover_capabilities` / runtime inventory includes `result_schema_policy` and `supported_result_schemas` per runtime.
+
+Field evidence summary (no prompts or raw child output): [history/field-evidence/cursor-result-schema-2026-07.md](history/field-evidence/cursor-result-schema-2026-07.md).
+
 ## Integrated fixture proof (MR 8.8)
 
 Offline acceptance tying lineage, heterogeneous runtimes/profiles/schemas, completion-event cursor polling, normalized collection, task trees, steering refusal with `continues` follow-up, and writer isolation:

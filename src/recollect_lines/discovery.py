@@ -21,6 +21,7 @@ from .recovery_contract import (
     probe_version_help_only,
     recovery_control_discovery_payload,
 )
+from .result_schema_selection import supported_result_schemas
 from .runtime_registry import (
     DEFAULT_RUNTIME_REGISTRY,
     DIRECT_API_LIMITATIONS,
@@ -62,7 +63,7 @@ def _declared_capabilities(descriptor: RuntimeDescriptor) -> dict[str, bool | st
     modes = policy.allowed_modes
     caps = descriptor.adapter_capabilities
     contract = descriptor.capability_contract
-    payload: dict[str, bool | str] = {
+    payload: dict[str, bool | str | list[str]] = {
         "subprocess_supervision": caps.requires_subprocess,
         "process_group_cancellation": caps.supports_process_group_cancellation,
         "read_only_execution": "read_only" in modes,
@@ -75,6 +76,8 @@ def _declared_capabilities(descriptor: RuntimeDescriptor) -> dict[str, bool | st
         "session_reattachment": False,
         "broker_verified_tests": caps.reports_broker_verified_tests,
         "model_selection": descriptor.model_selection.value,
+        "result_schema_policy": caps.result_schema_policy.value,
+        "supported_result_schemas": sorted(supported_result_schemas(descriptor)),
     }
     if descriptor.execution_strategy is ExecutionStrategy.SYNTHETIC:
         payload["synthetic_runtime"] = True

@@ -103,6 +103,7 @@ from .cost_rework_policy import (
     unconfigured_cost_policy_snapshot,
 )
 from .result_normalization import (
+    DEFAULT_RESULT_SCHEMA,
     NORMALIZED_RESULT_ARTIFACT,
     build_normalized_envelope,
     concise_normalized_view,
@@ -112,6 +113,7 @@ from .result_normalization import (
     validate_result_schema,
 )
 from .result_schema_prompt import RESULT_SCHEMA_PROMPT_VERSION, compose_launch_prompt
+from .result_schema_selection import validate_requested_result_schema
 from .completion_events import completion_events_page
 from .contract_conflict import detect_schema_prose_conflict
 from .store import TaskStore
@@ -388,6 +390,10 @@ class Broker:
         if self.store.active_count(runtime) >= resolved_policy.max_concurrency:
             raise ValueError(f"Profile {resolved_policy.name} concurrency limit reached")
         validate_requested_model(self.runtime_registry.get(runtime), request.model)
+        validate_requested_result_schema(
+            self.runtime_registry.get(runtime),
+            request.result_schema or DEFAULT_RESULT_SCHEMA,
+        )
         return resolved_policy
 
     def _resolve_agent_profile_request(

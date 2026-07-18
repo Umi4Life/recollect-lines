@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from .recovery_contract import RecoveryControlContract
+
+
+class ResultSchemaPolicy(StrEnum):
+    ALL_SUPPORTED = "all_supported"
+    PLAIN_SUMMARY_ONLY = "plain_summary_only"
 
 
 @dataclass(frozen=True)
@@ -15,6 +21,7 @@ class AdapterCapabilities:
     reports_broker_verified_tests: bool
     recovery_control: RecoveryControlContract
     uses_durable_subprocess_runner: bool = False
+    result_schema_policy: ResultSchemaPolicy = ResultSchemaPolicy.ALL_SUPPORTED
 
 
 @runtime_checkable

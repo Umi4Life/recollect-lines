@@ -21,7 +21,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .adapters import AdapterCapabilities
+from .adapters import AdapterCapabilities, ResultSchemaPolicy
 from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
@@ -89,6 +89,7 @@ class CursorAdapter:
         supports_process_group_cancellation=True,
         reports_broker_verified_tests=False,
         recovery_control=SUBPROCESS_CLI_RECOVERY_CONTROL,
+        result_schema_policy=ResultSchemaPolicy.PLAIN_SUMMARY_ONLY,
     )
 
     def __init__(

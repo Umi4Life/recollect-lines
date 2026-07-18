@@ -109,6 +109,10 @@ one short read-only prompt), not continuous upstream compatibility testing.
 
 ## Unsupported / remaining constraints
 
+- **Structured `result_schema` contracts** (anything other than `plain-summary`)
+  are rejected at create/delegate preflight (`unsupported_result_schema`). See
+  [field evidence](../field-evidence/cursor-result-schema-2026-07.md) and
+  [migration-runtime-profile.md](../../migration-runtime-profile.md#runtime-result-schema-capability-adapter-preflight).
 - **Live mid-task `message` steering** remains unsupported for Cursor, as for
   every other adapter.
 - **Durable re-attachment after a broker restart** remains unsupported;
