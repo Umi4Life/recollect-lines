@@ -65,6 +65,16 @@ def _compact_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     reason = metadata.get("reason")
     if isinstance(reason, str) and reason.strip():
         compact["reason"] = reason.strip()
+    outcome = metadata.get("outcome")
+    if isinstance(outcome, str) and outcome.strip():
+        compact["outcome"] = outcome.strip()
+    # Cursor-only restart-reconciliation facts (see
+    # Broker._reconcile_cursor_legacy_subprocess): bounded pid/state metadata
+    # only, never raw stdout/stderr.
+    for key in ("leader", "process_group"):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            compact[key] = value
     cancellation = _compact_cancellation(metadata)
     if cancellation is not None:
         compact["cancellation"] = cancellation

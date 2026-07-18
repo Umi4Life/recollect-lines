@@ -27,6 +27,7 @@ from .durable_reconciliation import (
     load_broker_identity,
     make_reconcile_detail,
 )
+from .durable_runner import classify_process_identity
 from .fixture_durable_adapter import FixtureDurableAdapter
 from .recovery_contract import SYNTHETIC_RECOVERY_CONTROL
 from .claude_code_adapter import ClaudeCodeAdapter
@@ -1098,6 +1099,7 @@ class Broker:
                 stderr_artifact=metadata["stderr_artifact"],
                 durable_launch_id=metadata.get("durable_launch_id"),
                 launch_kind=metadata.get("launch_kind", "legacy_subprocess"),
+                leader_start_identity=metadata.get("leader_start_identity"),
             )
             self.store.refresh_manifest(record.id)
             event_metadata = metadata
@@ -1360,7 +1362,11 @@ class Broker:
                 {"reason": "missing_process_handle", "verification_gate": gate},
             )
         reconciled = self.reconcile(task_id)
-        if reconciled.state is not TaskState.FAILED:
+        # Not just `is not TaskState.FAILED`: reconcile() can also resolve a
+        # legacy launch to another terminal state (e.g. Cursor's `uncollected`,
+        # or `cancelled` for a crash mid-cancellation) — any of those is a real
+        # terminal outcome collect() should just hand back, not refuse.
+        if reconciled.state not in TERMINAL_STATES:
             raise RecoveryRequired(task_id, reconciled.state)
         return reconciled
 
@@ -1467,6 +1473,15 @@ class Broker:
                 {"reason": "direct_api_restart_no_reattachment", "provider": launch.get("command", [None])[0] if launch else None},
             )
         adapter_name = self.subprocess_adapters[record.runtime].name
+        # Cursor only (Wave 3 field evidence, docs/history/phases/phase-7c5-cursor-uncollected.md):
+        # a reparented same-PGID Cursor helper can survive the supervised leader by
+        # minutes, so process-group liveness alone cannot prove the leader is dead.
+        # CANCELLING is excluded here and falls through to the unchanged pgid-based
+        # path below — explicit cancellation authority is out of scope for this fix.
+        if adapter_name == "cursor" and record.state is not TaskState.CANCELLING:
+            launch = self.store.get_launch(task_id)
+            if launch is not None and isinstance(launch.get("pid"), int):
+                return self._reconcile_cursor_legacy_subprocess(task_id, record, launch)
         status = self._process_group_status(task_id)
         launch = self.store.get_launch(task_id)
         if launch is not None:
@@ -1497,6 +1512,61 @@ class Broker:
             return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, {"reason": reason, "pgid": launch["pgid"] if launch else None})
         self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, {"reason": reason})
         return record
+
+    def _reconcile_cursor_legacy_subprocess(self, task_id: str, record: TaskRecord, launch: dict) -> TaskRecord:
+        """Cursor-only restart reconciliation using leader PID+start-identity proof.
+
+        Process-group liveness (`_process_group_status`) is recorded here only as
+        compact diagnostic metadata — never as proof of the leader's death. Only
+        `classify_process_identity` returning "dead" (the persisted pid no longer
+        exists, or now belongs to a different process per anti-reuse start_identity)
+        is accepted as proof the supervised Cursor leader exited. "alive" and
+        "unknown" (missing/unverifiable identity) both retain the existing
+        recovery_required behavior — death is never inferred from a live or
+        unconfirmed leader. See docs/history/phases/phase-7c5-cursor-uncollected.md.
+        """
+        pid = launch.get("pid")
+        expected_identity = launch.get("leader_start_identity")
+        leader_state = classify_process_identity(pid, expected_identity)
+        group_state = self._process_group_status(task_id)
+        self.store.mark_launch_reconciled(task_id)
+        leader_meta = {
+            "pid": pid,
+            "identity_captured_at_launch": bool(expected_identity),
+            "state": leader_state,
+        }
+        process_group_meta = {
+            "pgid": launch.get("pgid"),
+            "state": group_state,
+            "helpers_may_linger": leader_state == "dead" and group_state == "alive",
+        }
+        metadata = {"leader": leader_meta, "process_group": process_group_meta}
+
+        if leader_state != "dead":
+            reason = "cursor_leader_alive_after_restart" if leader_state == "alive" else "cursor_leader_identity_unverifiable"
+            message = (
+                "Cursor leader process is still alive after a broker restart; task requires "
+                "explicit operator reconciliation (reconcile again once it exits, or cancel it)"
+                if leader_state == "alive" else
+                "Cursor leader identity could not be safely verified after a broker restart; "
+                "treating conservatively as possibly still active"
+            )
+            metadata = {**metadata, "reason": reason}
+            if record.state is not TaskState.RECOVERY_REQUIRED:
+                return self.store.transition(task_id, TaskState.RECOVERY_REQUIRED, message, metadata)
+            self.store.event(task_id, "task.reconciliation_checked", record.state, record.state, message, metadata)
+            return record
+
+        # leader_state == "dead": positive proof the leader exited. The broker
+        # never collected a terminal result from it (no in-memory handle survived
+        # the restart) — the outcome cannot be asserted either way.
+        self._finalize_workspace(task_id)
+        message = (
+            "Cursor leader process is proven exited after a broker restart, but no terminal result "
+            "was ever collected from it; the task outcome cannot be asserted and is recorded as uncollected"
+        )
+        metadata = {**metadata, "reason": "leader_exited_uncollected", "outcome": "unknown"}
+        return self.store.transition(task_id, TaskState.UNCOLLECTED, message, metadata)
 
     def _reconcile_durable_subprocess(
         self,

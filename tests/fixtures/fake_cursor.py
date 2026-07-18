@@ -10,6 +10,7 @@ scenarios without any real model calls, network access, or API cost.
 """
 import json
 import signal
+import subprocess
 import sys
 import time
 
@@ -78,6 +79,27 @@ def main():
         return 1
 
     if "EMPTY_OUTPUT" in prompt:
+        return 0
+
+    if "STDOUT_CANARY" in prompt:
+        # A fixed marker independent of the prompt text, so a test can prove a
+        # concise surface never echoes raw stdout without conflating that with
+        # the (legitimately persisted) task prompt itself.
+        result("this text must never reach a concise result/event surface: STDOUT_ONLY_LEAK_CANARY_7f3c")
+        return 0
+
+    if "LEADER_EXITS_HELPER_LINGERS" in prompt:
+        # Reproduces the Wave 3 field incident: the leader spawns a child
+        # without a new session/process group, so the child inherits the
+        # leader's pgid; the leader then exits immediately while the child
+        # (reparented to init, but still in the same process group) keeps
+        # running for a while. Never printed to stdout -- a test asserting
+        # this marker never reaches a concise surface must not find it there.
+        helper = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"HELPER_PID {helper.pid}", file=sys.stderr, flush=True)
         return 0
 
     result(f"42 (from {prompt})")

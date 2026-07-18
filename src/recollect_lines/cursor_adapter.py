@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .adapters import AdapterCapabilities
 from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
+from .durable_runner import read_process_start_identity
 from .models import TaskRecord
 from .opencode_adapter import cancel_process_group
 
@@ -160,6 +161,14 @@ class CursorAdapter:
                 start_new_session=True,
             )
         pgid = os.getpgid(popen.pid)
+        # Anti-PID-reuse leader identity (same mechanism as the durable subprocess
+        # runner, see durable_runner.read_process_start_identity), persisted so a
+        # replacement broker can later prove the leader is dead without trusting
+        # process-group liveness alone — a reparented same-PGID Cursor helper can
+        # outlive the leader by minutes (docs/history/phases/phase-7c5-cursor-uncollected.md).
+        # None only if the identity read races the leader's own exit; reconciliation
+        # then falls back to the conservative recovery_required path, never death.
+        leader_start_identity = read_process_start_identity(popen.pid)
         handle = ProcessHandle(
             task_id=record.id,
             pid=popen.pid,
@@ -175,6 +184,7 @@ class CursorAdapter:
             "command": command,
             "pid": popen.pid,
             "pgid": pgid,
+            "leader_start_identity": leader_start_identity,
             "events_artifact": stdout_path.name,
             "stderr_artifact": stderr_path.name,
             "workspace": effective_workspace,

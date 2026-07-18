@@ -76,7 +76,8 @@ class TaskStore:
                 workspace TEXT NOT NULL,
                 events_artifact TEXT,
                 stderr_artifact TEXT,
-                reconciliation_marker TEXT NOT NULL DEFAULT 'unreconciled'
+                reconciliation_marker TEXT NOT NULL DEFAULT 'unreconciled',
+                leader_start_identity TEXT
             );
             """
         )
@@ -96,6 +97,8 @@ class TaskStore:
             self.connection.execute(
                 "ALTER TABLE runtime_launches ADD COLUMN launch_kind TEXT NOT NULL DEFAULT 'legacy_subprocess'"
             )
+        if "leader_start_identity" not in launch_columns:
+            self.connection.execute("ALTER TABLE runtime_launches ADD COLUMN leader_start_identity TEXT")
         side_agent_columns = {
             "runtime": "TEXT",
             "model": "TEXT",
@@ -367,20 +370,25 @@ class TaskStore:
         command: list[str], workspace: str, events_artifact: str | None, stderr_artifact: str | None,
         durable_launch_id: str | None = None,
         launch_kind: str = LAUNCH_KIND_LEGACY,
+        leader_start_identity: str | None = None,
     ) -> None:
         """Persist durable launch identity the moment an adapter process is actually spawned.
 
         `command` should already be redacted by the caller; this stores whatever it is given.
+        `leader_start_identity` is the anti-PID-reuse identity of the leader process
+        (see durable_runner.read_process_start_identity), currently only populated by
+        CursorAdapter.start() — None for every other adapter, which is fine: reconcile()
+        only reads it back on the Cursor-only leader-identity path.
         """
         with self.connection:
             self.connection.execute(
                 "INSERT INTO runtime_launches "
                 "(task_id, adapter, adapter_label, pid, pgid, launched_at, command_json, workspace, "
-                "events_artifact, stderr_artifact, durable_launch_id, launch_kind) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "events_artifact, stderr_artifact, durable_launch_id, launch_kind, leader_start_identity) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id, adapter, adapter_label, pid, pgid, now(), json.dumps(command), workspace,
-                    events_artifact, stderr_artifact, durable_launch_id, launch_kind,
+                    events_artifact, stderr_artifact, durable_launch_id, launch_kind, leader_start_identity,
                 ),
             )
 
