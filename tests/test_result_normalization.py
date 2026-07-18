@@ -66,6 +66,7 @@ class ResultSchemaPolicyTests(unittest.TestCase):
                 "review-findings",
                 "implementation-report",
                 "verified-investigation-report",
+                "review-report",
             }),
         )
 

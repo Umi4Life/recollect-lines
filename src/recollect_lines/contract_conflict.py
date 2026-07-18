@@ -32,6 +32,7 @@ _STRUCTURED_SCHEMAS = frozenset({
     "review-findings",
     "implementation-report",
     "verified-investigation-report",
+    "review-report",
 })
 
 
