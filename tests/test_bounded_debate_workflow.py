@@ -18,8 +18,8 @@ from recollect_lines.bounded_debate_workflow import (
     run_bounded_debate_workflow,
     validate_synthesis_output,
 )
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
-from recollect_lines.codex_adapter import CodexAdapter
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter
+from recollect_lines.adaptor.codex import CodexAdapter
 from recollect_lines.models import ProfilePolicy, TaskRequest
 from recollect_lines.service import Broker
 

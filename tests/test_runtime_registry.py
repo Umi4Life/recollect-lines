@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recollect_lines.adapters import AdapterCapabilities
+from recollect_lines.adaptor import AdapterCapabilities
 from recollect_lines.discovery import discover_runtimes
 from recollect_lines.models import ProfilePolicy, translate_delegate_fields
 from recollect_lines.mcp_server import handle_discover_capabilities

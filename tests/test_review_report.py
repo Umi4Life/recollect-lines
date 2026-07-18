@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
-from recollect_lines.codex_adapter import CodexAdapter
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter
+from recollect_lines.adaptor.codex import CodexAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.result_normalization import (
     NORMALIZED_RESULT_ARTIFACT,

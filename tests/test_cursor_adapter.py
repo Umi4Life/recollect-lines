@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.adapters import AdapterCapabilities
-from recollect_lines.cursor_adapter import (
+from recollect_lines.adaptor import AdapterCapabilities
+from recollect_lines.adaptor.cursor import (
     DEFAULT_COMMAND_PREFIX,
     CursorAdapter,
     CursorUnsupportedPolicy,

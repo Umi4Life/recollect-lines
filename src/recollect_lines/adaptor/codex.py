@@ -19,10 +19,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .adapters import AdapterCapabilities
-from .recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
-from .models import TaskRecord
-from .opencode_adapter import cancel_process_group
+from ..models import TaskRecord
+from ..recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
+from .cli_base import SubprocessCliAdapterBase, probe_cli_version
+from .contracts import AdapterCapabilities
+from .process import cancel_process_group
 
 DEFAULT_COMMAND_PREFIX = ("codex",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
@@ -89,7 +90,7 @@ class ProcessHandle:
     popen: subprocess.Popen
 
 
-class CodexAdapter:
+class CodexAdapter(SubprocessCliAdapterBase):
     name = "codex"
     capabilities = AdapterCapabilities(
         requires_subprocess=True,
@@ -113,18 +114,7 @@ class CodexAdapter:
         return self.command_prefix[-1] if self.command_prefix else self.name
 
     def check_availability(self, timeout: float = 10.0) -> dict:
-        try:
-            completed = subprocess.run(
-                [*self.command_prefix, "--version"], capture_output=True, text=True, timeout=timeout,
-            )
-        except FileNotFoundError:
-            return {"available": False, "reason": "cli_not_found", "detail": f"{self.command_prefix[0]!r} was not found on PATH"}
-        except subprocess.TimeoutExpired:
-            return {"available": False, "reason": "version_check_timed_out", "detail": f"--version did not return within {timeout}s"}
-        if completed.returncode != 0:
-            detail = redact_secrets((completed.stderr or completed.stdout or "").strip()[:500])
-            return {"available": False, "reason": "version_check_failed", "detail": detail}
-        return {"available": True, "version": (completed.stdout or completed.stderr).strip()}
+        return probe_cli_version(self.command_prefix, timeout=timeout, redact_secrets=redact_secrets)
 
     def build_command(self, prompt: str, execution_mode: str, workspace: str, *, model: str | None = None) -> list:
         sandbox = SANDBOX_BY_EXECUTION_MODE.get(execution_mode)

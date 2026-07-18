@@ -12,7 +12,7 @@ import subprocess
 from typing import Any
 from urllib.parse import urlparse
 
-from .adapters import AdapterCapabilities
+from .adaptor.contracts import AdapterCapabilities
 from .direct_api_runtime import DIRECT_API_PROFILE, OpenAiCompatibleDirectRuntime
 from .providers import MissingCredentialReference, ProviderCapabilities, resolve_api_key
 from .recovery_contract import (

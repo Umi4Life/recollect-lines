@@ -16,8 +16,8 @@ sys.path.insert(0, str(SRC))
 import importlib.util  # noqa: E402
 
 from recollect_lines.bounded_debate_workflow import run_bounded_debate_workflow  # noqa: E402
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter  # noqa: E402
-from recollect_lines.codex_adapter import CodexAdapter  # noqa: E402
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter  # noqa: E402
+from recollect_lines.adaptor.codex import CodexAdapter  # noqa: E402
 from recollect_lines.models import ProfilePolicy  # noqa: E402
 from recollect_lines.service import Broker  # noqa: E402
 

@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.adapters import AdapterCapabilities
-from recollect_lines.claude_code_adapter import (
+from recollect_lines.adaptor import AdapterCapabilities
+from recollect_lines.adaptor.claude_code import (
     DEFAULT_COMMAND_PREFIX,
     ClaudeCodeAdapter,
     ClaudeCodeUnsupportedPolicy,

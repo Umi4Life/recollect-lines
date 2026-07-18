@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.adapters import AdapterCapabilities
-from recollect_lines.codex_adapter import (
+from recollect_lines.adaptor import AdapterCapabilities
+from recollect_lines.adaptor.codex import (
     DEFAULT_COMMAND_PREFIX,
     CodexAdapter,
     CodexUnsupportedPolicy,

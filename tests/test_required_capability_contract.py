@@ -23,7 +23,7 @@ from recollect_lines.capability_contract_result import (
     STATUS_UNSATISFIED,
     evaluate_capability_contract,
 )
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.required_capabilities import WORKSPACE_READ
 from recollect_lines.result_normalization import (

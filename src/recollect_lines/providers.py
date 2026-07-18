@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from .cursor_adapter import redact_secrets
+from .adaptor.cursor import redact_secrets
 
 PROVIDER_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 OPENAI_COMPATIBLE_KIND = "openai-compatible"

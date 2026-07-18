@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .adapters import AdapterCapabilities
+from .adaptor.contracts import AdapterCapabilities
 
 
 UNSUPPORTED_RESULT_SCHEMA = "unsupported_result_schema"

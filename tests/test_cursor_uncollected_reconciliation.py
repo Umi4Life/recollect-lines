@@ -22,9 +22,9 @@ import unittest
 from pathlib import Path
 
 from recollect_lines import mcp_server
-from recollect_lines.cursor_adapter import CursorAdapter
+from recollect_lines.adaptor.cursor import CursorAdapter
 from recollect_lines.models import RecoveryRequired, TaskRequest, TaskState
-from recollect_lines.opencode_adapter import OpenCodeAdapter, group_alive
+from recollect_lines.adaptor.opencode import OpenCodeAdapter, group_alive
 from recollect_lines.service import Broker
 
 FAKE_CURSOR = Path(__file__).parent / "fixtures" / "fake_cursor.py"

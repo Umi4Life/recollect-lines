@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recollect_lines.claude_code_adapter import ClaudeCodeAdapter, ClaudeCodeUnsupportedPolicy
+from recollect_lines.adaptor.claude_code import ClaudeCodeAdapter, ClaudeCodeUnsupportedPolicy
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.mcp_server import _build_task_request
 from recollect_lines.required_capabilities import (

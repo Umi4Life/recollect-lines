@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .claude_code_adapter import redact_secrets
+from .adaptor.claude_code import redact_secrets
 
 VERIFIED_INVESTIGATION_REPORT_SCHEMA = "verified-investigation-report"
 

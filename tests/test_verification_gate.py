@@ -16,7 +16,7 @@ from pathlib import Path
 
 from recollect_lines import cli, mcp_server
 from recollect_lines.models import TaskRequest, TaskState
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from recollect_lines.cursor_adapter import CursorAdapter
+from recollect_lines.adaptor.cursor import CursorAdapter
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.service import Broker
 

@@ -9,9 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .adapters import AdapterCapabilities
-from .durable_reconciliation import adopt_durable_handle, adopted_collect, wait_for_durable_running
-from .durable_runner import (
+from ..durable_reconciliation import adopt_durable_handle, adopted_collect, wait_for_durable_running
+from ..durable_runner import (
     DurableLaunchHandle,
     DurableSubprocessRunner,
     STATE_CANCELLED,
@@ -19,10 +18,11 @@ from .durable_runner import (
     STATE_FAILED,
     STATE_TIMED_OUT,
 )
-from .models import TaskRecord
-from .recovery_contract import DURABLE_SUBPROCESS_RECOVERY_CONTROL
+from ..models import TaskRecord
+from ..recovery_contract import DURABLE_SUBPROCESS_RECOVERY_CONTROL
+from .contracts import AdapterCapabilities
 
-FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fixtures"
 
 KEYWORD_FIXTURES = {
     "DURABLE_SHORT": FIXTURES_DIR / "durable_short_payload.py",

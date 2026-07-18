@@ -5,11 +5,11 @@ import json
 import os
 from pathlib import Path
 
-from .claude_code_adapter import ClaudeCodeAdapter
-from .codex_adapter import CodexAdapter
-from .cursor_adapter import CursorAdapter
+from .adaptor.claude_code import ClaudeCodeAdapter
+from .adaptor.codex import CodexAdapter
+from .adaptor.cursor import CursorAdapter
 from .models import VERIFICATION_POLICIES, InvalidTransition, TaskRequest, translate_delegate_fields
-from .opencode_adapter import OpenCodeAdapter
+from .adaptor.opencode import OpenCodeAdapter
 from .doctor import format_human_report as format_doctor_report, run_config_validate, run_doctor
 from .certify import format_human_report as format_certify_report, run_certify, CertifyRequest
 from .init import InitError, format_human_report as format_init_report, run_init

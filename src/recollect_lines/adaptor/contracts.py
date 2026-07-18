@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from .recovery_contract import RecoveryControlContract
+from ..recovery_contract import RecoveryControlContract
 
 
 @dataclass(frozen=True)

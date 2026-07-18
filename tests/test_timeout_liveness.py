@@ -18,14 +18,14 @@ import unittest
 from pathlib import Path
 
 from recollect_lines.models import TaskRequest, TaskState
-from recollect_lines.opencode_adapter import group_alive
+from recollect_lines.adaptor.opencode import group_alive
 from recollect_lines.service import Broker
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 
 
 def fake_adapter(grace_period_seconds=2.0):
-    from recollect_lines.opencode_adapter import OpenCodeAdapter
+    from recollect_lines.adaptor.opencode import OpenCodeAdapter
 
     return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)), grace_period_seconds=grace_period_seconds)
 

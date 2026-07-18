@@ -25,7 +25,7 @@ FIXTURE_OPENAI = Path(__file__).parent / "fixtures" / "fake_openai_server.py"
 
 def _fake_opencode_broker(home: Path) -> Broker:
     command = [sys.executable, str(FIXTURE_OPENCODE)]
-    return Broker(home, opencode_adapter=__import__("recollect_lines.opencode_adapter", fromlist=["OpenCodeAdapter"]).OpenCodeAdapter(command_prefix=tuple(command)))
+    return Broker(home, opencode_adapter=__import__("recollect_lines.adaptor.opencode", fromlist=["OpenCodeAdapter"]).OpenCodeAdapter(command_prefix=tuple(command)))
 
 
 class DiscoveryTests(unittest.TestCase):

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from recollect_lines.models import ProfilePolicy, RecoveryRequired, TaskRequest, TaskState
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
 from recollect_lines.workspace import WorkspaceError, WorkspaceManager, canonical_source
 

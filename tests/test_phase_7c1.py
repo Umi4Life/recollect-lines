@@ -15,7 +15,7 @@ from pathlib import Path
 from recollect_lines.discovery import discover_runtimes
 from recollect_lines.doctor import run_doctor
 from recollect_lines.mcp_server import handle_discover_capabilities, handle_message
-from recollect_lines.opencode_adapter import OpenCodeAdapter
+from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.recovery_contract import (
     COMPATIBILITY_EVIDENCE_SCHEMA_VERSION,
     ControlAction,
