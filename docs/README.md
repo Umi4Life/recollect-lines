@@ -21,6 +21,7 @@ Recollect Lines is a **local-first delegation broker**: a parent agent (or human
 | [design/RFC-001.md](design/RFC-001.md) | Implementation architecture, evidence model, known limits |
 | [design/RFC-002.md](design/RFC-002.md) | Completion integrity and capability-warning visibility (accepted) |
 | [design/RFC-003.md](design/RFC-003.md) | Resource metadata and bounded rework/escalation governance (accepted) |
+| [design/RFC-004.md](design/RFC-004.md) | Unified durable supervision for CLI runtimes (proposed) |
 | [model-profile-resource-metadata.md](model-profile-resource-metadata.md) | Operator guide: model profiles and resource tiers |
 | [cost-rework-policy.md](cost-rework-policy.md) | Operator guide: bounded rework and escalation policy |
 | [review-report.md](review-report.md) | Operator guide: opt-in bounded-review result contract |
