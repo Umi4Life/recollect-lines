@@ -129,6 +129,14 @@ from .workspace import WorkspaceError, WorkspaceManager, canonical_source, captu
 
 ISOLATED_WORKTREE = "isolated_worktree"
 
+# ponytail: bounded, not event-driven -- a full async/notify collect redesign
+# is out of scope for this P0 containment slice (see RFC-004's durable
+# supervisor migration). This only stops collect() from blocking the single
+# synchronous MCP/CLI call site indefinitely on a still-running legacy
+# subprocess; a caller that hits the bound just gets an explicit nonterminal
+# result back and can retry once the runtime actually finishes.
+LEGACY_PROCESS_COLLECT_GRACE_SECONDS = 5.0
+
 
 class MockAdapter:
     name = "mock"
@@ -1277,6 +1285,15 @@ class Broker:
         reconciliation (state recovery_required, or a fresh restart discovering
         a still-alive process group) raises RecoveryRequired rather than
         fabricating a result — see reconcile().
+
+        A legacy subprocess-backed task whose in-memory handle is still
+        genuinely running gets one bounded grace wait
+        (`LEGACY_PROCESS_COLLECT_GRACE_SECONDS`), then an explicit nonterminal
+        result: the unchanged, still-`running` record, handle retained for a
+        later collect() call. This never calls an unbounded `Popen.wait()` —
+        collect() is the single synchronous call site behind the CLI/MCP
+        `collect` command, and a long-lived real CLI run must not be able to
+        block it (or the rest of that MCP process) indefinitely.
         """
         record = self.store.get(task_id)
         if record.state in TERMINAL_STATES:
@@ -1316,7 +1333,21 @@ class Broker:
                 transition_metadata={"exit_code": collected.get("exit_code")},
             )
         if task_id in self._process_handles:
-            handle = self._process_handles.pop(task_id)
+            handle = self._process_handles[task_id]
+            if handle.popen.poll() is None:
+                # Still genuinely running: never let collect() (and the single
+                # synchronous MCP/CLI call site behind it) block indefinitely on
+                # a long-lived CLI run. A short bounded grace window absorbs the
+                # ordinary start()->collect() race (fixtures/fast runtimes that
+                # are already exiting); anything still alive after it gets an
+                # explicit nonterminal result (the record, unchanged, still
+                # `running`) instead of a hang. The handle stays in place so a
+                # later collect() call can retry.
+                try:
+                    handle.popen.wait(timeout=LEGACY_PROCESS_COLLECT_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    return record
+            del self._process_handles[task_id]
             adapter = self.subprocess_adapters[record.runtime]
             record = self.store.transition(task_id, TaskState.COLLECTING, f"Collecting {adapter.name} result", {})
             collected = adapter.collect(handle)
@@ -1436,6 +1467,25 @@ class Broker:
         TaskState.PREPARING, TaskState.RUNNING, TaskState.COLLECTING, TaskState.CANCELLING, TaskState.RECOVERY_REQUIRED,
     )
 
+    def _reap_exited_process_handle(self, task_id: str) -> TaskRecord | None:
+        """Nonblocking check for an in-memory legacy subprocess handle that has
+        already exited without ever being collected.
+
+        Holding a `ProcessHandle` in `self._process_handles` is not proof a
+        task is still running -- only `Popen.poll()` (nonblocking) is. Without
+        this, `status()`/`reconcile()` could report `running` forever for a
+        task whose process exited seconds or minutes ago, simply because
+        nothing had called `collect()` yet. Returns the freshly collected
+        record if a handle existed and had already exited, or None if there is
+        no in-memory handle for this task or it is still genuinely running --
+        callers should keep using their own already-loaded record in that
+        case, exactly as if this check hadn't run.
+        """
+        handle = self._process_handles.get(task_id)
+        if handle is None or handle.popen.poll() is None:
+            return None
+        return self.collect(task_id)
+
     def reconcile(self, task_id: str) -> TaskRecord:
         """Reconcile a task's durable runtime-launch record against reality.
 
@@ -1449,7 +1499,16 @@ class Broker:
         Durable subprocess launches (Phase 7C.3) may be adopted after proof
         and recovery-lease acquisition; legacy subprocess/direct paths remain
         fail-closed as before.
+
+        An in-memory legacy subprocess handle that has already exited (see
+        `_reap_exited_process_handle`) is collected here rather than left
+        reporting `running` forever -- this is not a restart scenario, so no
+        liveness inference is involved: `Popen.poll()` returning non-None is
+        direct, nonblocking proof the process is gone.
         """
+        reaped = self._reap_exited_process_handle(task_id)
+        if reaped is not None:
+            return reaped
         record = self.store.get(task_id)
         if record.state in TERMINAL_STATES or task_id in self._process_handles or task_id in self._direct_api_handles:
             return record
@@ -1968,7 +2027,21 @@ class Broker:
         return build_operator_control_view(self, task_id)
 
     def status(self, task_id: str) -> dict:
-        record = self.store.get(task_id)
+        # A stale in-memory handle for an already-exited legacy subprocess
+        # must never keep reporting `running` (see
+        # `_reap_exited_process_handle`); this is a nonblocking check
+        # (Popen.poll()) so it stays a prompt, side-effect-visible-only-when-
+        # actually-finished read from the caller's perspective.
+        record = self._reap_exited_process_handle(task_id) or self.store.get(task_id)
+        if record.state not in TERMINAL_STATES:
+            # The artifact manifest is otherwise only refreshed when an
+            # artifact is written or a task is collected -- for a still-active
+            # task that leaves it frozen at whatever it looked like when the
+            # runtime launched (often a zero-byte placeholder), which reads as
+            # stale/dead evidence about a task that may in fact be actively
+            # writing output right now. Cheap (local file stat/hash, no
+            # process signaling) enough to just always do for active tasks.
+            self.store.refresh_manifest(task_id)
         payload = {
             **record.json(),
             "events": self.store.events(task_id),

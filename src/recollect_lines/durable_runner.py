@@ -604,6 +604,16 @@ def classify_process_identity(pid: int | None, expected_start_identity: str | No
         return "dead"
     except PermissionError:
         return "unknown"
+    if not expected_start_identity.startswith("linux:"):
+        # Non-Linux identities embed time.monotonic_ns() (see
+        # read_process_start_identity), which is different on every call and
+        # so can never equal a value captured at launch — comparing them would
+        # report "dead" for a pid that is, per the os.kill(pid, 0) check just
+        # above, still genuinely alive. Unsupported platforms get no positive
+        # identity proof either way, so this is conservatively "unknown"
+        # (recovery_required), never a false "dead" that would clear a task
+        # for auto-cleanup.
+        return "unknown"
     current = read_process_start_identity(pid)
     if current is None:
         return "unknown"
