@@ -92,8 +92,11 @@ DIRECT_API_RECOVERY_CONTROL = RecoveryControlContract(
         ControlAction.COLLECT,
     }),
 )
-# Declared only for the proven durable-subprocess fixture path (Phase 7C.3 tests).
-# Production subprocess CLIs remain observe_and_cancel until independently proven.
+# Declared for adapters whose launch actually runs under
+# durable_runner.DurableSubprocessRunner: the Phase 7C.3 fixture path, and
+# (RFC-004 durable-cursor slice) the production Cursor adapter. Every other
+# subprocess CLI remains observe_and_cancel until its own migration
+# independently proves collect_after_restart.
 DURABLE_SUBPROCESS_RECOVERY_CONTROL = RecoveryControlContract(
     recovery_level=RecoveryLevel.COLLECT_AFTER_RESTART,
     supported_control_actions=frozenset({

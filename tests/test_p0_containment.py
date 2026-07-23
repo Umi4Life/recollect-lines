@@ -62,7 +62,15 @@ def fake_codex_adapter(grace_period_seconds=2.0):
 def fake_cursor_adapter(grace_period_seconds=2.0):
     from recollect_lines.adaptor.cursor import CursorAdapter
 
-    return CursorAdapter(command_prefix=(sys.executable, str(FAKE_CURSOR)), grace_period_seconds=grace_period_seconds)
+    # legacy_popen_launch=True: CursorDarwinFallbackReconciliationTests below
+    # exercises the pre-RFC-004 direct-Popen lifecycle + leader
+    # PID+start-identity restart-safety fix on purpose -- see adaptor/cursor.py's
+    # module docstring and test_cursor_uncollected_reconciliation.py.
+    return CursorAdapter(
+        command_prefix=(sys.executable, str(FAKE_CURSOR)),
+        grace_period_seconds=grace_period_seconds,
+        legacy_popen_launch=True,
+    )
 
 
 def run_git(args, cwd):

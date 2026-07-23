@@ -128,6 +128,7 @@ class DurableSubprocessRunner:
         adapter_id: str,
         command: list[str],
         detach_supervisor: bool = False,
+        cwd: str | None = None,
     ) -> DurableLaunchHandle:
         if not task_id.strip():
             raise ValueError("task_id must not be empty")
@@ -159,6 +160,7 @@ class DurableSubprocessRunner:
             str(launch_dir),
             str(self.max_stdout_bytes),
             str(self.max_stderr_bytes),
+            cwd or "",
             *command,
         ]
         supervisor = subprocess.Popen(
@@ -316,9 +318,9 @@ def load_launch_record(manifest_path: Path) -> DurableLaunchRecord:
 
 
 def _supervise_main(argv: list[str]) -> int:
-    if len(argv) < 5:
+    if len(argv) < 6:
         print(
-            "usage: durable_runner __supervise__ <manifest> <launch_dir> <max_stdout> <max_stderr> <command...>",
+            "usage: durable_runner __supervise__ <manifest> <launch_dir> <max_stdout> <max_stderr> <cwd> <command...>",
             file=sys.stderr,
         )
         return 2
@@ -326,7 +328,8 @@ def _supervise_main(argv: list[str]) -> int:
     launch_dir = Path(argv[2]).resolve()
     max_stdout = int(argv[3])
     max_stderr = int(argv[4])
-    command = argv[5:]
+    cwd = argv[5] or None
+    command = argv[6:]
     if not _path_within(manifest_path, launch_dir):
         return 2
     stdout_path = launch_dir / STDOUT_NAME
@@ -370,6 +373,8 @@ def _supervise_main(argv: list[str]) -> int:
         os.close(stdout_fd)
         os.close(stderr_fd)
         try:
+            if cwd is not None:
+                os.chdir(cwd)
             os.execvp(command[0], command)
         except OSError:
             os._exit(127)
