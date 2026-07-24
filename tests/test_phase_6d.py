@@ -255,9 +255,11 @@ class CouncilExecutionTests(unittest.TestCase):
 
     def test_subprocess_stage_uses_broker_collect_lifecycle(self):
         broker = _fake_opencode_broker(self.home)
+        workspace = Path(self.tempdir.name) / "opencode-workspace"
+        workspace.mkdir()
         try:
             plan = {
-                "workspace": "/repo",
+                "workspace": str(workspace),
                 "execution_mode": "read_only",
                 "acceptance_criteria": "Parent reviews opencode evidence",
                 "bounds": {"max_rounds": 1, "max_concurrency": 1, "time_budget_seconds": 120},

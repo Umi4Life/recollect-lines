@@ -281,10 +281,21 @@ class TaskStore:
         return self.get(task_id)
 
     def event(self, task_id: str, event_type: str, before: TaskState | None, after: TaskState | None, message: str, metadata: dict[str, Any]) -> None:
-        self.connection.execute(
-            "INSERT INTO events (task_id, timestamp, type, state_before, state_after, message, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (task_id, now(), event_type, before.value if before else None, after.value if after else None, message, json.dumps(metadata, sort_keys=True)),
-        )
+        # Explicitly committed (not left dangling): a caller that logs a
+        # standalone audit event (e.g. Broker._reconcile_durable_subprocess's
+        # "already running/adopted, no state change" path) outside any other
+        # write must never leave the connection sitting in an open implicit
+        # transaction -- try_acquire_recovery_lease's explicit `BEGIN
+        # IMMEDIATE` (used by a *subsequent* task in the same
+        # reconcile_pending() pass) would otherwise fail with "cannot start a
+        # transaction within a transaction". Nesting inside an already-open
+        # `with self.connection:` block (e.g. transition()) is harmless: it
+        # just commits that pending work slightly earlier.
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO events (task_id, timestamp, type, state_before, state_after, message, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, now(), event_type, before.value if before else None, after.value if after else None, message, json.dumps(metadata, sort_keys=True)),
+            )
 
     def events(self, task_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute("SELECT * FROM events WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()

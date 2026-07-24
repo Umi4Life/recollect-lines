@@ -94,10 +94,9 @@ DIRECT_API_RECOVERY_CONTROL = RecoveryControlContract(
 )
 # Declared for adapters whose launch actually runs under
 # durable_runner.DurableSubprocessRunner: the Phase 7C.3 fixture path, and
-# (RFC-004 durable-cursor/claude-code/codex slices) the production Cursor,
-# Claude Code, and Codex adapters. Every other subprocess CLI remains
-# observe_and_cancel until its own migration independently proves
-# collect_after_restart.
+# (RFC-004 durable-cursor/claude-code/codex/opencode slices) the production
+# Cursor, Claude Code, Codex, and OpenCode adapters -- every production
+# subprocess CLI adapter, as of the durable-opencode migration.
 DURABLE_SUBPROCESS_RECOVERY_CONTROL = RecoveryControlContract(
     recovery_level=RecoveryLevel.COLLECT_AFTER_RESTART,
     supported_control_actions=frozenset({

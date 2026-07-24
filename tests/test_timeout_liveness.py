@@ -12,14 +12,14 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
 
 from recollect_lines.models import TaskRequest, TaskState
-from recollect_lines.adaptor.opencode import group_alive
+from recollect_lines.adaptor.process import group_alive
 from recollect_lines.service import Broker
+from recollect_lines.durable_cli_launch import wait_for_durable_launch_terminal
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 
@@ -28,6 +28,22 @@ def fake_adapter(grace_period_seconds=2.0):
     from recollect_lines.adaptor.opencode import OpenCodeAdapter
 
     return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)), grace_period_seconds=grace_period_seconds)
+
+
+def durable_events_path(broker: Broker, task_id: str) -> Path:
+    """OpenCode's durable-captured stdout artifact lives under
+    home/durable_launches/<id>/, never under the task's own artifacts_dir --
+    see adaptor/opencode.py's module docstring.
+    """
+    launch = broker.store.get_launch(task_id)
+    return broker.store.home / "durable_launches" / launch["durable_launch_id"] / "events.jsonl"
+
+
+def kill_pgid(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def wait_until(predicate, timeout=5.0, interval=0.05):
@@ -54,22 +70,6 @@ def init_repo(path: Path) -> Path:
     run_git(["add", "-A"], cwd=path)
     run_git(["commit", "-q", "-m", "initial"], cwd=path)
     return path
-
-
-def kill_and_reap(popen: subprocess.Popen, pgid: int) -> None:
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    popen.wait(timeout=5)
-
-
-def reap_in_background(popen: subprocess.Popen) -> None:
-    """Stand in for init's automatic reaping of an orphaned process in a real
-    restart — this test process is `popen`'s real parent, so without this its
-    exit would sit as a zombie (still visible to killpg) until reaped.
-    """
-    threading.Thread(target=popen.wait, daemon=True).start()
 
 
 class TimeoutLivenessTests(unittest.TestCase):
@@ -123,7 +123,7 @@ class TimeoutLivenessTests(unittest.TestCase):
             broker.start(record.id)
             handle = broker._process_handles[record.id]
             pgid = handle.pgid
-            events_path = self.home / "artifacts" / record.id / "events.jsonl"
+            events_path = durable_events_path(broker, record.id)
             self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
             worktree_path = Path(broker.store.get_lease(record.id)["worktree_path"])
 
@@ -143,7 +143,7 @@ class TimeoutLivenessTests(unittest.TestCase):
             record = broker.create(TaskRequest("SLEEP_IGNORE_TERM", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
             broker.start(record.id)
             pgid = broker._process_handles[record.id].pgid
-            events_path = self.home / "artifacts" / record.id / "events.jsonl"
+            events_path = durable_events_path(broker, record.id)
             self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
 
             timed_out = broker.timeout(record.id)
@@ -160,7 +160,8 @@ class TimeoutLivenessTests(unittest.TestCase):
         broker1 = Broker(self.home, opencode_adapter=fake_adapter())
         record = broker1.create(TaskRequest("Inspect tests", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
         broker1.start(record.id)
-        broker1._process_handles[record.id].popen.wait(timeout=5)
+        handle = broker1._process_handles[record.id]
+        self.assertTrue(wait_for_durable_launch_terminal(handle, timeout=5))  # the default fixture finishes quickly on its own
         worktree_path = Path(broker1.store.get_lease(record.id)["worktree_path"])
         broker1.close()
 
@@ -180,14 +181,12 @@ class TimeoutLivenessTests(unittest.TestCase):
         broker1 = Broker(self.home, opencode_adapter=fake_adapter())
         record = broker1.create(TaskRequest("SLEEP", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
         broker1.start(record.id)
-        events_path = self.home / "artifacts" / record.id / "events.jsonl"
+        events_path = durable_events_path(broker1, record.id)
         self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
         launch = broker1.store.get_launch(record.id)
         pgid = launch["pgid"]
         worktree_path = Path(broker1.store.get_lease(record.id)["worktree_path"])
-        handle = broker1._process_handles[record.id]
         broker1.close()  # simulate a broker restart without stopping the real process
-        reap_in_background(handle.popen)
 
         broker2 = Broker(self.home, opencode_adapter=fake_adapter())
         try:
@@ -198,14 +197,14 @@ class TimeoutLivenessTests(unittest.TestCase):
             self.assertFalse(group_alive(pgid))
             self.assertFalse(worktree_path.exists())
         finally:
-            kill_and_reap(handle.popen, pgid)
+            kill_pgid(pgid)
             broker2.close()
 
     def test_timeout_after_restart_with_unconfirmed_liveness_never_finalizes(self):
         broker1 = Broker(self.home, opencode_adapter=fake_adapter())
         record = broker1.create(TaskRequest("SLEEP_IGNORE_TERM", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
         broker1.start(record.id)
-        events_path = self.home / "artifacts" / record.id / "events.jsonl"
+        events_path = durable_events_path(broker1, record.id)
         self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
 
         # Simulate a broker restart that also lost/corrupted the persisted pgid
@@ -225,7 +224,7 @@ class TimeoutLivenessTests(unittest.TestCase):
             self.assertTrue(worktree_path.exists(), "invalid metadata must never be treated as proof the process is dead")
             self.assertEqual(broker2.store.get_lease(record.id)["status"], "active")
         finally:
-            kill_and_reap(handle.popen, handle.pgid)
+            kill_pgid(handle.pgid)
             broker2._finalize_workspace(record.id)
             broker2.close()
 
@@ -238,7 +237,7 @@ class TimeoutLivenessTests(unittest.TestCase):
             record = broker.create(TaskRequest("SLEEP", str(self.source), execution_mode="read_only", profile="opencode"))
             broker.start(record.id)
             pgid = broker._process_handles[record.id].pgid
-            events_path = self.home / "artifacts" / record.id / "events.jsonl"
+            events_path = durable_events_path(broker, record.id)
             self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
             broker.timeout(record.id)
             self.assertFalse(group_alive(pgid))

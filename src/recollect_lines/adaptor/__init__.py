@@ -46,8 +46,8 @@ from .fixture_durable import FixtureDurableAdapter
 from .opencode import (
     DEFAULT_COMMAND_PREFIX as OPENCODE_DEFAULT_COMMAND_PREFIX,
     DEFAULT_GRACE_PERIOD_SECONDS as OPENCODE_DEFAULT_GRACE_PERIOD_SECONDS,
+    RUNTIME_DESCRIPTION as OPENCODE_RUNTIME_DESCRIPTION,
     OpenCodeAdapter,
-    ProcessHandle as OpenCodeProcessHandle,
 )
 from .process import (
     cancel_process_group,
@@ -67,9 +67,9 @@ __all__ = [
     "group_dead_within",
     "redact_command",
     "OpenCodeAdapter",
-    "OpenCodeProcessHandle",
     "OPENCODE_DEFAULT_COMMAND_PREFIX",
     "OPENCODE_DEFAULT_GRACE_PERIOD_SECONDS",
+    "OPENCODE_RUNTIME_DESCRIPTION",
     "ClaudeCodeAdapter",
     "ClaudeCodeUnsupportedPolicy",
     "CLAUDE_DEFAULT_COMMAND_PREFIX",

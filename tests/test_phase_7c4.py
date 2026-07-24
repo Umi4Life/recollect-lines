@@ -19,13 +19,11 @@ from recollect_lines.durable_reconciliation import is_durable_launch_row
 from recollect_lines.durable_runner import STATE_RUNNING, inspect_durable_launch, load_launch_record
 from recollect_lines.adaptor.fixture_durable import FixtureDurableAdapter
 from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, TaskRequest, TaskState
-from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.operator_control import OPERATOR_CONTROL_SCHEMA_VERSION, OperatorControlRefused
 from recollect_lines.service import Broker
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-FAKE_OPENCODE = FIXTURES / "fake_opencode.py"
 
 FIXTURE_DURABLE_PROFILE = ProfilePolicy(
     "fixture_durable",
@@ -63,13 +61,6 @@ def durable_broker(home: Path, **kwargs) -> Broker:
     adapter = FixtureDurableAdapter(home, max_stdout_bytes=4096, max_stderr_bytes=1024)
     profiles = {**DEFAULT_PROFILES, FIXTURE_DURABLE_PROFILE.name: FIXTURE_DURABLE_PROFILE}
     return Broker(home, profiles=profiles, fixture_durable_adapter=adapter, **kwargs)
-
-
-def fake_opencode_broker(home: Path) -> Broker:
-    return Broker(
-        home,
-        opencode_adapter=OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE))),
-    )
 
 
 def run_cli(home: Path, *args: str) -> tuple[int, dict]:
@@ -183,28 +174,13 @@ class Phase74OperatorControlTests(unittest.TestCase):
             self.assertTrue(collected["ok"])
             self.assertIn(collected["result"]["state"], {"succeeded", "succeeded_with_warnings"})
 
-    def test_legacy_opencode_recovery_required_refuses_collect(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", ResourceWarning)
-            broker_a = fake_opencode_broker(self.home)
-            record = broker_a.create(TaskRequest("SLEEP", self.workspace, profile="opencode"))
-            broker_a.start(record.id)
-            pgid = broker_a.store.get_launch(record.id)["pgid"]
-            self._simulate_broker_loss(broker_a, record.id)
-            broker_a.close()
-
-            broker_b = fake_opencode_broker(self.home)
-            self.broker_b = broker_b
-            broker_b.reconcile(record.id)
-            view = broker_b.operator_control_view(record.id)
-            self.assertEqual(view["recovery_posture"], "recovery_required")
-            self.assertIn("status", view["permitted_actions"])
-            self.assertIn("cancel", view["permitted_actions"])
-            self.assertNotIn("collect", view["permitted_actions"])
-            with self.assertRaises(OperatorControlRefused) as ctx:
-                broker_b.operator_control(record.id, "collect")
-            self.assertEqual(ctx.exception.code, "refused_collect")
-            kill_pgid(pgid)
+    # test_legacy_opencode_recovery_required_refuses_collect retired
+    # (RFC-004 durable-opencode slice): OpenCode is durable by default now,
+    # so a still-running OpenCode task after a broker restart is safely
+    # *adopted* (recovery_posture "safely_adopted", not "recovery_required"),
+    # matching test_adopted_fixture_status_cancel_collect_succeed_in_valid_state
+    # above -- see tests/test_opencode_adapter.py for OpenCode's own restart
+    # adoption coverage.
 
     def test_corrupt_and_contested_evidence_refuses_control(self):
         broker_a, task_id = self._start_durable("DURABLE_HANG")

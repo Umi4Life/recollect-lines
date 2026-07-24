@@ -24,13 +24,11 @@ from recollect_lines.durable_runner import (
     load_launch_record,
 )
 from recollect_lines.adaptor.fixture_durable import FixtureDurableAdapter
-from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, RecoveryRequired, TaskRequest, TaskState
-from recollect_lines.adaptor.opencode import OpenCodeAdapter
+from recollect_lines.models import DEFAULT_PROFILES, ProfilePolicy, TaskRequest, TaskState
 from recollect_lines.service import Broker
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-FAKE_OPENCODE = FIXTURES / "fake_opencode.py"
 
 FIXTURE_DURABLE_PROFILE = ProfilePolicy(
     "fixture_durable",
@@ -68,13 +66,6 @@ def durable_broker(home: Path, **kwargs) -> Broker:
     adapter = FixtureDurableAdapter(home, max_stdout_bytes=4096, max_stderr_bytes=1024)
     profiles = {**DEFAULT_PROFILES, FIXTURE_DURABLE_PROFILE.name: FIXTURE_DURABLE_PROFILE}
     return Broker(home, profiles=profiles, fixture_durable_adapter=adapter, **kwargs)
-
-
-def fake_opencode_broker(home: Path) -> Broker:
-    return Broker(
-        home,
-        opencode_adapter=OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE))),
-    )
 
 
 def db_bytes(home: Path) -> bytes:
@@ -310,30 +301,12 @@ class Phase73DurableReconciliationTests(unittest.TestCase):
         )
         broker_a.close()
 
-    def test_legacy_opencode_stays_recovery_required_without_adoption(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", ResourceWarning)
-            broker_a = fake_opencode_broker(self.home)
-            record = broker_a.create(TaskRequest("SLEEP", self.workspace, profile="opencode"))
-            broker_a.start(record.id)
-            pgid = broker_a.store.get_launch(record.id)["pgid"]
-            self.assertTrue(_pgid_alive(pgid))
-            self._simulate_broker_loss(broker_a, record.id)
-            broker_a.close()
-
-            broker_b = fake_opencode_broker(self.home)
-            self.broker_b = broker_b
-            reconciled = broker_b.reconcile(record.id)
-            self.assertEqual(reconciled.state, TaskState.RECOVERY_REQUIRED)
-            self.assertNotIn(record.id, broker_b._adopted_durable_handles)
-            with self.assertRaises(RecoveryRequired):
-                broker_b.collect(record.id)
-            self.assertTrue(
-                _pgid_alive(pgid),
-                "legacy OpenCode must stay running until explicitly reaped; durable adoption is forbidden",
-            )
-            self._reap_orphaned_popens()
-            self.assertFalse(_pgid_alive(pgid), "legacy OpenCode child must not survive deterministic cleanup")
+    # test_legacy_opencode_stays_recovery_required_without_adoption retired
+    # (RFC-004 durable-opencode slice): OpenCode is durable by default now,
+    # so a still-running OpenCode task after a broker restart is safely
+    # *adopted* (like every other production adapter here), never forced
+    # into recovery_required -- see tests/test_opencode_adapter.py's restart
+    # adoption coverage.
 
     def test_no_secret_sentinel_in_db_manifest_or_reconcile_output(self):
         with mock.patch.dict(os.environ, {"RL_SECRET_SENTINEL": "rl_secret_sentinel_value"}, clear=False):

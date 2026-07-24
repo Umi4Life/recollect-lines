@@ -299,14 +299,10 @@ class CompletionEventsTests(unittest.TestCase):
             client.close()
 
 
-def kill_and_reap(popen: subprocess.Popen) -> None:
+def kill_pgid(pgid: int) -> None:
     try:
-        os.killpg(os.getpgid(popen.pid), signal.SIGKILL)
+        os.killpg(pgid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
-    try:
-        popen.wait(timeout=5)
-    except subprocess.TimeoutExpired:
         pass
 
 
@@ -349,7 +345,7 @@ class CompletionEventsPumpTests(unittest.TestCase):
         broker = self._broker()
         record = broker.create(TaskRequest("SLEEP", str(self.workspace), execution_mode="read_only", profile="opencode"))
         broker.start(record.id)
-        popen = broker._process_handles[record.id].popen
+        pgid = broker._process_handles[record.id].pgid
         try:
             started_at = time.monotonic()
             page = broker.completion_events_since(0)
@@ -358,7 +354,7 @@ class CompletionEventsPumpTests(unittest.TestCase):
             self.assertEqual(page["events"], [])
             self.assertEqual(broker.store.get(record.id).state, TaskState.RUNNING)
         finally:
-            kill_and_reap(popen)
+            kill_pgid(pgid)
             broker.close()
 
     def test_pump_is_idempotent_across_repeated_polls(self):
@@ -420,7 +416,7 @@ class CompletionEventsPumpTests(unittest.TestCase):
         broker1 = self._broker()
         record = broker1.create(TaskRequest("SLEEP", str(self.workspace), execution_mode="read_only", profile="opencode"))
         broker1.start(record.id)
-        popen = broker1._process_handles[record.id].popen
+        pgid = broker1._process_handles[record.id].pgid
         try:
             broker1.close()  # models the broker process disappearing; the detached child keeps running
 
@@ -432,7 +428,7 @@ class CompletionEventsPumpTests(unittest.TestCase):
             finally:
                 broker2.close()
         finally:
-            kill_and_reap(popen)
+            kill_pgid(pgid)
 
 
 if __name__ == "__main__":

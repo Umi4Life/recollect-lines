@@ -33,7 +33,6 @@ from recollect_lines.durable_runner import classify_process_identity, read_proce
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.service import Broker
 
-FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 FAKE_CODEX = Path(__file__).parent / "fixtures" / "fake_codex.py"
 FAKE_CURSOR = Path(__file__).parent / "fixtures" / "fake_cursor.py"
 
@@ -45,12 +44,6 @@ def wait_until(predicate, timeout=5.0, interval=0.05):
             return True
         time.sleep(interval)
     return predicate()
-
-
-def fake_opencode_adapter(grace_period_seconds=2.0):
-    from recollect_lines.adaptor.opencode import OpenCodeAdapter
-
-    return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)), grace_period_seconds=grace_period_seconds)
 
 
 def fake_codex_adapter(grace_period_seconds=2.0):
@@ -101,6 +94,16 @@ def kill_and_reap(popen, pgid):
 class ExitedInMemoryHandleReapTests(unittest.TestCase):
     """Requirement 1: an already-exited in-memory handle must not keep
     reporting `running` just because a ProcessHandle object still exists.
+
+    Every production subprocess adapter is durable by default now (RFC-004
+    durable-opencode slice was the last), so this generic (adapter-agnostic)
+    legacy-handle-reap coverage uses Cursor's test-only
+    `legacy_popen_launch=True` opt-in (see adaptor/cursor.py's module
+    docstring) rather than a real production adapter -- these tests never
+    reach the Cursor-specific restart-reconciliation branch (no broker
+    restart is simulated here), so it exercises exactly the same generic
+    Broker._reap_exited_process_handle()/collect() code path a legacy
+    OpenCode adapter used to.
     """
 
     def setUp(self):
@@ -108,14 +111,14 @@ class ExitedInMemoryHandleReapTests(unittest.TestCase):
         self.home = Path(self.tempdir.name) / "broker"
         self.workspace = Path(self.tempdir.name) / "workspace"
         self.workspace.mkdir()
-        self.broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
+        self.broker = Broker(self.home, cursor_adapter=fake_cursor_adapter())
 
     def tearDown(self):
         self.broker.close()
         self.tempdir.cleanup()
 
     def _create_and_start(self):
-        record = self.broker.create(TaskRequest("Inspect fact.txt", str(self.workspace), profile="opencode", execution_mode="read_only"))
+        record = self.broker.create(TaskRequest("Inspect fact.txt", str(self.workspace), profile="cursor", execution_mode="read_only"))
         self.broker.start(record.id)
         handle = self.broker._process_handles[record.id]
         self.assertTrue(wait_until(lambda: handle.popen.poll() is not None), "fixture must exit on its own for this test")
@@ -138,11 +141,10 @@ class ExitedInMemoryHandleReapTests(unittest.TestCase):
         self.assertNotIn(record.id, self.broker._process_handles)
 
     def test_status_is_unaffected_when_the_handle_is_genuinely_still_running(self):
-        record = self.broker.create(TaskRequest("SLEEP", str(self.workspace), profile="opencode", execution_mode="read_only"))
+        record = self.broker.create(TaskRequest("SLEEP", str(self.workspace), profile="cursor", execution_mode="read_only"))
         self.broker.start(record.id)
         handle = self.broker._process_handles[record.id]
-        events_path = self.home / "artifacts" / record.id / "events.jsonl"
-        self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
+        self.assertTrue(wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes()))
         try:
             status = self.broker.status(record.id)
             self.assertEqual(status["state"], "running")
@@ -167,13 +169,15 @@ class CollectDoesNotBlockOnALiveSubprocessTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_collect_on_a_live_process_returns_promptly_and_nonterminal(self):
-        broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
+        # Generic (adapter-agnostic) legacy-handle coverage, see
+        # ExitedInMemoryHandleReapTests' class docstring for why Cursor's
+        # test-only legacy_popen_launch=True stands in for OpenCode here.
+        broker = Broker(self.home, cursor_adapter=fake_cursor_adapter())
         try:
-            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="opencode", execution_mode="read_only"))
+            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="cursor", execution_mode="read_only"))
             broker.start(record.id)
             handle = broker._process_handles[record.id]
-            events_path = self.home / "artifacts" / record.id / "events.jsonl"
-            self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
+            self.assertTrue(wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes()))
 
             with mock.patch("recollect_lines.service.LEGACY_PROCESS_COLLECT_GRACE_SECONDS", 0.3):
                 started_at = time.monotonic()
@@ -311,27 +315,34 @@ class ActiveTaskArtifactManifestFreshnessTests(unittest.TestCase):
         # an adapter writes stdout/stderr directly into the task's own
         # artifacts_dir (so a stale in-memory manifest can under-report real
         # bytes already on disk there). A durable launch's stdout/stderr live
-        # under home/durable_launches/<id>/, never under artifacts_dir, so
-        # Codex (now durable by default, RFC-004) is no longer representative
-        # here -- OpenCode remains on the legacy Popen lifecycle and is used
-        # instead, exactly as ExitedInMemoryHandleReapTests and
-        # CollectDoesNotBlockOnALiveSubprocessTests above already do.
-        broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
+        # under home/durable_launches/<id>/, never under artifacts_dir, so no
+        # production adapter is representative here anymore (every one is
+        # durable by default, RFC-004) -- Cursor's test-only
+        # legacy_popen_launch=True stands in instead, exactly as
+        # ExitedInMemoryHandleReapTests and CollectDoesNotBlockOnALiveSubprocessTests
+        # above already do.
+        broker = Broker(self.home, cursor_adapter=fake_cursor_adapter())
         try:
-            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="opencode", execution_mode="read_only"))
+            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="cursor", execution_mode="read_only"))
             broker.start(record.id)
             handle = broker._process_handles[record.id]
-            self.assertTrue(wait_until(lambda: handle.events_path.exists() and b"started" in handle.events_path.read_bytes()))
+            # Cursor's SLEEP fixture writes "started" to stderr immediately and
+            # only ever writes to stdout once the run completes 30s later, so
+            # stderr.log (not stdout.log) is this adapter's early-real-bytes
+            # artifact -- the manifest-staleness gap requirement 5 covers
+            # applies identically regardless of which stream the CLI happens
+            # to write to first.
+            self.assertTrue(wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes()))
 
             manifest_before = broker.store.artifact_manifest(record.id)
-            events_entry_before = next(f for f in manifest_before["files"] if f["name"] == "events.jsonl")
-            self.assertEqual(events_entry_before["bytes"], 0, "sanity: the manifest was only ever generated once, at launch")
+            stderr_entry_before = next(f for f in manifest_before["files"] if f["name"] == "stderr.log")
+            self.assertEqual(stderr_entry_before["bytes"], 0, "sanity: the manifest was only ever generated once, at launch")
 
             status = broker.status(record.id)
 
-            events_entry_after = next(f for f in status["artifacts"]["files"] if f["name"] == "events.jsonl")
+            stderr_entry_after = next(f for f in status["artifacts"]["files"] if f["name"] == "stderr.log")
             self.assertGreater(
-                events_entry_after["bytes"], 0,
+                stderr_entry_after["bytes"], 0,
                 "status() must refresh the manifest for an active task instead of serving the stale launch-time snapshot",
             )
         finally:
