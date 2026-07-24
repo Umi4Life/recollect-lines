@@ -27,7 +27,8 @@ from .durable_reconciliation import (
     load_broker_identity,
     make_reconcile_detail,
 )
-from .durable_runner import classify_process_identity
+from .durable_cli_launch import is_durable_launch_terminal, wait_for_durable_launch_terminal
+from .durable_runner import DurableSubprocessRunner, classify_process_identity
 from .adaptor.fixture_durable import FixtureDurableAdapter
 from .recovery_contract import SYNTHETIC_RECOVERY_CONTROL
 from .adaptor.claude_code import ClaudeCodeAdapter
@@ -226,6 +227,11 @@ class Broker:
             self.claude_code_adapter.tool_access_profile_registry = self.tool_access_profile_registry
         self.codex_adapter = codex_adapter or CodexAdapter()
         self.cursor_adapter = cursor_adapter or CursorAdapter()
+        # Broker owns the one durable-subprocess supervisor and injects it into
+        # every LaunchSpec-based adapter (Cursor first, RFC-004) -- an adapter
+        # never constructs or configures its own DurableSubprocessRunner.
+        self.durable_runner = DurableSubprocessRunner(self.store.home)
+        self.cursor_adapter.durable_runner = self.durable_runner
         self.fixture_durable_adapter = fixture_durable_adapter
         # Every subprocess-backed adapter, keyed by the profile name that selects
         # it — the one place profile-to-adapter dispatch lives, so start()/
@@ -870,7 +876,11 @@ class Broker:
         """
         for task_id, handle in list(self._process_handles.items()):
             popen = getattr(handle, "popen", None)
-            if popen is not None and popen.poll() is not None:
+            if popen is not None:
+                if popen.poll() is not None:
+                    self._pump_collect(task_id)
+                continue
+            if hasattr(handle, "durable") and is_durable_launch_terminal(handle):
                 self._pump_collect(task_id)
         for task_id, handle in list(self._direct_api_handles.items()):
             thread = getattr(handle, "thread", None)
@@ -1334,7 +1344,15 @@ class Broker:
             )
         if task_id in self._process_handles:
             handle = self._process_handles[task_id]
-            if handle.popen.poll() is None:
+            if hasattr(handle, "durable"):
+                # Durable-subprocess handle (RFC-004): the manifest lifecycle
+                # state is a nonblocking, read-only liveness check, so this
+                # bounded grace wait never touches DurableSubprocessRunner.wait()
+                # (which cancels a still-live payload on timeout -- exactly
+                # what a collect() grace wait must never do to a live task).
+                if not wait_for_durable_launch_terminal(handle, timeout=LEGACY_PROCESS_COLLECT_GRACE_SECONDS):
+                    return record
+            elif handle.popen.poll() is None:
                 # Still genuinely running: never let collect() (and the single
                 # synchronous MCP/CLI call site behind it) block indefinitely on
                 # a long-lived CLI run. A short bounded grace window absorbs the
@@ -1482,7 +1500,12 @@ class Broker:
         case, exactly as if this check hadn't run.
         """
         handle = self._process_handles.get(task_id)
-        if handle is None or handle.popen.poll() is None:
+        if handle is None:
+            return None
+        if hasattr(handle, "durable"):
+            if not is_durable_launch_terminal(handle):
+                return None
+        elif handle.popen.poll() is None:
             return None
         return self.collect(task_id)
 

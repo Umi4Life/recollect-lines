@@ -32,7 +32,17 @@ FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 
 
 def fake_cursor_adapter(grace_period_seconds=2.0):
-    return CursorAdapter(command_prefix=(sys.executable, str(FAKE_CURSOR)), grace_period_seconds=grace_period_seconds)
+    # legacy_popen_launch=True: this whole file exercises
+    # _reconcile_cursor_legacy_subprocess, the pre-RFC-004 leader
+    # PID+start-identity restart-safety path (docs/history/phases/
+    # phase-7c5-cursor-uncollected.md) -- never selected by a default
+    # CursorAdapter, only by tests that explicitly opt in. See
+    # adaptor/cursor.py's module docstring.
+    return CursorAdapter(
+        command_prefix=(sys.executable, str(FAKE_CURSOR)),
+        grace_period_seconds=grace_period_seconds,
+        legacy_popen_launch=True,
+    )
 
 
 def fake_opencode_adapter(grace_period_seconds=2.0):

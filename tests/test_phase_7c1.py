@@ -123,7 +123,7 @@ class DeclaredRuntimeContractTests(unittest.TestCase):
                     "opencode": "observe_and_cancel",
                     "claude_code": "observe_and_cancel",
                     "codex": "observe_and_cancel",
-                    "cursor": "observe_and_cancel",
+                    "cursor": "collect_after_restart",
                     "openai_compatible": "none",
                 }
                 for name, level in expected_levels.items():

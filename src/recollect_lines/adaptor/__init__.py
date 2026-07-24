@@ -34,7 +34,7 @@ from .codex import (
     ProcessHandle as CodexProcessHandle,
     redact_secrets as codex_redact_secrets,
 )
-from .contracts import AdapterCapabilities, RuntimeAdapter
+from .contracts import AdapterCapabilities, LaunchSpec, RuntimeAdapter
 from .cursor import (
     DEFAULT_COMMAND_PREFIX as CURSOR_DEFAULT_COMMAND_PREFIX,
     DEFAULT_GRACE_PERIOD_SECONDS as CURSOR_DEFAULT_GRACE_PERIOD_SECONDS,
@@ -60,6 +60,7 @@ from .process import (
 
 __all__ = [
     "AdapterCapabilities",
+    "LaunchSpec",
     "RuntimeAdapter",
     "SubprocessCliAdapterBase",
     "probe_cli_version",
