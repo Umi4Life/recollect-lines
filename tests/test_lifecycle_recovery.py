@@ -30,7 +30,8 @@ from recollect_lines import cli
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.adaptor.process import redact_command
 from recollect_lines.service import Broker
-from recollect_lines.durable_cli_launch import wait_for_durable_launch_terminal
+from recollect_lines.durable_cli_launch import TERMINAL_LAUNCH_STATES, wait_for_durable_launch_terminal
+from recollect_lines.durable_runner import load_launch_record
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 
@@ -79,6 +80,10 @@ def kill_pgid(pgid: int) -> None:
 def durable_events_path(broker: Broker, task_id: str) -> Path:
     launch = broker.store.get_launch(task_id)
     return broker.store.home / "durable_launches" / launch["durable_launch_id"] / "events.jsonl"
+
+
+def durable_manifest_path(broker: Broker, task_id: str) -> Path:
+    return durable_events_path(broker, task_id).parent / "manifest.json"
 
 
 class RedactCommandTests(unittest.TestCase):
@@ -145,7 +150,20 @@ class ReconcilePendingAndCliSmokeTests(unittest.TestCase):
             self.assertEqual(collected.state, TaskState.SUCCEEDED)
         finally:
             kill_pgid(pgid)
-            broker2.close()
+            manifest_path = durable_manifest_path(broker2, sleep_record.id)
+            # The durable supervisor keeps writing (finalizing artifacts, then the
+            # terminal manifest) for a moment after its payload's pgid is killed;
+            # wait for that write to land so tearDown's TemporaryDirectory.cleanup()
+            # can't race a still-running writer inside durable_launches/ (a bare
+            # kill + immediate rmtree hit ENOTEMPTY here).
+            try:
+                supervisor_reached_terminal = wait_until(
+                    lambda: load_launch_record(manifest_path).lifecycle_state in TERMINAL_LAUNCH_STATES,
+                    timeout=5,
+                )
+            finally:
+                broker2.close()
+            self.assertTrue(supervisor_reached_terminal, "durable supervisor did not reach a terminal state before teardown")
 
     def test_cli_reconcile_and_reconcile_all_smoke(self):
         broker = Broker(self.home, opencode_adapter=fake_adapter())
