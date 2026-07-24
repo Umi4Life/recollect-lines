@@ -307,22 +307,31 @@ class ActiveTaskArtifactManifestFreshnessTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_status_refreshes_the_manifest_for_a_still_running_task(self):
-        broker = Broker(self.home, codex_adapter=fake_codex_adapter())
+        # This requirement is specifically about the legacy Popen model, where
+        # an adapter writes stdout/stderr directly into the task's own
+        # artifacts_dir (so a stale in-memory manifest can under-report real
+        # bytes already on disk there). A durable launch's stdout/stderr live
+        # under home/durable_launches/<id>/, never under artifacts_dir, so
+        # Codex (now durable by default, RFC-004) is no longer representative
+        # here -- OpenCode remains on the legacy Popen lifecycle and is used
+        # instead, exactly as ExitedInMemoryHandleReapTests and
+        # CollectDoesNotBlockOnALiveSubprocessTests above already do.
+        broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
         try:
-            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="codex", execution_mode="read_only"))
+            record = broker.create(TaskRequest("SLEEP", str(self.workspace), profile="opencode", execution_mode="read_only"))
             broker.start(record.id)
             handle = broker._process_handles[record.id]
-            self.assertTrue(wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes()))
+            self.assertTrue(wait_until(lambda: handle.events_path.exists() and b"started" in handle.events_path.read_bytes()))
 
             manifest_before = broker.store.artifact_manifest(record.id)
-            stderr_entry_before = next(f for f in manifest_before["files"] if f["name"] == "stderr.log")
-            self.assertEqual(stderr_entry_before["bytes"], 0, "sanity: the manifest was only ever generated once, at launch")
+            events_entry_before = next(f for f in manifest_before["files"] if f["name"] == "events.jsonl")
+            self.assertEqual(events_entry_before["bytes"], 0, "sanity: the manifest was only ever generated once, at launch")
 
             status = broker.status(record.id)
 
-            stderr_entry_after = next(f for f in status["artifacts"]["files"] if f["name"] == "stderr.log")
+            events_entry_after = next(f for f in status["artifacts"]["files"] if f["name"] == "events.jsonl")
             self.assertGreater(
-                stderr_entry_after["bytes"], 0,
+                events_entry_after["bytes"], 0,
                 "status() must refresh the manifest for an active task instead of serving the stale launch-time snapshot",
             )
         finally:

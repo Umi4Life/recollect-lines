@@ -46,6 +46,21 @@ STATE_FAILED = "failed"
 
 _SECRET_VALUE_RE = re.compile(r"sk-[A-Za-z0-9_-]{4,}|rl_secret_sentinel", re.IGNORECASE)
 
+_SAFE_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def validate_artifact_basename(name: str) -> str:
+    """Reject anything but a plain, traversal-free basename for a durable artifact filename.
+
+    Shared by `DurableSubprocessRunner.launch()` (fail fast before a supervisor
+    is ever spawned) and the forked supervisor's own argv parsing (defense in
+    depth), so a bad name can never become a path-traversal write inside
+    `launch_dir`. The leading-alnum requirement also rejects "." and "..".
+    """
+    if not isinstance(name, str) or not _SAFE_ARTIFACT_NAME_RE.match(name):
+        raise ValueError(f"artifact name must be a safe basename with no path traversal: {name!r}")
+    return name
+
 
 class LaunchInspectionOutcome(StrEnum):
     RUNNING_IDENTITY_MATCHES = "running_identity_matches"
@@ -129,6 +144,7 @@ class DurableSubprocessRunner:
         command: list[str],
         detach_supervisor: bool = False,
         cwd: str | None = None,
+        stdout_artifact_name: str = STDOUT_NAME,
     ) -> DurableLaunchHandle:
         if not task_id.strip():
             raise ValueError("task_id must not be empty")
@@ -136,6 +152,7 @@ class DurableSubprocessRunner:
             raise ValueError("adapter_id must not be empty")
         if not command:
             raise ValueError("command must not be empty")
+        validate_artifact_basename(stdout_artifact_name)
         launch_id = uuid.uuid4().hex
         launch_dir = _safe_launch_dir(self._launches_root, launch_id)
         launch_dir.mkdir(parents=True, exist_ok=True)
@@ -148,6 +165,7 @@ class DurableSubprocessRunner:
             created_at=timestamp,
             updated_at=timestamp,
             lifecycle_state=STATE_LAUNCHING,
+            artifacts=_artifact_placeholders(stdout_artifact_name),
         )
         manifest_path = launch_dir / MANIFEST_NAME
         _atomic_write_json(manifest_path, manifest)
@@ -161,6 +179,7 @@ class DurableSubprocessRunner:
             str(self.max_stdout_bytes),
             str(self.max_stderr_bytes),
             cwd or "",
+            stdout_artifact_name,
             *command,
         ]
         supervisor = subprocess.Popen(
@@ -317,10 +336,27 @@ def load_launch_record(manifest_path: Path) -> DurableLaunchRecord:
     )
 
 
+def stdout_artifact_name_from_record(record: DurableLaunchRecord) -> str:
+    """Resolve the durable-captured stdout filename a manifest record used.
+
+    Falls back to the generic default if the stored name somehow fails
+    basename validation (e.g. a corrupted or foreign manifest) rather than
+    trusting an unvalidated path fragment into a filesystem join.
+    """
+    stdout_meta = record.artifacts.get("stdout")
+    name = stdout_meta.get("name") if isinstance(stdout_meta, dict) else None
+    if not isinstance(name, str):
+        return STDOUT_NAME
+    try:
+        return validate_artifact_basename(name)
+    except ValueError:
+        return STDOUT_NAME
+
+
 def _supervise_main(argv: list[str]) -> int:
-    if len(argv) < 6:
+    if len(argv) < 7:
         print(
-            "usage: durable_runner __supervise__ <manifest> <launch_dir> <max_stdout> <max_stderr> <cwd> <command...>",
+            "usage: durable_runner __supervise__ <manifest> <launch_dir> <max_stdout> <max_stderr> <cwd> <stdout_name> <command...>",
             file=sys.stderr,
         )
         return 2
@@ -329,10 +365,15 @@ def _supervise_main(argv: list[str]) -> int:
     max_stdout = int(argv[3])
     max_stderr = int(argv[4])
     cwd = argv[5] or None
-    command = argv[6:]
+    stdout_name = argv[6]
+    command = argv[7:]
     if not _path_within(manifest_path, launch_dir):
         return 2
-    stdout_path = launch_dir / STDOUT_NAME
+    try:
+        validate_artifact_basename(stdout_name)
+    except ValueError:
+        return 2
+    stdout_path = launch_dir / stdout_name
     stderr_path = launch_dir / STDERR_NAME
     stdout_fd = os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -355,7 +396,7 @@ def _supervise_main(argv: list[str]) -> int:
             "updated_at": now(),
             "lifecycle_state": STATE_RUNNING,
             "process": _process_block(payload_pid, pgid, start_identity),
-            "artifacts": _artifact_placeholders(),
+            "artifacts": _artifact_placeholders(stdout_name),
             "diagnostics": {"privacy": _privacy_note()},
         })
         if os.environ.get("RECOLLECT_DURABLE_INJECT_MANIFEST_FAIL") == "before_running":
@@ -393,7 +434,7 @@ def _supervise_main(argv: list[str]) -> int:
     lifecycle = STATE_EXITED
     if exit_code < 0:
         lifecycle = STATE_CANCELLED
-    _finalize_artifacts(manifest, launch_dir, max_stdout, max_stderr)
+    _finalize_artifacts(manifest, launch_dir, max_stdout, max_stderr, stdout_name)
     manifest.update({
         "updated_at": now(),
         "lifecycle_state": lifecycle,
@@ -410,8 +451,10 @@ def _supervise_main(argv: list[str]) -> int:
     return 0 if exit_code == 0 else 1
 
 
-def _finalize_artifacts(manifest: dict[str, Any], launch_dir: Path, max_stdout: int, max_stderr: int) -> None:
-    stdout_meta = _artifact_metadata(launch_dir / STDOUT_NAME, max_stdout)
+def _finalize_artifacts(
+    manifest: dict[str, Any], launch_dir: Path, max_stdout: int, max_stderr: int, stdout_name: str = STDOUT_NAME
+) -> None:
+    stdout_meta = _artifact_metadata(launch_dir / stdout_name, max_stdout)
     stderr_meta = _artifact_metadata(launch_dir / STDERR_NAME, max_stderr)
     manifest["artifacts"] = {
         "stdout": stdout_meta,
@@ -463,10 +506,10 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             tmp_path.unlink(missing_ok=True)
 
 
-def _artifact_placeholders() -> dict[str, Any]:
+def _artifact_placeholders(stdout_name: str = STDOUT_NAME) -> dict[str, Any]:
     empty = hashlib.sha256(b"").hexdigest()
     return {
-        "stdout": {"name": STDOUT_NAME, "bytes": 0, "complete": False, "truncated": False, "sha256": empty},
+        "stdout": {"name": stdout_name, "bytes": 0, "complete": False, "truncated": False, "sha256": empty},
         "stderr": {"name": STDERR_NAME, "bytes": 0, "complete": False, "truncated": False, "sha256": empty},
     }
 

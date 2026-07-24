@@ -26,6 +26,7 @@ from recollect_lines.durable_runner import (
     STATE_TIMED_OUT,
     inspect_durable_launch,
     load_launch_record,
+    validate_artifact_basename,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -75,15 +76,26 @@ class DurableRunnerTests(unittest.TestCase):
         self.tempdir.cleanup()
         gc.collect()
 
-    def _launch(self, fixture: Path, *, task_id: str = "task-7c2", detach: bool = False, extra_env: dict | None = None):
+    def _launch(
+        self,
+        fixture: Path,
+        *,
+        task_id: str = "task-7c2",
+        detach: bool = False,
+        extra_env: dict | None = None,
+        stdout_artifact_name: str | None = None,
+    ):
         command = [sys.executable, str(fixture)]
         if fixture == SECRET:
             command.append("prompt-with-RL_SECRET_SENTINEL-in-argv")
+        launch_kwargs = {"task_id": task_id, "adapter_id": "fixture", "command": command, "detach_supervisor": detach}
+        if stdout_artifact_name is not None:
+            launch_kwargs["stdout_artifact_name"] = stdout_artifact_name
         if extra_env:
             with mock.patch.dict(os.environ, extra_env, clear=False):
-                handle = self.runner.launch(task_id=task_id, adapter_id="fixture", command=command, detach_supervisor=detach)
+                handle = self.runner.launch(**launch_kwargs)
         else:
-            handle = self.runner.launch(task_id=task_id, adapter_id="fixture", command=command, detach_supervisor=detach)
+            handle = self.runner.launch(**launch_kwargs)
         if not detach:
             self._handles.append(handle)
         else:
@@ -117,6 +129,48 @@ class DurableRunnerTests(unittest.TestCase):
         self.assertTrue(record.artifacts["stdout"]["truncated"])
         self.assertEqual(record.artifacts["stdout"]["bytes"], 4096)
         self.assertLessEqual((record.launch_dir / "stdout.log").stat().st_size, 4096)
+
+    def test_launch_directs_stdout_to_a_requested_safe_artifact_name(self):
+        # BLOCKER fix (RFC-004): the generic supervisor -- not a
+        # provider-specific one -- must be able to direct stdout to a
+        # caller-requested filename (e.g. Codex's established `events.jsonl`)
+        # while every other caller keeps the generic `stdout.log` default.
+        handle = self._launch(SHORT, stdout_artifact_name="events.jsonl")
+        record = self.runner.wait(handle, timeout=10)
+        self.assertEqual(record.lifecycle_state, STATE_EXITED)
+        events_path = record.launch_dir / "events.jsonl"
+        self.assertEqual(events_path.read_text(), "hello-durable\n")
+        self.assertFalse((record.launch_dir / "stdout.log").exists())
+        self.assertEqual(record.artifacts["stdout"]["name"], "events.jsonl")
+
+    def test_launch_defaults_stdout_artifact_name_to_stdout_log(self):
+        handle = self._launch(SHORT)
+        record = self.runner.wait(handle, timeout=10)
+        self.assertEqual(record.artifacts["stdout"]["name"], "stdout.log")
+
+    def test_launch_rejects_a_path_traversal_stdout_artifact_name(self):
+        with self.assertRaises(ValueError):
+            self.runner.launch(
+                task_id="task-traversal",
+                adapter_id="fixture",
+                command=[sys.executable, str(SHORT)],
+                stdout_artifact_name="../evil.log",
+            )
+
+    def test_launch_rejects_a_stdout_artifact_name_with_a_path_separator(self):
+        with self.assertRaises(ValueError):
+            self.runner.launch(
+                task_id="task-separator",
+                adapter_id="fixture",
+                command=[sys.executable, str(SHORT)],
+                stdout_artifact_name="sub/events.jsonl",
+            )
+
+    def test_validate_artifact_basename_accepts_plain_names_and_rejects_traversal(self):
+        self.assertEqual(validate_artifact_basename("events.jsonl"), "events.jsonl")
+        for bad in ("..", ".", "../x", "a/b", "a\\b", ""):
+            with self.assertRaises(ValueError):
+                validate_artifact_basename(bad)
 
     def test_timeout_reaps_owned_group_terminal_manifest(self):
         with warnings.catch_warnings():

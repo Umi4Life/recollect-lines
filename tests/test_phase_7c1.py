@@ -122,7 +122,7 @@ class DeclaredRuntimeContractTests(unittest.TestCase):
                     "mock": "none",
                     "opencode": "observe_and_cancel",
                     "claude_code": "collect_after_restart",
-                    "codex": "observe_and_cancel",
+                    "codex": "collect_after_restart",
                     "cursor": "collect_after_restart",
                     "openai_compatible": "none",
                 }

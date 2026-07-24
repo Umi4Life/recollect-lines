@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from recollect_lines.adaptor.codex import CodexAdapter
 from recollect_lines.direct_api_runtime import DIRECT_API_PROFILE
@@ -70,15 +71,31 @@ class CodexModelBrokerTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_task_model_reaches_fixture_command_without_mutating_shared_adapter(self):
+        # Codex's default launch path is durable (RFC-004): the actual argv is
+        # never persisted (durable_runner rejects "command"/"argv" manifest
+        # keys as forbidden secrets-adjacent content) and the in-memory handle
+        # carries no `.command` attribute, so this spies on the one seam that
+        # decides argv -- CodexAdapter.build_command() -- instead of reading
+        # it back off a handle.
         broker = Broker(self.home, codex_adapter=fake_codex_adapter(model="broker-default"))
-        record_a = broker.create(TaskRequest("inspect A", str(self.workspace), runtime="codex", model="task-model-a"))
-        record_b = broker.create(TaskRequest("inspect B", str(self.workspace), runtime="codex", model="task-model-b"))
-        broker.start(record_a.id)
-        broker.start(record_b.id)
-        handle_a = broker._process_handles[record_a.id]
-        handle_b = broker._process_handles[record_b.id]
-        self.assertEqual(handle_a.command[handle_a.command.index("--model") + 1], "task-model-a")
-        self.assertEqual(handle_b.command[handle_b.command.index("--model") + 1], "task-model-b")
+        original_build_command = broker.codex_adapter.build_command
+        captured_commands = {}
+
+        def spy_build_command(prompt, execution_mode, workspace, *, model=None):
+            command = original_build_command(prompt, execution_mode, workspace, model=model)
+            captured_commands[prompt] = command
+            return command
+
+        with mock.patch.object(broker.codex_adapter, "build_command", side_effect=spy_build_command):
+            record_a = broker.create(TaskRequest("inspect A", str(self.workspace), runtime="codex", model="task-model-a"))
+            record_b = broker.create(TaskRequest("inspect B", str(self.workspace), runtime="codex", model="task-model-b"))
+            broker.start(record_a.id)
+            broker.start(record_b.id)
+        command_a = captured_commands["inspect A"]
+        command_b = captured_commands["inspect B"]
+        self.assertEqual(command_a[command_a.index("--model") + 1], "task-model-a")
+        self.assertEqual(command_b[command_b.index("--model") + 1], "task-model-b")
+        self.assertEqual(broker.codex_adapter.model, "broker-default")
         stored_a = broker.store.get(record_a.id)
         stored_b = broker.store.get(record_b.id)
         self.assertEqual(stored_a.model, "task-model-a")
@@ -91,10 +108,19 @@ class CodexModelBrokerTests(unittest.TestCase):
 
     def test_adapter_default_used_when_no_task_override(self):
         broker = Broker(self.home, codex_adapter=fake_codex_adapter(model="broker-default"))
-        record = broker.create(TaskRequest("inspect", str(self.workspace), runtime="codex"))
-        broker.start(record.id)
-        handle = broker._process_handles[record.id]
-        self.assertEqual(handle.command[handle.command.index("--model") + 1], "broker-default")
+        original_build_command = broker.codex_adapter.build_command
+        captured_commands = {}
+
+        def spy_build_command(prompt, execution_mode, workspace, *, model=None):
+            command = original_build_command(prompt, execution_mode, workspace, model=model)
+            captured_commands[prompt] = command
+            return command
+
+        with mock.patch.object(broker.codex_adapter, "build_command", side_effect=spy_build_command):
+            record = broker.create(TaskRequest("inspect", str(self.workspace), runtime="codex"))
+            broker.start(record.id)
+        command = captured_commands["inspect"]
+        self.assertEqual(command[command.index("--model") + 1], "broker-default")
         self.assertIsNone(broker.store.get(record.id).model)
         self.assertEqual(broker.store.get(record.id).effective_model, "broker-default")
         broker.collect(record.id)
