@@ -26,6 +26,7 @@ from .durable_runner import (
     STATE_FAILED,
     STATE_TIMED_OUT,
     load_launch_record,
+    stdout_artifact_name_from_record,
 )
 from .models import TaskRecord
 
@@ -66,6 +67,7 @@ def start_durable_cli_launch(
         adapter_id=adapter_id,
         command=list(spec.argv),
         cwd=spec.cwd,
+        stdout_artifact_name=spec.stdout_artifact_name,
     )
     launch_record = wait_for_durable_running(durable.manifest_path, supervisor=durable.supervisor)
     pid = launch_record.process["pid"]
@@ -84,7 +86,7 @@ def start_durable_cli_launch(
         "launch_kind": LAUNCH_KIND_DURABLE,
         "pid": pid,
         "pgid": pgid,
-        "events_artifact": "stdout.log",
+        "events_artifact": spec.stdout_artifact_name,
         "stderr_artifact": "stderr.log",
         "workspace": spec.cwd,
     }
@@ -135,7 +137,7 @@ def collect_durable_cli_launch(
     record = load_launch_record(handle.durable.manifest_path)
     if record.lifecycle_state not in TERMINAL_LAUNCH_STATES:
         raise ValueError("durable payload still running; collect refused until terminal")
-    stdout_path = handle.durable.launch_dir / "stdout.log"
+    stdout_path = handle.durable.launch_dir / stdout_artifact_name_from_record(record)
     stderr_path = handle.durable.launch_dir / "stderr.log"
     stdout_text = stdout_path.read_text(errors="replace") if stdout_path.is_file() else ""
     stderr_text = stderr_path.read_text(errors="replace") if stderr_path.is_file() else ""

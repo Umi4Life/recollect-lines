@@ -111,6 +111,19 @@ class CodexAdapterUnitTests(unittest.TestCase):
         self.assertIn("--sandbox", spec.argv)
         self.assertIsNone(spec.env)
 
+    def test_build_launch_spec_requests_the_events_jsonl_stdout_artifact(self):
+        # BLOCKER fix (RFC-004 durable-codex slice): Codex's terminal stdout is
+        # its JSONL event stream, and this codebase's established public
+        # artifact name for that stream is `events.jsonl` (RFC-001), not the
+        # generic durable default of `stdout.log` -- see adaptor/codex.py's
+        # module docstring.
+        from recollect_lines.models import TaskRecord
+
+        adapter = fake_adapter()
+        record = TaskRecord.new(TaskRequest("inspect", "/tmp/ws", profile="codex", execution_mode="read_only"))
+        spec = adapter.build_launch_spec(record, "/tmp/ws", "inspect")
+        self.assertEqual(spec.stdout_artifact_name, "events.jsonl")
+
     def test_start_raises_without_an_injected_durable_runner(self):
         from recollect_lines.models import TaskRecord
 
@@ -178,15 +191,21 @@ class CodexBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(launch["adapter"], "codex")
         self.assertEqual(launch["launch_kind"], "durable_subprocess")
         self.assertIsNotNone(launch["durable_launch_id"])
+        # BLOCKER fix (RFC-004 durable-codex slice): Codex's durable-captured
+        # stdout artifact must be the established public `events.jsonl` name
+        # (RFC-001), never the generic durable `stdout.log` default.
+        self.assertEqual(launch["events_artifact"], "events.jsonl")
         launch_dir = self.home / "durable_launches" / launch["durable_launch_id"]
-        stdout_path = launch_dir / "stdout.log"
+        stdout_path = launch_dir / "events.jsonl"
         stderr_path = launch_dir / "stderr.log"
         wait_until(lambda: stdout_path.exists() and stdout_path.stat().st_size > 0)
         self.assertTrue(stderr_path.exists())
+        self.assertFalse((launch_dir / "stdout.log").exists())
         run_event = next(e for e in self.broker.store.events(record.id) if e["type"] == "task.running")
         self.assertIn("pid", run_event["metadata"])
         self.assertIn("pgid", run_event["metadata"])
         self.assertEqual(run_event["metadata"]["runtime_description"], "Codex via codex exec")
+        self.assertEqual(run_event["metadata"]["events_artifact"], "events.jsonl")
         self.broker.collect(record.id)
 
     def test_start_captures_the_jsonl_event_stream_in_the_durable_stdout_artifact(self):
@@ -194,7 +213,7 @@ class CodexBrokerIntegrationTests(unittest.TestCase):
         self.broker.start(record.id)
         launch = self.broker.store.get_launch(record.id)
         launch_dir = self.home / "durable_launches" / launch["durable_launch_id"]
-        stdout_path = launch_dir / "stdout.log"
+        stdout_path = launch_dir / "events.jsonl"
         wait_until(lambda: stdout_path.exists() and stdout_path.stat().st_size > 0)
         self.broker.collect(record.id)
         lines = [line for line in stdout_path.read_text().splitlines() if line.strip()]

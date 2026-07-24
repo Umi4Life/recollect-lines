@@ -33,6 +33,7 @@ from .durable_runner import (
     STATE_TIMED_OUT,
     inspect_durable_launch,
     load_launch_record,
+    stdout_artifact_name_from_record,
 )
 from .models import now
 
@@ -320,7 +321,7 @@ def adopted_collect(handle: AdoptedDurableHandle) -> dict[str, Any]:
         exit_code = record.exit_status.get("code")
     stdout_tail = ""
     stderr_tail = ""
-    stdout_path = handle.launch_dir / "stdout.log"
+    stdout_path = handle.launch_dir / stdout_artifact_name_from_record(record)
     stderr_path = handle.launch_dir / "stderr.log"
     if stdout_path.is_file():
         stdout_tail = _redact_collected_text(stdout_path.read_text(errors="replace")[-4000:])

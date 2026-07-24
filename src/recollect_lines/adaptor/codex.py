@@ -27,11 +27,16 @@ lifecycle, so this adapter carries no legacy path at all: `start()`/
 `cancel()`/`collect()` always go through the durable supervisor.
 
 Codex's `--json` flag makes its terminal stdout *be* the JSONL event stream,
-so the durable supervisor's generic `stdout.log` capture (see
-durable_cli_launch.start_durable_cli_launch, which always reports
-`events_artifact: "stdout.log"`) already is the Codex event artifact -- no
-provider-specific output-artifact naming is needed in the shared durable
-layer for this to work.
+and this codebase's established public artifact name for that stream is
+`events.jsonl` (RFC-001; the pre-RFC-004 Codex adapter and the still-legacy
+OpenCode adapter both write it under that name). `build_launch_spec()` below
+requests `LaunchSpec(stdout_artifact_name="events.jsonl")` so the generic
+durable supervisor (see durable_runner.DurableSubprocessRunner.launch and
+durable_cli_launch.start_durable_cli_launch) redirects the payload's stdout
+into `events.jsonl` instead of the generic `stdout.log` default, and reports
+`events_artifact: "events.jsonl"` -- preserving the public artifact name
+without this adapter ever touching a file itself or standing up a
+Codex-specific supervisor.
 """
 
 from __future__ import annotations
@@ -162,13 +167,16 @@ class CodexAdapter(SubprocessCliAdapterBase):
         """Validate/build the Codex command into a provider-neutral LaunchSpec.
 
         This is the one place Codex decides argv and cwd; it never touches a
-        process, file, or the durable runner.
+        process, file, or the durable runner. `stdout_artifact_name` requests
+        the durable supervisor capture stdout as `events.jsonl` -- Codex's
+        established public JSONL event-artifact name (see module docstring)
+        -- instead of the generic `stdout.log` default.
         """
         effective_workspace = workspace or record.workspace
         command = self.build_command(
             prompt or record.task, record.execution_mode, effective_workspace, model=record.effective_model,
         )
-        return LaunchSpec(argv=tuple(command), cwd=effective_workspace)
+        return LaunchSpec(argv=tuple(command), cwd=effective_workspace, stdout_artifact_name="events.jsonl")
 
     def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None):
         if self.durable_runner is None:
