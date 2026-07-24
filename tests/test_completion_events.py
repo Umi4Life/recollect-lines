@@ -21,6 +21,7 @@ from pathlib import Path
 
 from recollect_lines.models import ProfilePolicy, TaskRequest, TaskState, TERMINAL_STATES
 from recollect_lines.adaptor.opencode import OpenCodeAdapter
+from recollect_lines.durable_cli_launch import wait_for_durable_launch_terminal
 from recollect_lines.service import Broker
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -345,7 +346,8 @@ class CompletionEventsPumpTests(unittest.TestCase):
         broker = self._broker()
         record = broker.create(TaskRequest("SLEEP", str(self.workspace), execution_mode="read_only", profile="opencode"))
         broker.start(record.id)
-        pgid = broker._process_handles[record.id].pgid
+        handle = broker._process_handles[record.id]
+        pgid = handle.pgid
         try:
             started_at = time.monotonic()
             page = broker.completion_events_since(0)
@@ -355,7 +357,15 @@ class CompletionEventsPumpTests(unittest.TestCase):
             self.assertEqual(broker.store.get(record.id).state, TaskState.RUNNING)
         finally:
             kill_pgid(pgid)
-            broker.close()
+            # The durable supervisor keeps writing (finalizing artifacts, then the
+            # terminal manifest) for a moment after the payload's pgid is killed;
+            # wait for that write to land so tearDown's TemporaryDirectory.cleanup()
+            # can't race a still-running writer inside durable_launches/.
+            try:
+                supervisor_reached_terminal = wait_for_durable_launch_terminal(handle, timeout=5)
+            finally:
+                broker.close()
+            self.assertTrue(supervisor_reached_terminal, "durable supervisor did not reach a terminal state before teardown")
 
     def test_pump_is_idempotent_across_repeated_polls(self):
         broker = self._broker()

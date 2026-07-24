@@ -18,7 +18,8 @@ from recollect_lines import cli, mcp_server
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
-from recollect_lines.durable_cli_launch import wait_for_durable_launch_terminal
+from recollect_lines.durable_cli_launch import TERMINAL_LAUNCH_STATES, wait_for_durable_launch_terminal
+from recollect_lines.durable_runner import load_launch_record
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 PASSING_COMMAND = [sys.executable, "-c", "print('ok')"]
@@ -342,7 +343,21 @@ class VerificationGateOpenCodeTests(unittest.TestCase):
                 os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            broker2.close()
+            manifest_path = launch_dir / "manifest.json"
+            # broker2 adopted this launch without ever holding an in-memory handle
+            # for it, so there is no DurableCliHandle to poll; the durable
+            # supervisor keeps writing (finalizing artifacts, then the terminal
+            # manifest) for a moment after the payload's pgid is killed. Wait for
+            # that write to land so tearDown's TemporaryDirectory.cleanup() can't
+            # race a still-running writer inside durable_launches/.
+            try:
+                supervisor_reached_terminal = wait_until(
+                    lambda: load_launch_record(manifest_path).lifecycle_state in TERMINAL_LAUNCH_STATES,
+                    timeout=5,
+                )
+            finally:
+                broker2.close()
+            self.assertTrue(supervisor_reached_terminal, "durable supervisor did not reach a terminal state before teardown")
 
 
 class VerificationGateMcpTests(unittest.TestCase):
