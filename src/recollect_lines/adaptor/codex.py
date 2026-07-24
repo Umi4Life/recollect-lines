@@ -1,29 +1,55 @@
-"""Runtime adapter that runs the Codex CLI (`codex exec`) as a supervised subprocess.
+"""Runtime adapter for the Codex CLI (`codex exec --json`).
 
 Command contract is grounded in a compatibility spike against the installed CLI
 (codex-cli 0.144.4) — see docs/history/phases/phase-6b.md. `codex exec --json` streams
 newline-delimited JSON events (`thread.started`, `turn.started`, `item.*`,
 `turn.completed`/`turn.failed`) to stdout; cancellation targets the process
-group directly, exactly as OpenCodeAdapter does, never a claimed self-report.
+group directly, never a claimed self-report.
 
-The broker owns cancellation evidence: Codex is never trusted to report its own
-termination.
+Production launch path (RFC-004 durable-codex slice, mirroring the merged
+durable-Cursor/Claude-Code migrations): this adapter's job is narrow --
+validate/build the Codex command into a `LaunchSpec`
+(`adaptor.contracts.LaunchSpec`), and parse Codex's terminal stdout (the JSONL
+event stream) and stderr into a normalized result via `parse_result()`. It
+never calls `subprocess.Popen`, never waits/polls/kills a process group, never
+creates stdout/stderr files, and never constructs a `DurableSubprocessRunner`
+itself -- all of that lifecycle (launch, durable persistence, artifact
+capture, cancellation, restart adoption, collection) is owned by the broker
+and by `durable_cli_launch`/`durable_runner.DurableSubprocessRunner`, which
+the broker constructs once and injects here via `durable_runner=`.
+
+Unlike Cursor, Codex has no adapter-specific restart-reconciliation quirk to
+preserve (Cursor's `legacy_popen_launch=True` transition path exists solely to
+keep exercising `_reconcile_cursor_legacy_subprocess`'s leader
+PID+start-identity fix against a real process tree -- see adaptor/cursor.py's
+module docstring). No compatibility test depends on a Codex-owned Popen
+lifecycle, so this adapter carries no legacy path at all: `start()`/
+`cancel()`/`collect()` always go through the durable supervisor.
+
+Codex's `--json` flag makes its terminal stdout *be* the JSONL event stream,
+so the durable supervisor's generic `stdout.log` capture (see
+durable_cli_launch.start_durable_cli_launch, which always reports
+`events_artifact: "stdout.log"`) already is the Codex event artifact -- no
+provider-specific output-artifact naming is needed in the shared durable
+layer for this to work.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
+from ..durable_cli_launch import (
+    cancel_durable_cli_launch,
+    collect_durable_cli_launch,
+    start_durable_cli_launch,
+)
+from ..durable_runner import DurableSubprocessRunner
 from ..models import TaskRecord
-from ..recovery_contract import SUBPROCESS_CLI_RECOVERY_CONTROL
+from ..recovery_contract import DURABLE_SUBPROCESS_RECOVERY_CONTROL
 from .cli_base import SubprocessCliAdapterBase, probe_cli_version
-from .contracts import AdapterCapabilities
-from .process import cancel_process_group
+from .contracts import AdapterCapabilities, LaunchSpec
 
 DEFAULT_COMMAND_PREFIX = ("codex",)
 DEFAULT_GRACE_PERIOD_SECONDS = 10.0
@@ -79,24 +105,14 @@ def _summary_from_agent_text(text: str) -> str:
     return redact_secrets(stripped)
 
 
-@dataclass
-class ProcessHandle:
-    task_id: str
-    pid: int
-    pgid: int
-    command: list
-    events_path: Path
-    stderr_path: Path
-    popen: subprocess.Popen
-
-
 class CodexAdapter(SubprocessCliAdapterBase):
     name = "codex"
     capabilities = AdapterCapabilities(
         requires_subprocess=True,
         supports_process_group_cancellation=True,
         reports_broker_verified_tests=False,
-        recovery_control=SUBPROCESS_CLI_RECOVERY_CONTROL,
+        recovery_control=DURABLE_SUBPROCESS_RECOVERY_CONTROL,
+        uses_durable_subprocess_runner=True,
     )
 
     def __init__(
@@ -104,10 +120,15 @@ class CodexAdapter(SubprocessCliAdapterBase):
         command_prefix=DEFAULT_COMMAND_PREFIX,
         model: str | None = None,
         grace_period_seconds: float = DEFAULT_GRACE_PERIOD_SECONDS,
+        *,
+        durable_runner: DurableSubprocessRunner | None = None,
     ):
         self.command_prefix = tuple(command_prefix)
         self.model = model
         self.grace_period_seconds = grace_period_seconds
+        # Broker-owned and broker-injected (see Broker.__init__); this adapter
+        # never constructs one itself.
+        self.durable_runner = durable_runner
 
     @property
     def runtime_label(self) -> str:
@@ -137,57 +158,56 @@ class CodexAdapter(SubprocessCliAdapterBase):
             command += ["--model", effective_model]
         return command
 
-    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None) -> tuple[dict, ProcessHandle]:
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        events_path = artifacts_dir / "events.jsonl"
-        stderr_path = artifacts_dir / "stderr.log"
+    def build_launch_spec(self, record: TaskRecord, workspace: str, prompt: str | None = None) -> LaunchSpec:
+        """Validate/build the Codex command into a provider-neutral LaunchSpec.
+
+        This is the one place Codex decides argv and cwd; it never touches a
+        process, file, or the durable runner.
+        """
         effective_workspace = workspace or record.workspace
         command = self.build_command(
             prompt or record.task, record.execution_mode, effective_workspace, model=record.effective_model,
         )
-        with events_path.open("wb") as events_file, stderr_path.open("wb") as stderr_file:
-            popen = subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, stdout=events_file, stderr=stderr_file, start_new_session=True,
+        return LaunchSpec(argv=tuple(command), cwd=effective_workspace)
+
+    def start(self, record: TaskRecord, artifacts_dir: Path, workspace: str | None = None, *, prompt: str | None = None):
+        if self.durable_runner is None:
+            raise RuntimeError(
+                "CodexAdapter.durable_runner is unset; the owning Broker must inject one before start()"
             )
-        pgid = os.getpgid(popen.pid)
-        handle = ProcessHandle(
-            task_id=record.id,
-            pid=popen.pid,
-            pgid=pgid,
-            command=command,
-            events_path=events_path,
-            stderr_path=stderr_path,
-            popen=popen,
+        effective_workspace = workspace or record.workspace
+        spec = self.build_launch_spec(record, effective_workspace, prompt)
+        metadata, handle = start_durable_cli_launch(
+            self.durable_runner, record=record, adapter_id=self.name, spec=spec, artifacts_dir=artifacts_dir,
         )
         metadata = {
-            "adapter": self.name,
+            **metadata,
             "runtime_description": RUNTIME_DESCRIPTION,
-            "command": command,
-            "pid": popen.pid,
-            "pgid": pgid,
-            "events_artifact": events_path.name,
-            "stderr_artifact": stderr_path.name,
-            "workspace": effective_workspace,
             "sandbox": SANDBOX_BY_EXECUTION_MODE[record.execution_mode],
         }
         return metadata, handle
 
-    def cancel(self, handle: ProcessHandle) -> dict:
-        return cancel_process_group(handle.popen, handle.pgid, self.grace_period_seconds)
+    def cancel(self, handle) -> dict:
+        return cancel_durable_cli_launch(handle)
 
-    def collect(self, handle: ProcessHandle) -> dict:
-        process_exit_code = handle.popen.wait()
+    def collect(self, handle) -> dict:
+        return collect_durable_cli_launch(handle, parse_result=self.parse_result)
+
+    def parse_result(self, *, stdout_text: str, stderr_text: str, process_exit_code: int) -> dict:
+        """Parse Codex's `--json` NDJSON terminal stdout into a normalized
+        result. The only Codex-specific parsing in this codebase; the durable
+        supervisor never interprets provider output itself.
+        """
         events = []
         malformed_event_lines = 0
-        if handle.events_path.exists():
-            for line in handle.events_path.read_text(errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    malformed_event_lines += 1
+        for line in stdout_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                malformed_event_lines += 1
 
         thread_id = None
         turn_failed_message = None
@@ -221,7 +241,6 @@ class CodexAdapter(SubprocessCliAdapterBase):
             error_category = "unparseable_output" if summary is None else "runtime_error"
 
         effective_exit_code = 1 if is_error and process_exit_code == 0 else process_exit_code
-        stderr_text = handle.stderr_path.read_text(errors="replace") if handle.stderr_path.exists() else ""
 
         return {
             "exit_code": effective_exit_code,

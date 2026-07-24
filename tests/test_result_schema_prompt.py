@@ -70,11 +70,6 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         self.broker.close()
         self.tempdir.cleanup()
 
-    def _prompt_from_command(self, runtime: str, command: list[str]) -> str:
-        if runtime == "claude_code":
-            return command[command.index("-p") + 1]
-        return command[-1]
-
     def test_profile_selected_schema_appends_contract(self):
         record = self.broker.create(TaskRequest(
             "inspect module boundaries",
@@ -126,6 +121,13 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         self.assertNotIn("exactly one JSON object", composed["composed_prompt"])
 
     def test_codex_fixture_command_receives_schema_contract(self):
+        # Codex launches durably (RFC-004): the broker never holds a raw argv
+        # on the in-memory handle to inspect directly (see DurableCliHandle),
+        # so this proves the schema contract reached the real launched
+        # process by round-tripping through the fixture, which echoes its
+        # trailing prompt argument verbatim into its result text -- a
+        # stronger, end-to-end equivalent of inspecting argv before the
+        # process ever ran.
         record = self.broker.create(TaskRequest(
             "trace handler path",
             str(self.workspace),
@@ -134,9 +136,9 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         ))
         contract = result_schema_prompt("evidence-report")
         self.broker.start(record.id)
-        prompt = self._prompt_from_command("codex", self.broker._process_handles[record.id].command)
-        self.assertIn(contract, prompt)
         self.broker.collect(record.id)
+        result = json.loads((self.broker.store.artifacts / record.id / "result.json").read_text())
+        self.assertIn(contract, result["summary"])
 
     def test_claude_fixture_command_receives_schema_contract(self):
         # Claude Code launches durably (RFC-004): the broker never holds a raw
@@ -167,9 +169,15 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         ))
         contract = result_schema_prompt("evidence-report")
         self.broker.start(record.id)
-        prompt = self._prompt_from_command("codex", self.broker._process_handles[record.id].command)
-        self.assertIn(contract, prompt)
+        # MALFORMED's fixed agent_message text is asserted verbatim elsewhere
+        # (test_result_normalization.py), so it can't also echo the contract;
+        # the fixture instead echoes the full received prompt to stderr
+        # unconditionally, which proves the contract reached the real
+        # launched process without inspecting argv off the durable handle.
+        handle = self.broker._process_handles[record.id]
         self.broker.collect(record.id)
+        stderr_text = (handle.durable.launch_dir / "stderr.log").read_text()
+        self.assertIn(contract, stderr_text)
         envelope = json.loads((self.broker.store.artifacts / record.id / "normalized_result.json").read_text())
         self.assertIn(envelope["parser"]["parse_status"], {"fallback", "partial"})
         self.assertTrue(envelope["parser"]["warnings"])

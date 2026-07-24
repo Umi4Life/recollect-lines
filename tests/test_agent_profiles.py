@@ -111,8 +111,17 @@ class BrokerAgentProfileTests(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def _prompt_from_command(self, command: list[str]) -> str:
-        return command[-1]
+    def _launched_prompt(self, broker: Broker, task_id: str) -> str:
+        """The durable source of truth for what Codex was launched with.
+
+        The durable subprocess handle carries no Popen/argv (RFC-004 P0
+        redaction); `composed_prompt.json` is the artifact the broker writes
+        *before* launch and hands verbatim to the adapter as the prompt, so
+        it reflects the same policy/argv intent without needing a legacy
+        Popen-only private handle.
+        """
+        composed = json.loads((broker.store.artifacts / task_id / "composed_prompt.json").read_text())
+        return composed["composed_prompt"]
 
     def test_same_profile_works_with_two_runtimes(self):
         for runtime in ("mock", "codex"):
@@ -131,8 +140,8 @@ class BrokerAgentProfileTests(unittest.TestCase):
             self.assertIn("content_hash", resolution)
             if runtime == "codex":
                 broker.start(record.id)
-                handle = broker._process_handles[record.id]
-                self.assertIn("repository investigator", self._prompt_from_command(handle.command).lower())
+                self.assertIn(record.id, broker._process_handles)
+                self.assertIn("repository investigator", self._launched_prompt(broker, record.id).lower())
                 broker.collect(record.id)
             else:
                 broker.start(record.id)
@@ -148,7 +157,7 @@ class BrokerAgentProfileTests(unittest.TestCase):
             resolution = json.loads((broker.store.artifacts / record.id / "agent_profile_resolution.json").read_text())
             hashes.append(resolution["content_hash"])
             broker.start(record.id)
-            prompt = self._prompt_from_command(broker._process_handles[record.id].command)
+            prompt = self._launched_prompt(broker, record.id)
             self.assertIn(resolution["prompt_prefix"], prompt)
             broker.collect(record.id)
             broker.close()

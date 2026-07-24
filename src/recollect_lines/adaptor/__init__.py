@@ -30,7 +30,6 @@ from .codex import (
     RUNTIME_DESCRIPTION as CODEX_RUNTIME_DESCRIPTION,
     CodexAdapter,
     CodexUnsupportedPolicy,
-    ProcessHandle as CodexProcessHandle,
     redact_secrets as codex_redact_secrets,
 )
 from .contracts import AdapterCapabilities, LaunchSpec, RuntimeAdapter
@@ -78,7 +77,6 @@ __all__ = [
     "CLAUDE_RUNTIME_DESCRIPTION",
     "claude_redact_secrets",
     "CodexAdapter",
-    "CodexProcessHandle",
     "CodexUnsupportedPolicy",
     "CODEX_DEFAULT_COMMAND_PREFIX",
     "CODEX_DEFAULT_GRACE_PERIOD_SECONDS",

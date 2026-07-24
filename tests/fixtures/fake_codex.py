@@ -42,6 +42,12 @@ def task_prompt_only(prompt: str) -> str:
 def main():
     args = sys.argv[1:]
     prompt = prompt_from_argv(args)
+    # Unconditional, regardless of which scenario branch below fires below --
+    # proves the full composed prompt (including any appended result-schema
+    # contract) actually reached the launched process, without depending on
+    # a branch's agent_message text (some, like MALFORMED, intentionally
+    # emit a fixed summary string that other tests assert on verbatim).
+    print(f"[fake_codex] received prompt: {prompt}", file=sys.stderr, flush=True)
 
     emit({"type": "thread.started", "thread_id": "thread_fake"})
     emit({"type": "turn.started"})
