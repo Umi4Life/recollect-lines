@@ -1,18 +1,20 @@
 import json
 import os
+import signal
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from recollect_lines.adaptor import AdapterCapabilities
+from recollect_lines.adaptor import AdapterCapabilities, LaunchSpec
 from recollect_lines.adaptor.claude_code import (
     DEFAULT_COMMAND_PREFIX,
     ClaudeCodeAdapter,
     ClaudeCodeUnsupportedPolicy,
     redact_secrets,
 )
+from recollect_lines.durable_cli_launch import is_durable_launch_terminal
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.service import Broker
 
@@ -161,6 +163,24 @@ class ClaudeCodeAdapterUnitTests(unittest.TestCase):
         self.assertTrue(ClaudeCodeAdapter.capabilities.requires_subprocess)
         self.assertTrue(ClaudeCodeAdapter.capabilities.supports_process_group_cancellation)
         self.assertFalse(ClaudeCodeAdapter.capabilities.reports_broker_verified_tests)
+        self.assertTrue(ClaudeCodeAdapter.capabilities.uses_durable_subprocess_runner)
+
+    def test_default_adapter_has_no_durable_runner_until_a_broker_injects_one(self):
+        adapter = ClaudeCodeAdapter()
+        self.assertIsNone(adapter.durable_runner)  # bound only by the owning Broker
+
+    def test_build_launch_spec_is_a_provider_neutral_launch_spec(self):
+        from recollect_lines.models import TaskRecord
+
+        adapter = fake_adapter()
+        record = TaskRecord.new(TaskRequest("inspect", "/tmp/ws", profile="claude_code", execution_mode="read_only"))
+        spec, decision = adapter.build_launch_spec(record, "/tmp/ws", "inspect")
+        self.assertIsInstance(spec, LaunchSpec)
+        self.assertEqual(spec.cwd, "/tmp/ws")
+        self.assertEqual(spec.argv[spec.argv.index("-p") + 1], "inspect")
+        self.assertIn("--permission-mode", spec.argv)
+        self.assertIsNone(spec.env)
+        self.assertEqual(decision.permission_mode, "plan")
 
     # --- availability -------------------------------------------------------
 
@@ -206,21 +226,23 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
 
     # --- process metadata / cancellation integration -----------------------
 
-    def test_start_creates_stdout_and_stderr_artifacts_and_records_pid_pgid(self):
+    def test_start_creates_durable_launch_metadata_and_stdout_stderr_artifacts(self):
         record = self.create()
         started = self.broker.start(record.id)
         self.assertEqual(started.state, TaskState.RUNNING)
-        stdout_path = self.home / "artifacts" / record.id / "stdout.log"
-        stderr_path = self.home / "artifacts" / record.id / "stderr.log"
+        launch = self.broker.store.get_launch(record.id)
+        self.assertEqual(launch["adapter"], "claude_code")
+        self.assertEqual(launch["launch_kind"], "durable_subprocess")
+        self.assertIsNotNone(launch["durable_launch_id"])
+        launch_dir = self.home / "durable_launches" / launch["durable_launch_id"]
+        stdout_path = launch_dir / "stdout.log"
+        stderr_path = launch_dir / "stderr.log"
         wait_until(lambda: stdout_path.exists() and stdout_path.stat().st_size > 0)
-        self.assertTrue(stdout_path.exists())
         self.assertTrue(stderr_path.exists())
         run_event = next(e for e in self.broker.store.events(record.id) if e["type"] == "task.running")
         self.assertIn("pid", run_event["metadata"])
         self.assertIn("pgid", run_event["metadata"])
         self.assertEqual(run_event["metadata"]["runtime_description"], "Claude Code via claude -p")
-        launch = self.broker.store.get_launch(record.id)
-        self.assertEqual(launch["adapter"], "claude_code")
         self.broker.collect(record.id)
 
     def test_start_records_permission_mode_policy_for_prose_tasks(self):
@@ -241,7 +263,8 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
         record = self.broker.create(TaskRequest("SLEEP", str(self.workspace), profile="claude_code", execution_mode="read_only"))
         self.broker.start(record.id)
         handle = self.broker._process_handles[record.id]
-        wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes())
+        stderr_path = handle.durable.launch_dir / "stderr.log"
+        wait_until(lambda: stderr_path.exists() and b"started" in stderr_path.read_bytes())
 
         cancelled = self.broker.cancel(record.id, "no longer needed")
 
@@ -257,7 +280,8 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
         record = self.broker.create(TaskRequest("SLEEP_IGNORE_TERM", str(self.workspace), profile="claude_code", execution_mode="read_only"))
         self.broker.start(record.id)
         handle = self.broker._process_handles[record.id]
-        wait_until(lambda: handle.stderr_path.exists() and b"started" in handle.stderr_path.read_bytes())
+        stderr_path = handle.durable.launch_dir / "stderr.log"
+        wait_until(lambda: stderr_path.exists() and b"started" in stderr_path.read_bytes())
 
         cancelled = self.broker.cancel(record.id, "force stop")
 
@@ -376,16 +400,68 @@ class ClaudeCodeBrokerIntegrationTests(unittest.TestCase):
         self.assertEqual(first.state, second.state)
         self.assertEqual(first.updated_at, second.updated_at)
 
-    def test_collect_without_a_process_handle_confirms_dead_process_group_and_fails(self):
-        record = self.create()
+    def test_collect_without_a_process_handle_reconciles_via_durable_adoption_not_uncollected(self):
+        # Unlike the legacy Popen path Cursor's compatibility tests still cover
+        # (tests/test_cursor_uncollected_reconciliation.py), a durable Claude
+        # Code launch's outcome is never `uncollected` after a broker restart:
+        # the manifest is independent, durable proof a fresh broker can adopt
+        # and safely collect from, exactly like FixtureDurableAdapter/Cursor.
+        record = self.create(task="what is the magic number")
         self.broker.start(record.id)
-        orphaned_handle = self.broker._process_handles.pop(record.id)
-        orphaned_handle.popen.wait(timeout=5)
+        launch = self.broker.store.get_launch(record.id)
+        self.assertEqual(launch["launch_kind"], "durable_subprocess")
+        handle = self.broker._process_handles[record.id]
+        wait_until(lambda: is_durable_launch_terminal(handle))
+        self.broker._process_handles.pop(record.id, None)  # simulate a broker restart losing in-memory state
 
-        completed = self.broker.collect(record.id)
+        restarted = Broker(self.home, claude_code_adapter=fake_adapter())
+        try:
+            reconciled = restarted.reconcile(record.id)
+            detail = restarted.reconcile_detail(record.id)
+            self.assertIn(detail["outcome"], {"adopted_running", "adopted_terminal_collectable"})
+            self.assertEqual(detail["launch_id"], launch["durable_launch_id"])
+            self.assertNotEqual(reconciled.state, TaskState.UNCOLLECTED)
 
-        self.assertEqual(completed.state, TaskState.FAILED)
-        self.assertEqual(self.broker.store.events(record.id)[-1]["metadata"]["reason"], "process_group_confirmed_dead")
+            completed = restarted.collect(record.id)
+            self.assertEqual(completed.state, TaskState.SUCCEEDED)
+            result = json.loads((self.home / "artifacts" / record.id / "result.json").read_text())
+            self.assertIn("42", result["summary"])
+            self.assertEqual(result["runtime"]["adapter"], "claude_code")
+        finally:
+            restarted.close()
+
+    def test_long_task_survives_broker_restart_is_reconciled_adopted_and_collected(self):
+        record = self.broker.create(TaskRequest("SLEEP", str(self.workspace), profile="claude_code", execution_mode="read_only"))
+        self.broker.start(record.id)
+        handle = self.broker._process_handles.pop(record.id)  # simulate a broker restart losing in-memory state
+        launch = self.broker.store.get_launch(record.id)
+        self.assertEqual(launch["launch_kind"], "durable_subprocess")
+
+        restarted = Broker(self.home, claude_code_adapter=fake_adapter())
+        try:
+            reconciled = restarted.reconcile(record.id)
+            self.assertEqual(reconciled.state, TaskState.RUNNING)
+            detail = restarted.reconcile_detail(record.id)
+            self.assertEqual(detail["outcome"], "adopted_running")
+            self.assertEqual(detail["launch_id"], launch["durable_launch_id"])
+            self.assertIn(record.id, restarted._adopted_durable_handles)
+
+            cancelled = restarted.cancel(record.id, "test cleanup")
+            self.assertEqual(cancelled.state, TaskState.CANCELLED)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(handle.pgid, 0)
+
+            # cancel() already transitioned this task to a terminal state;
+            # collect() on an already-terminal task is idempotent (returns the
+            # same durable record) rather than re-running collection.
+            completed = restarted.collect(record.id)
+            self.assertEqual(completed.state, TaskState.CANCELLED)
+        finally:
+            try:
+                os.killpg(handle.pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            restarted.close()
 
 
 class ClaudeCodeUnsupportedPolicyBrokerTests(unittest.TestCase):
@@ -409,6 +485,33 @@ class ClaudeCodeUnsupportedPolicyBrokerTests(unittest.TestCase):
         adapter = fake_adapter()
         with self.assertRaises(ClaudeCodeUnsupportedPolicy):
             adapter.build_command("do something", "shared_write")
+
+
+class ClaudeCodeAdapterOwnsNoProcessLifecycleTests(unittest.TestCase):
+    """Required evidence: unlike Cursor (which keeps an explicitly-gated
+    `legacy_popen_launch=True` compatibility path for pre-migration tests),
+    Claude Code has no such compatibility route to preserve -- this adapter
+    never touches `subprocess.Popen`, process waiting/polling, or process-group
+    killing at all; all of that lifecycle belongs to durable_cli_launch /
+    durable_runner.DurableSubprocessRunner.
+    """
+
+    def test_module_never_references_subprocess_popen_or_process_group_killing(self):
+        import ast
+        import inspect
+        from recollect_lines.adaptor import claude_code as claude_code_module
+
+        source = inspect.getsource(claude_code_module)
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                self.assertNotEqual(node.func.attr, "Popen")
+        self.assertNotIn("import subprocess", source)
+        self.assertNotIn("cancel_process_group", source)
+
+    def test_default_adapter_never_holds_a_popen_backed_handle(self):
+        adapter = ClaudeCodeAdapter()
+        self.assertFalse(hasattr(adapter, "legacy_popen_launch"))
 
 
 if __name__ == "__main__":

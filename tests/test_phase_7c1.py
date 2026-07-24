@@ -121,7 +121,7 @@ class DeclaredRuntimeContractTests(unittest.TestCase):
                 expected_levels = {
                     "mock": "none",
                     "opencode": "observe_and_cancel",
-                    "claude_code": "observe_and_cancel",
+                    "claude_code": "collect_after_restart",
                     "codex": "observe_and_cancel",
                     "cursor": "collect_after_restart",
                     "openai_compatible": "none",
