@@ -191,7 +191,15 @@ def main() -> int:
             check("delegate returns a task id", bool(task_id))
 
             is_error, status_payload = client.call_tool("status", {"task_id": task_id})
-            check("status reflects the running task before collection", not is_error and status_payload["state"] == "running", str(status_payload))
+            # A local deterministic runtime can complete between delegate and this
+            # immediate status call. Status must honestly surface either the
+            # in-flight or already-terminal success state; requiring the timing
+            # accident of ``running`` made this host-level acceptance flaky.
+            check(
+                "status honestly reflects the task before collection",
+                not is_error and status_payload["state"] in {"running", "succeeded"},
+                str(status_payload),
+            )
 
             is_error, collected = client.call_tool("collect", {"task_id": task_id})
             check("collect succeeds without a protocol error", not is_error, str(collected))

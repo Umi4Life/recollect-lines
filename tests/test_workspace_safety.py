@@ -332,41 +332,42 @@ class OpenCodeWorkspaceIntegrationTests(unittest.TestCase):
         self.assertFalse(worktree_path.exists())
         self.assertEqual(self.broker.store.get_lease(record.id)["status"], "released")
 
-    def test_collect_enters_recovery_state_when_process_group_is_still_alive_after_a_simulated_restart(self):
+    def test_collect_is_safely_adopted_when_process_group_is_still_alive_after_a_simulated_restart(self):
         record = self.broker.create(TaskRequest("SLEEP", str(self.source), execution_mode="isolated_worktree", profile="opencode"))
         self.broker.start(record.id)
 
         run_event = next(e for e in self.broker.store.events(record.id) if e["type"] == "task.running")
         pgid = run_event["metadata"]["pgid"]
         worktree_path = Path(run_event["metadata"]["workspace"])
-        events_path = self.home / "artifacts" / record.id / "events.jsonl"
+        launch = self.broker.store.get_launch(record.id)
+        events_path = self.home / "durable_launches" / launch["durable_launch_id"] / "events.jsonl"
         self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
 
         # Simulate a broker restart: the in-memory handle is gone, but the
-        # real process (started with start_new_session=True) is still alive.
-        orphaned_handle = self.broker._process_handles.pop(record.id)
+        # real process (durably supervised) is still alive. A durable launch
+        # is safely adoptable rather than unrecoverable, so collect() raises
+        # RecoveryRequired(state=running) -- never RECOVERY_REQUIRED, and
+        # never touching the worktree a live process might still use.
+        self.broker._process_handles.pop(record.id)
         try:
             with self.assertRaises(RecoveryRequired):
                 self.broker.collect(record.id)
             recovering = self.broker.store.get(record.id)
-            self.assertEqual(recovering.state, TaskState.RECOVERY_REQUIRED)
+            self.assertEqual(recovering.state, TaskState.RUNNING)
+            self.assertIn(record.id, self.broker._adopted_durable_handles)
             self.assertTrue(worktree_path.exists(), "must not delete a worktree a live process might still use")
             self.assertEqual(self.broker.store.get_lease(record.id)["status"], "active")
 
-            # Idempotent: calling collect() again while still alive raises the
-            # same way and makes no further state/lease change.
-            with self.assertRaises(RecoveryRequired):
-                self.broker.collect(record.id)
-            self.assertEqual(self.broker.store.get(record.id).state, TaskState.RECOVERY_REQUIRED)
-            self.assertEqual(self.broker.store.get_lease(record.id)["status"], "active")
+            # Cancelling the adopted handle terminates the durable process
+            # group and safely releases the worktree.
+            cancelled = self.broker.cancel(record.id, "no longer needed")
+            self.assertEqual(cancelled.state, TaskState.CANCELLED)
         finally:
-            os.killpg(pgid, signal.SIGKILL)
-            orphaned_handle.popen.wait(timeout=5)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
-        # Once the process is confirmed dead, reconciliation can proceed to a
-        # truthful failure and release the lease.
-        failed = self.broker.reconcile(record.id)
-        self.assertEqual(failed.state, TaskState.FAILED)
         self.assertFalse(worktree_path.exists())
         self.assertEqual(self.broker.store.get_lease(record.id)["status"], "released")
         self.assertEqual((self.source / "file.txt").read_text(), "original\n")

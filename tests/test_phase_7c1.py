@@ -58,14 +58,6 @@ def kill_launch_pgid(broker: Broker, task_id: str) -> None:
         pass
 
 
-def kill_and_reap_popen(popen, pgid: int) -> None:
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    popen.wait(timeout=5)
-
-
 def fake_opencode_adapter() -> OpenCodeAdapter:
     return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)))
 
@@ -120,7 +112,7 @@ class DeclaredRuntimeContractTests(unittest.TestCase):
                 )}
                 expected_levels = {
                     "mock": "none",
-                    "opencode": "observe_and_cancel",
+                    "opencode": "collect_after_restart",
                     "claude_code": "collect_after_restart",
                     "codex": "collect_after_restart",
                     "cursor": "collect_after_restart",
@@ -265,33 +257,34 @@ class DiscoveryDoctorMcpVisibilityTests(unittest.TestCase):
         self.assertEqual(result["status"], "unsupported")
         self.assertEqual(len(self.broker.store.events(record.id)), before_events)
 
-    def test_broker_restart_contract_unchanged(self):
+    def test_broker_restart_never_fabricates_success_and_safely_adopts_a_still_running_task(self):
+        # OpenCode is durable by default now (RFC-004 durable-opencode
+        # slice): a still-running task survives a broker restart via durable
+        # adoption (reconciled.state stays `running`, never a fabricated
+        # `succeeded`) rather than the pre-durable contract of landing in
+        # recovery_required/failed/cancelled forever -- see
+        # tests/test_opencode_adapter.py for the full restart-adoption and
+        # collection contract.
         from recollect_lines.models import TaskRequest, TaskState
 
         broker = Broker(self.home, opencode_adapter=fake_opencode_adapter())
-        record_id = None
-        sleep_handle = None
+        record = broker.create(TaskRequest(
+            task="SLEEP", workspace=str(self.home), profile="opencode", execution_mode="read_only",
+        ))
+        record_id = record.id
+        broker.start(record.id)
+        broker._process_handles.pop(record.id, None)
+        home = self.home
+        broker.close()
+        broker2 = Broker(home, opencode_adapter=fake_opencode_adapter())
         try:
-            record = broker.create(TaskRequest(
-                task="SLEEP", workspace=str(self.home), profile="opencode", execution_mode="read_only",
-            ))
-            record_id = record.id
-            broker.start(record.id)
-            sleep_handle = broker._process_handles.pop(record.id, None)
-            home = self.home
-            broker.close()
-            broker2 = Broker(home, opencode_adapter=fake_opencode_adapter())
-            try:
-                reconciled = broker2.reconcile(record.id)
-                self.assertIn(reconciled.state, {TaskState.RECOVERY_REQUIRED, TaskState.FAILED, TaskState.CANCELLED})
-                self.assertNotEqual(reconciled.state, TaskState.SUCCEEDED)
-            finally:
-                if record_id is not None:
-                    kill_launch_pgid(broker2, record_id)
-                broker2.close()
+            reconciled = broker2.reconcile(record.id)
+            self.assertEqual(reconciled.state, TaskState.RUNNING)
+            self.assertIn(record.id, broker2._adopted_durable_handles)
+            self.assertNotEqual(reconciled.state, TaskState.SUCCEEDED)
         finally:
-            if sleep_handle is not None:
-                kill_and_reap_popen(sleep_handle.popen, sleep_handle.pgid)
+            kill_launch_pgid(broker2, record_id)
+            broker2.close()
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,8 @@ from recollect_lines import cli, mcp_server
 from recollect_lines.models import TaskRequest, TaskState
 from recollect_lines.adaptor.opencode import OpenCodeAdapter
 from recollect_lines.service import Broker
+from recollect_lines.durable_cli_launch import TERMINAL_LAUNCH_STATES, wait_for_durable_launch_terminal
+from recollect_lines.durable_runner import load_launch_record
 
 FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 PASSING_COMMAND = [sys.executable, "-c", "print('ok')"]
@@ -44,14 +46,6 @@ def init_repo(path: Path) -> Path:
     run_git(["add", "-A"], cwd=path)
     run_git(["commit", "-q", "-m", "initial"], cwd=path)
     return path
-
-
-def kill_and_reap(popen: subprocess.Popen, pgid: int) -> None:
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    popen.wait(timeout=5)
 
 
 def wait_until(predicate, timeout=5.0, interval=0.05):
@@ -265,12 +259,17 @@ class VerificationGateOpenCodeTests(unittest.TestCase):
 
     # --- interrupted/missing verification during recovery ------------------
 
-    def test_broker_crash_after_runtime_finished_but_before_verification_never_reconciles_to_success(self):
-        """Replicate exactly what collect() does up through popping the handle and
-        reaping the process, then stop — modeling a broker crash after the
-        runtime finished but before required verification (or even the
-        candidate result) was durably finalized. A fresh Broker must never
-        reconcile this into succeeded; the only honest outcome is failed.
+    def test_broker_crash_after_runtime_finished_but_before_verification_is_safely_recovered_by_durable_adoption(self):
+        """Model a broker crash after the runtime finished but before required
+        verification (or even the candidate result) was durably finalized:
+        the in-memory handle is lost with the task still recorded `running`.
+        Unlike a legacy Popen adapter (whose only proof was that lost
+        in-memory handle), a durable OpenCode launch's outcome is
+        independently provable from its manifest, so a fresh broker can
+        safely adopt it via reconcile() and finish the *same*
+        collect()/verification it would have run -- never a false success,
+        and never an unrecoverable failure either, since nothing was
+        actually lost.
         """
         broker1 = self.make_broker()
         record = broker1.create(
@@ -278,9 +277,8 @@ class VerificationGateOpenCodeTests(unittest.TestCase):
             verify_commands=[PASSING_COMMAND],
         )
         broker1.start(record.id)
-        handle = broker1._process_handles.pop(record.id)
-        handle.popen.wait(timeout=5)  # the runtime genuinely finished successfully...
-        broker1.store.transition(record.id, TaskState.COLLECTING, "Collecting OpenCode result", {})
+        handle = broker1._process_handles.pop(record.id)  # simulate a broker crash losing in-memory state
+        self.assertTrue(wait_for_durable_launch_terminal(handle, timeout=5))  # the runtime genuinely finished successfully...
         # ...but the crash happens right here: no result.json, no verification,
         # no terminal transition ever gets written.
         worktree_path = Path(broker1.store.get_lease(record.id)["worktree_path"])
@@ -288,24 +286,32 @@ class VerificationGateOpenCodeTests(unittest.TestCase):
 
         broker2 = self.make_broker()
         try:
-            self.assertEqual(broker2.store.get(record.id).state, TaskState.COLLECTING)
+            self.assertEqual(broker2.store.get(record.id).state, TaskState.RUNNING)
             reconciled = broker2.reconcile(record.id)
-            self.assertEqual(reconciled.state, TaskState.FAILED)
+            detail = broker2.reconcile_detail(record.id)
+            self.assertEqual(detail["outcome"], "adopted_terminal_collectable")
+            self.assertNotEqual(reconciled.state, TaskState.UNCOLLECTED)
             self.assertFalse((self.home / "artifacts" / record.id / "result.json").exists())
-            self.assertFalse((self.home / "artifacts" / record.id / "verification_gate.json").exists())
+
+            completed = broker2.collect(record.id)
+            self.assertEqual(completed.state, TaskState.SUCCEEDED)
+            self.assertTrue((self.home / "artifacts" / record.id / "result.json").exists())
+            gate = json.loads((self.home / "artifacts" / record.id / "verification_gate.json").read_text())
+            self.assertEqual(gate["outcome"], "passed")
             self.assertFalse(worktree_path.exists())
             self.assertEqual(broker2.store.get_lease(record.id)["status"], "released")
 
-            # Idempotent: re-reconciling (or reconcile_pending) never flips this to success.
-            again = broker2.reconcile(record.id)
-            self.assertEqual(again.state, TaskState.FAILED)
+            # Idempotent: collecting an already-terminal task never re-runs verification.
+            again = broker2.collect(record.id)
+            self.assertEqual(again.state, TaskState.SUCCEEDED)
         finally:
             broker2.close()
 
-    def test_broker_crash_mid_collect_with_still_alive_process_group_enters_recovery_required(self):
+    def test_broker_crash_mid_collect_with_still_alive_process_group_is_adopted_and_worktree_retained(self):
         """The rarer twin of the above: the crash happens before the process
         even exited. A fresh broker must classify liveness before touching
-        anything, exactly like the running-state case Phase 5B already covers.
+        anything -- for a durable launch this is durable adoption of the
+        still-running payload, never a premature workspace finalization.
         """
         broker1 = self.make_broker()
         record = broker1.create(
@@ -313,24 +319,45 @@ class VerificationGateOpenCodeTests(unittest.TestCase):
             verify_commands=[PASSING_COMMAND],
         )
         broker1.start(record.id)
-        events_path = self.home / "artifacts" / record.id / "events.jsonl"
+        handle = broker1._process_handles[record.id]
+        launch = broker1.store.get_launch(record.id)
+        launch_dir = self.home / "durable_launches" / launch["durable_launch_id"]
+        events_path = launch_dir / "events.jsonl"
         self.assertTrue(wait_until(lambda: events_path.exists() and b"started" in events_path.read_bytes()))
 
-        handle = broker1._process_handles.pop(record.id)
         pgid = handle.pgid
-        broker1.store.transition(record.id, TaskState.COLLECTING, "Collecting OpenCode result", {})
+        broker1._process_handles.pop(record.id)  # simulate a broker crash losing in-memory state
         worktree_path = Path(broker1.store.get_lease(record.id)["worktree_path"])
         broker1.close()
 
         broker2 = self.make_broker()
         try:
             reconciled = broker2.reconcile(record.id)
-            self.assertEqual(reconciled.state, TaskState.RECOVERY_REQUIRED)
+            detail = broker2.reconcile_detail(record.id)
+            self.assertEqual(detail["outcome"], "adopted_running")
+            self.assertEqual(reconciled.state, TaskState.RUNNING)
             self.assertTrue(worktree_path.exists(), "must not delete a worktree a live process might still use")
             self.assertEqual(broker2.store.get_lease(record.id)["status"], "active")
         finally:
-            kill_and_reap(handle.popen, pgid)
-            broker2.close()
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            manifest_path = launch_dir / "manifest.json"
+            # broker2 adopted this launch without ever holding an in-memory handle
+            # for it, so there is no DurableCliHandle to poll; the durable
+            # supervisor keeps writing (finalizing artifacts, then the terminal
+            # manifest) for a moment after the payload's pgid is killed. Wait for
+            # that write to land so tearDown's TemporaryDirectory.cleanup() can't
+            # race a still-running writer inside durable_launches/.
+            try:
+                supervisor_reached_terminal = wait_until(
+                    lambda: load_launch_record(manifest_path).lifecycle_state in TERMINAL_LAUNCH_STATES,
+                    timeout=5,
+                )
+            finally:
+                broker2.close()
+            self.assertTrue(supervisor_reached_terminal, "durable supervisor did not reach a terminal state before teardown")
 
 
 class VerificationGateMcpTests(unittest.TestCase):

@@ -23,12 +23,11 @@ from pathlib import Path
 
 from recollect_lines import mcp_server
 from recollect_lines.adaptor.cursor import CursorAdapter
+from recollect_lines.adaptor.process import group_alive
 from recollect_lines.models import RecoveryRequired, TaskRequest, TaskState
-from recollect_lines.adaptor.opencode import OpenCodeAdapter, group_alive
 from recollect_lines.service import Broker
 
 FAKE_CURSOR = Path(__file__).parent / "fixtures" / "fake_cursor.py"
-FAKE_OPENCODE = Path(__file__).parent / "fixtures" / "fake_opencode.py"
 
 
 def fake_cursor_adapter(grace_period_seconds=2.0):
@@ -43,10 +42,6 @@ def fake_cursor_adapter(grace_period_seconds=2.0):
         grace_period_seconds=grace_period_seconds,
         legacy_popen_launch=True,
     )
-
-
-def fake_opencode_adapter(grace_period_seconds=2.0):
-    return OpenCodeAdapter(command_prefix=(sys.executable, str(FAKE_OPENCODE)), grace_period_seconds=grace_period_seconds)
 
 
 def wait_until(predicate, timeout=5.0, interval=0.05):
@@ -214,23 +209,19 @@ class CursorUncollectedReconciliationTests(unittest.TestCase):
         finally:
             broker.close()
 
-    # --- 6. non-Cursor legacy subprocess reconciliation is unaffected ------
-
-    def test_non_cursor_legacy_reconciliation_still_uses_group_liveness(self):
-        adapter = fake_opencode_adapter()
-        broker1 = Broker(self.home, opencode_adapter=adapter)
-        record = broker1.create(TaskRequest("Inspect tests", str(self.workspace), profile="opencode", execution_mode="read_only"))
-        broker1.start(record.id)
-        broker1._process_handles[record.id].popen.wait(timeout=5)
-        broker1.close()
-
-        broker2 = Broker(self.home, opencode_adapter=adapter)
-        try:
-            result = broker2.reconcile(record.id)
-            self.assertEqual(result.state, TaskState.FAILED)
-            self.assertEqual(broker2.store.events(record.id)[-1]["metadata"]["reason"], "process_group_confirmed_dead")
-        finally:
-            broker2.close()
+    # --- 6. non-Cursor legacy subprocess reconciliation ---------------------
+    #
+    # Retired (RFC-004 durable-opencode slice): this test proved that a
+    # *non*-Cursor legacy (adapter-owned Popen) launch reconciles via plain
+    # process-group liveness, contrasted with Cursor's leader
+    # PID+start-identity path above. OpenCode was that non-Cursor example;
+    # now that it is durable by default too (matching Cursor/Claude
+    # Code/Codex), no production adapter demonstrates the generic
+    # non-durable/non-Cursor branch of Broker.reconcile() anymore, and
+    # OpenCode deliberately carries no test-only legacy-Popen opt-in (unlike
+    # Cursor's `legacy_popen_launch=True`, see adaptor/opencode.py's module
+    # docstring) -- so this negative-space coverage has no real subject left
+    # and was removed rather than faked with a synthetic adapter double.
 
     # --- 7. completion cursor / concise surfaces expose uncollected --------
 

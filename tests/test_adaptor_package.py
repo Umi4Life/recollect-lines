@@ -15,9 +15,6 @@ from recollect_lines.adaptor import (
     FixtureDurableAdapter,
     OpenCodeAdapter,
     RuntimeAdapter,
-    cancel_process_group,
-    group_alive,
-    redact_command,
 )
 from recollect_lines.runtime_registry import DEFAULT_RUNTIME_REGISTRY
 
@@ -83,17 +80,18 @@ class AdaptorPackageTests(unittest.TestCase):
             with self.subTest(module=module_name):
                 importlib.import_module(module_name)
 
-    def test_process_helpers_exported_from_package(self):
-        from recollect_lines.adaptor.opencode import (
-            cancel_process_group as opencode_cancel,
-            group_alive as opencode_alive,
-            redact_command as opencode_redact,
-        )
-
-        self.assertIs(cancel_process_group, opencode_cancel)
-        self.assertIs(group_alive, opencode_alive)
-        self.assertIs(redact_command, opencode_redact)
-
+    # test_process_helpers_exported_from_package retired (RFC-004
+    # durable-opencode slice): it asserted that adaptor.opencode re-exported
+    # the generic process helpers (cancel_process_group/group_alive/
+    # redact_command) it happened to import for its own pre-durable Popen
+    # lifecycle. The durable OpenCodeAdapter no longer touches a process
+    # directly (see adaptor/opencode.py's module docstring) and so no longer
+    # imports them -- matching adaptor/codex.py and adaptor/claude_code.py,
+    # which never re-exported them either. The package-level contract
+    # (test_adaptor_package_exports_stable_surface above) is what actually
+    # matters and is unaffected: those helpers are sourced directly from
+    # `.process` in adaptor/__init__.py, independent of any single adapter
+    # module.
 
 if __name__ == "__main__":
     unittest.main()
