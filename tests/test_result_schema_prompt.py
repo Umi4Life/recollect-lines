@@ -139,6 +139,12 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         self.broker.collect(record.id)
 
     def test_claude_fixture_command_receives_schema_contract(self):
+        # Claude Code launches durably (RFC-004): the broker never holds a raw
+        # argv on the in-memory handle to inspect directly (see DurableCliHandle),
+        # so this proves the schema contract reached the real launched process
+        # by round-tripping through the fixture, which echoes its `-p` argument
+        # verbatim into its result text -- a stronger, end-to-end equivalent of
+        # inspecting argv before the process ever ran.
         record = self.broker.create(TaskRequest(
             "review coupling",
             str(self.workspace),
@@ -147,9 +153,9 @@ class BrokerLaunchPromptContractTests(unittest.TestCase):
         ))
         contract = result_schema_prompt("review-findings")
         self.broker.start(record.id)
-        prompt = self._prompt_from_command("claude_code", self.broker._process_handles[record.id].command)
-        self.assertIn(contract, prompt)
         self.broker.collect(record.id)
+        result = json.loads((self.broker.store.artifacts / record.id / "result.json").read_text())
+        self.assertIn(contract, result["summary"])
 
     def test_malformed_schema_response_retains_parser_warnings(self):
         record = self.broker.create(TaskRequest(

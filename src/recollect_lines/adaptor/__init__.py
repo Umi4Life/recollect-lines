@@ -21,7 +21,6 @@ from .claude_code import (
     RUNTIME_DESCRIPTION as CLAUDE_RUNTIME_DESCRIPTION,
     ClaudeCodeAdapter,
     ClaudeCodeUnsupportedPolicy,
-    ProcessHandle as ClaudeCodeProcessHandle,
     redact_secrets as claude_redact_secrets,
 )
 from .cli_base import SubprocessCliAdapterBase, probe_cli_version
@@ -73,7 +72,6 @@ __all__ = [
     "OPENCODE_DEFAULT_COMMAND_PREFIX",
     "OPENCODE_DEFAULT_GRACE_PERIOD_SECONDS",
     "ClaudeCodeAdapter",
-    "ClaudeCodeProcessHandle",
     "ClaudeCodeUnsupportedPolicy",
     "CLAUDE_DEFAULT_COMMAND_PREFIX",
     "CLAUDE_DEFAULT_GRACE_PERIOD_SECONDS",

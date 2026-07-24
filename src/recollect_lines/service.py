@@ -228,10 +228,11 @@ class Broker:
         self.codex_adapter = codex_adapter or CodexAdapter()
         self.cursor_adapter = cursor_adapter or CursorAdapter()
         # Broker owns the one durable-subprocess supervisor and injects it into
-        # every LaunchSpec-based adapter (Cursor first, RFC-004) -- an adapter
-        # never constructs or configures its own DurableSubprocessRunner.
+        # every LaunchSpec-based adapter (Cursor and Claude Code, RFC-004) --
+        # an adapter never constructs or configures its own DurableSubprocessRunner.
         self.durable_runner = DurableSubprocessRunner(self.store.home)
         self.cursor_adapter.durable_runner = self.durable_runner
+        self.claude_code_adapter.durable_runner = self.durable_runner
         self.fixture_durable_adapter = fixture_durable_adapter
         # Every subprocess-backed adapter, keyed by the profile name that selects
         # it — the one place profile-to-adapter dispatch lives, so start()/
